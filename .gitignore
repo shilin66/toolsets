@@ -1,0 +1,17 @@
+# vscode
+.vscode/
+
+# mac
+.DS_Store
+
+# env
+.env
+.env.*
+!.env.example
+
+# idea
+.idea/
+
+# python
+__pycache__/
+*.pyc

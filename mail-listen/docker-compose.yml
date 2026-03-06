@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # 邮件监听和API服务（一体化）
+  mail-listener:
+    build: .
+    container_name: mail-listener
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # 持久化数据库文件
+      - mail-data:/app/data
+      # 持久化日志文件
+      - mail-logs:/app/logs
+    ports:
+      # API服务端口
+      - "5001:5001"
+    networks:
+      - mail-listener-network
+    command: python main.py
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 独立API服务（可选）
+  api-only:
+    build: .
+    container_name: mail-listener-api-only
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # 共享数据库文件
+      - mail-data:/app/data
+      # 持久化日志文件
+      - mail-logs:/app/logs
+    ports:
+      # API服务端口（不同端口）
+      - "5002:5001"
+    networks:
+      - mail-listener-network
+    command: python api_server.py
+    profiles:
+      - api-only
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  mail-listener-network:
+    driver: bridge
+
+volumes:
+  mail-data:
+    driver: local
+  mail-logs:
+    driver: local

@@ -1,0 +1,9 @@
+imapclient==3.0.1
+python-dotenv==1.2.1
+requests==2.32.5
+email-validator==2.3.0
+pydantic==2.12.4
+pydantic-settings==2.11.0
+loguru==0.7.3
+schedule==1.2.2
+flask==3.1.2

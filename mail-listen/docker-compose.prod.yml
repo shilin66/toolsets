@@ -1,0 +1,36 @@
+# 生产环境配置
+version: '3.8'
+
+services:
+  mail-listener:
+    build: .
+    container_name: mail-listener-prod
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - LOG_LEVEL=INFO
+    volumes:
+      - /opt/mail-listener/data:/app/data
+      - /opt/mail-listener/logs:/app/logs
+    ports:
+      - "5001:5001"
+    networks:
+      - mail-listener-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+networks:
+  mail-listener-network:
+    driver: bridge
