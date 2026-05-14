@@ -1,5 +1,6 @@
 import os
 import uuid
+import mimetypes
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
@@ -8,13 +9,15 @@ from scipy.interpolate import make_interp_spline
 from fastapi import FastAPI, HTTPException, Security, Depends
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from starlette import status
 from matplotlib.ticker import FuncFormatter
 from minio import Minio
 from minio.error import S3Error
 from dotenv import load_dotenv
 import io
+import requests
+from urllib.parse import urlparse, unquote, urljoin
 
 import matplotlib
 matplotlib.use('Agg')
@@ -29,7 +32,7 @@ API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 # 存储配置
-STORAGE_TYPE = os.getenv("STORAGE_TYPE", "local")  # local 或 minio
+STORAGE_TYPE = os.getenv("STORAGE_TYPE", "local")  # local、minio 或 custom
 
 # MinIO 配置
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
@@ -42,6 +45,17 @@ MINIO_PUBLIC_URL = os.getenv("MINIO_PUBLIC_URL", "")  # 可选：自定义公网
 # 本地存储配置
 BASE_IMAGE_DIR = "imgs"
 os.makedirs(BASE_IMAGE_DIR, exist_ok=True)
+
+# 自定义上传接口配置
+CUSTOM_UPLOAD_URL = os.getenv("CUSTOM_UPLOAD_URL", "")
+CUSTOM_UPLOAD_BUCKET = os.getenv("CUSTOM_UPLOAD_BUCKET", "")
+CUSTOM_UPLOAD_ACCESS_KEY = os.getenv("CUSTOM_UPLOAD_ACCESS_KEY", "")
+CUSTOM_UPLOAD_SECRET_KEY = os.getenv("CUSTOM_UPLOAD_SECRET_KEY", "")
+CUSTOM_UPLOAD_ACCESS_KEY_HEADER = os.getenv("CUSTOM_UPLOAD_ACCESS_KEY_HEADER", "X-Access-Key")
+CUSTOM_UPLOAD_SECRET_KEY_HEADER = os.getenv("CUSTOM_UPLOAD_SECRET_KEY_HEADER", "X-Secret-Key")
+CUSTOM_UPLOAD_TIMEOUT = float(os.getenv("CUSTOM_UPLOAD_TIMEOUT", "30"))
+FILE_FETCH_TIMEOUT = float(os.getenv("FILE_FETCH_TIMEOUT", "30"))
+SOURCE_FILE_BASE_URL = os.getenv("SOURCE_FILE_BASE_URL", "").strip().rstrip("/")
 
 # 只在本地存储模式下挂载静态文件
 if STORAGE_TYPE == "local":
@@ -87,6 +101,25 @@ class MetricData(BaseModel):
 class ChartRequest(BaseModel):
     metrics: List[MetricData]
 
+class FileTransferRequest(BaseModel):
+    file_url: Optional[str] = None
+    file_urls: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def validate_urls(self):
+        urls = []
+        if self.file_url:
+            urls.append(self.file_url)
+        if self.file_urls:
+            urls.extend(self.file_urls)
+
+        normalized_urls = [url.strip() for url in urls if url and url.strip()]
+        if not normalized_urls:
+            raise ValueError("file_url or file_urls is required")
+
+        self.file_urls = normalized_urls
+        return self
+
 async def get_api_key(header: str = Security(api_key_header)):
     if header == API_KEY:
         return header
@@ -109,8 +142,8 @@ def format_x_axis_labels(x_data: List[str]) -> List[str]:
     return formatted_labels
 
 # --- MinIO 上传函数 ---
-def upload_to_minio(image_bytes: bytes, file_name: str) -> str:
-    """上传图片到 MinIO 并返回访问链接"""
+def upload_to_minio(file_bytes: bytes, file_name: str, content_type: str = "application/octet-stream") -> str:
+    """上传文件到 MinIO 并返回访问链接"""
     if not minio_client:
         raise Exception("MinIO 客户端未初始化")
     
@@ -122,9 +155,9 @@ def upload_to_minio(image_bytes: bytes, file_name: str) -> str:
         minio_client.put_object(
             MINIO_BUCKET,
             object_name,
-            io.BytesIO(image_bytes),
-            length=len(image_bytes),
-            content_type="image/png"
+            io.BytesIO(file_bytes),
+            length=len(file_bytes),
+            content_type=content_type
         )
         
         # 返回访问链接
@@ -139,10 +172,134 @@ def upload_to_minio(image_bytes: bytes, file_name: str) -> str:
     except S3Error as e:
         raise Exception(f"MinIO 上传失败: {e}")
 
+def upload_to_custom_api(file_bytes: bytes, file_name: str, content_type: str = "application/octet-stream") -> str:
+    """上传文件到自定义接口并返回访问链接"""
+    if not CUSTOM_UPLOAD_URL:
+        raise Exception("CUSTOM_UPLOAD_URL 未配置")
+    if not CUSTOM_UPLOAD_BUCKET:
+        raise Exception("CUSTOM_UPLOAD_BUCKET 未配置")
+
+    headers = {}
+    if CUSTOM_UPLOAD_ACCESS_KEY:
+        headers[CUSTOM_UPLOAD_ACCESS_KEY_HEADER] = CUSTOM_UPLOAD_ACCESS_KEY
+    if CUSTOM_UPLOAD_SECRET_KEY:
+        headers[CUSTOM_UPLOAD_SECRET_KEY_HEADER] = CUSTOM_UPLOAD_SECRET_KEY
+
+    files = {
+        "file": (file_name, file_bytes, content_type)
+    }
+    data = {
+        "bucket": CUSTOM_UPLOAD_BUCKET
+    }
+
+    try:
+        response = requests.post(
+            CUSTOM_UPLOAD_URL,
+            headers=headers,
+            data=data,
+            files=files,
+            timeout=CUSTOM_UPLOAD_TIMEOUT
+        )
+        response.raise_for_status()
+    except requests.RequestException as e:
+        raise Exception(f"自定义接口上传失败: {e}")
+
+    try:
+        payload = response.json()
+    except ValueError as e:
+        raise Exception(f"自定义接口返回非 JSON 响应: {e}")
+
+    url = payload.get("url")
+    if not url:
+        raise Exception(f"自定义接口响应缺少 url 字段: {payload}")
+
+    return url
+
+def save_to_local(file_bytes: bytes, file_name: str) -> str:
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    target_dir = os.path.join(BASE_IMAGE_DIR, date_str)
+    os.makedirs(target_dir, exist_ok=True)
+    file_path = os.path.join(target_dir, file_name)
+    with open(file_path, "wb") as f:
+        f.write(file_bytes)
+    return f"/imgs/{date_str}/{file_name}"
+
+def save_bytes_to_storage(file_bytes: bytes, file_name: str, content_type: str = "application/octet-stream") -> str:
+    if STORAGE_TYPE == "minio":
+        return upload_to_minio(file_bytes, file_name, content_type)
+    if STORAGE_TYPE == "custom":
+        return upload_to_custom_api(file_bytes, file_name, content_type)
+    return save_to_local(file_bytes, file_name)
+
+def guess_extension(content_type: str) -> str:
+    if not content_type:
+        return ""
+    content_type = content_type.split(";")[0].strip().lower()
+    return mimetypes.guess_extension(content_type) or ""
+
+def extract_filename_from_response(file_url: str, response: requests.Response) -> str:
+    content_disposition = response.headers.get("content-disposition", "")
+    if "filename=" in content_disposition:
+        raw_name = content_disposition.split("filename=", 1)[1].strip().strip('"')
+        if raw_name:
+            return os.path.basename(raw_name)
+
+    path = unquote(urlparse(file_url).path)
+    file_name = os.path.basename(path)
+    if file_name:
+        return file_name
+
+    ext = guess_extension(response.headers.get("content-type", ""))
+    return f"downloaded-file-{uuid.uuid4().hex[:12]}{ext}"
+
+def resolve_file_url(file_url: str) -> str:
+    if file_url.startswith("http://") or file_url.startswith("https://"):
+        return file_url
+
+    if file_url.startswith("/"):
+        if not SOURCE_FILE_BASE_URL:
+            raise ValueError("Relative file_url requires SOURCE_FILE_BASE_URL to be configured")
+        return urljoin(f"{SOURCE_FILE_BASE_URL}/", file_url.lstrip("/"))
+
+    raise ValueError("file_url must start with http://, https://, or /")
+
+def download_file(file_url: str) -> tuple[requests.Response, str]:
+    resolved_url = resolve_file_url(file_url)
+
+    try:
+        response = requests.get(resolved_url, timeout=FILE_FETCH_TIMEOUT)
+        response.raise_for_status()
+        return response, resolved_url
+    except requests.RequestException as e:
+        raise ValueError(f"Failed to download file: {e}")
+
+def store_single_file_from_url(file_url: str) -> dict:
+    response, resolved_url = download_file(file_url)
+
+    file_bytes = response.content
+    if not file_bytes:
+        raise ValueError("Downloaded file is empty")
+
+    file_name = extract_filename_from_response(resolved_url or file_url, response)
+    content_type = response.headers.get("content-type", "application/octet-stream").split(";")[0].strip()
+
+    if not os.path.splitext(file_name)[1]:
+        file_name = f"{file_name}{guess_extension(content_type)}"
+
+    safe_file_name = os.path.basename(file_name) or f"downloaded-file-{uuid.uuid4().hex[:12]}"
+    stored_url = save_bytes_to_storage(file_bytes, safe_file_name, content_type or "application/octet-stream")
+
+    return {
+        "source_url": file_url,
+        "resolved_url": resolved_url,
+        "filename": safe_file_name,
+        "content_type": content_type or "application/octet-stream",
+        "size": len(file_bytes),
+        "url": stored_url
+    }
+
 # --- 绘图引擎 ---
 def draw_antd_plot(metric: MetricData):
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    
     x_indices = np.arange(len(metric.x))
     y_values = np.array(metric.y)
 
@@ -206,25 +363,13 @@ def draw_antd_plot(metric: MetricData):
     file_name = f"{metric.name}-{uuid.uuid4().hex[:12]}.png"
     
     # 根据存储类型选择保存方式
-    if STORAGE_TYPE == "minio":
-        # 保存到内存缓冲区
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', facecolor='white')
-        buf.seek(0)
-        plt.close(fig)
-        
-        # 上传到 MinIO
-        image_bytes = buf.getvalue()
-        url = upload_to_minio(image_bytes, file_name)
-        return url
-    else:
-        # 保存到本地
-        target_dir = os.path.join(BASE_IMAGE_DIR, date_str)
-        os.makedirs(target_dir, exist_ok=True)
-        file_path = os.path.join(target_dir, file_name)
-        plt.savefig(file_path, bbox_inches='tight', facecolor='white')
-        plt.close(fig)
-        return f"/imgs/{date_str}/{file_name}"
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', facecolor='white')
+    buf.seek(0)
+    plt.close(fig)
+
+    image_bytes = buf.getvalue()
+    return save_bytes_to_storage(image_bytes, file_name, "image/png")
 
 @app.post("/generate-chart", dependencies=[Depends(get_api_key)])
 async def generate_chart_api(request: ChartRequest):
@@ -238,6 +383,33 @@ async def generate_chart_api(request: ChartRequest):
             results.append({"metric": m.name, "url": url})
         except Exception as e:
             results.append({"metric": m.name, "error": str(e)})
+
+    return {"status": "success", "data": results}
+
+@app.post("/store-file-from-url", dependencies=[Depends(get_api_key)])
+async def store_file_from_url_api(request: FileTransferRequest):
+    results = []
+    for file_url in request.file_urls or []:
+        try:
+            results.append(store_single_file_from_url(file_url))
+        except ValueError as e:
+            try:
+                resolved_url = resolve_file_url(file_url)
+            except ValueError:
+                resolved_url = None
+            result = {"source_url": file_url, "error": str(e)}
+            if resolved_url:
+                result["resolved_url"] = resolved_url
+            results.append(result)
+        except Exception as e:
+            try:
+                resolved_url = resolve_file_url(file_url)
+            except ValueError:
+                resolved_url = None
+            result = {"source_url": file_url, "error": f"Failed to store file: {e}"}
+            if resolved_url:
+                result["resolved_url"] = resolved_url
+            results.append(result)
 
     return {"status": "success", "data": results}
 
