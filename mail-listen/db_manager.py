@@ -17,16 +17,12 @@ def show_statistics():
         logger.error("获取统计信息失败")
         return
     
-    logger.info(f"总记录数: {stats.get('total_records', 0)}")
-    logger.info(f"今日记录数: {stats.get('today_records', 0)}")
-    
-    logger.info("\n按状态分布:")
-    for status, count in stats.get('status_distribution', {}).items():
-        logger.info(f"  {status}: {count}")
-    
-    logger.info("\n按类型分布:")
-    for email_type, count in stats.get('type_distribution', {}).items():
-        logger.info(f"  {email_type}: {count}")
+    email_stats = stats.get('email_records', {})
+    ticket_stats = stats.get('ticket_records', {})
+    logger.info(f"邮件总记录数: {email_stats.get('total', 0)}")
+    logger.info(f"今日邮件记录数: {email_stats.get('today', 0)}")
+    logger.info(f"工单总记录数: {ticket_stats.get('total', 0)}")
+    logger.info(f"今日工单记录数: {ticket_stats.get('today', 0)}")
 
 
 def show_recent_records(limit: int = 20):
@@ -40,28 +36,28 @@ def show_recent_records(limit: int = 20):
         return
     
     for record in records:
-        created_time = record['created_time']
+        created_time = record['create_time']
         logger.info(f"ID: {record['email_id']} | "
-                   f"类型: {record['type'] or 'N/A'} | "
-                   f"状态: {record['status'] or 'N/A'} | "
+                   f"发件人: {record['sender'] or 'N/A'} | "
+                   f"主题: {record['subject'] or 'N/A'} | "
                    f"时间: {created_time}")
 
 
-def show_records_by_status(status: str, limit: int = 10):
-    """按状态显示记录"""
-    logger.info(f"=== 状态为 '{status}' 的记录 ===")
+def show_records_by_sender(sender: str, limit: int = 10):
+    """按发件人显示记录"""
+    logger.info(f"=== 发件人包含 '{sender}' 的记录 ===")
     
-    records = email_db.get_email_records(limit=limit, status=status)
+    records = email_db.get_email_records(limit=limit, sender=sender)
     
     if not records:
-        logger.info(f"没有找到状态为 '{status}' 的记录")
+        logger.info(f"没有找到发件人包含 '{sender}' 的记录")
         return
     
     for record in records:
-        created_time = record['created_time']
+        created_time = record['create_time']
         logger.info(f"ID: {record['email_id']} | "
-                   f"类型: {record['type'] or 'N/A'} | "
-                   f"通知状态: {record['notify_status'] or 'N/A'} | "
+                   f"发件人: {record['sender'] or 'N/A'} | "
+                   f"主题: {record['subject'] or 'N/A'} | "
                    f"时间: {created_time}")
 
 
@@ -71,8 +67,8 @@ def cleanup_old_records(days: int = 30):
     
     deleted_count = email_db.cleanup_old_records(days)
     
-    if deleted_count > 0:
-        logger.info(f"成功清理 {deleted_count} 条记录")
+    if any(deleted_count.values()):
+        logger.info(f"成功清理记录: {deleted_count}")
     else:
         logger.info("没有需要清理的记录")
 
@@ -87,9 +83,10 @@ def test_database():
     
     success = email_db.add_email_record(
         email_id=test_email_id,
-        email_type='test',
-        status='test_status',
-        notify_status='test_notify'
+        sender='sender@example.com',
+        receiver=['receiver@example.com'],
+        subject='test subject',
+        content='test content'
     )
     
     if success:
@@ -103,8 +100,8 @@ def test_database():
             # 测试更新记录
             update_success = email_db.update_email_record(
                 email_id=test_email_id,
-                status='updated_status',
-                alert_time=datetime.now()
+                subject='updated subject',
+                content='updated content'
             )
             
             if update_success:
@@ -134,7 +131,7 @@ def main():
         logger.info("用法:")
         logger.info("  python db_manager.py stats          - 显示统计信息")
         logger.info("  python db_manager.py recent [数量]   - 显示最近记录")
-        logger.info("  python db_manager.py status <状态>  - 按状态查询")
+        logger.info("  python db_manager.py sender <发件人> - 按发件人查询")
         logger.info("  python db_manager.py cleanup [天数] - 清理旧记录")
         logger.info("  python db_manager.py test           - 测试数据库")
         return
@@ -147,13 +144,13 @@ def main():
         elif command == "recent":
             limit = int(sys.argv[2]) if len(sys.argv) > 2 else 20
             show_recent_records(limit)
-        elif command == "status":
+        elif command == "sender":
             if len(sys.argv) < 3:
-                logger.error("请指定状态")
+                logger.error("请指定发件人")
                 return
-            status = sys.argv[2]
+            sender = sys.argv[2]
             limit = int(sys.argv[3]) if len(sys.argv) > 3 else 10
-            show_records_by_status(status, limit)
+            show_records_by_sender(sender, limit)
         elif command == "cleanup":
             days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
             cleanup_old_records(days)

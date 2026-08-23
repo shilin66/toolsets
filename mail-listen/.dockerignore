@@ -19,12 +19,26 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.codegraph
+.omo
+.plugin-build
+.ppt-build
+.qa
+.qoder
+docs
+deliverables
+assets
+*.tar
+*.docx
+*.pdf
+.png
+static/design
 
-# 环境文件
-.env.bak
-.env.example
-.env.qq
-.env.test
+outputs
+# 环境文件（敏感配置不打入镜像，运行时通过 env_file / --env-file / 挂载注入）
+.env
+.env.*
+!.env.example
 
 # IDE
 .idea/
@@ -44,8 +58,9 @@ data/
 
 # Docker
 Dockerfile
-docker-compose.yml
+docker-compose*.yml
 .dockerignore
+DOCKER_DEPLOY.md
 
 # 测试文件
 test_*.py
@@ -58,3 +73,4 @@ README.md
 # 临时文件
 *.tmp
 *.temp
+noc-workbench.tar

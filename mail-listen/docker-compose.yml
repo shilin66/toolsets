@@ -1,34 +1,37 @@
-version: '3.8'
+# 开发/单机部署编排（生产环境请使用 docker-compose.prod.yml）
+# 环境变量从项目根目录 .env 文件加载（env_file 注入容器环境）
 
 services:
   # 邮件监听和API服务（一体化）
   mail-listener:
     build: .
+    image: mail-listen:latest
     container_name: mail-listener
     restart: unless-stopped
     env_file:
       - .env
     volumes:
-      # 持久化数据库文件
+      # 持久化数据库文件、线路表、附件、RPA 会话
       - mail-data:/app/data
       # 持久化日志文件
       - mail-logs:/app/logs
     ports:
-      # API服务端口
-      - "5001:5001"
+      # API服务端口（与 .env 中 API_PORT 保持一致，默认 5001）
+      - "${API_PORT:-5001}:${API_PORT:-5001}"
     networks:
       - mail-listener-network
     command: python main.py
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5001/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:${API_PORT:-5001}/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
-  # 独立API服务（可选）
+  # 独立API服务（可选，按需启用：docker compose --profile api-only up -d）
   api-only:
     build: .
+    image: mail-listen:latest
     container_name: mail-listener-api-only
     restart: unless-stopped
     env_file:

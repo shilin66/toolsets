@@ -8,21 +8,42 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def log_format(record) -> str:
+    """统一日志格式：带账号上下文的日志自动附加 [邮箱地址] 标识。
+
+    作为 loguru 的 format 回调使用（logger.add(format=log_format)），
+    控制台/文件两类 sink 通用；非 TTY 环境下颜色标记由 loguru 自动剥离。
+    """
+    account = record["extra"].get("account")
+    tag = f" [{account}]" if account else ""
+    return (
+        "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level>"
+        + tag
+        + " | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>\n{exception}"
+    )
+
+
 class Settings(BaseSettings):
     """应用配置"""
     
-    # 邮箱配置
+    # 邮箱配置（可选：仅用于首次启动时自动迁移到数据库，之后以管理台页面配置为准）
     imap_server: str = ""
     imap_port: int = 993
     imap_use_ssl: bool = True
     email_address: str = ""
     email_password: str = ""
+    smtp_server: str = ""
+    smtp_port: int = 465
+    smtp_use_ssl: bool = True
+    smtp_use_tls: bool = False
     
     # API配置
     api_url: str = ""
     api_token: str = ""
     api_key: str = ""  # API Key for authentication
     api_port: int = 5000
+    fe_domain: str = ""  # 前端域名，配置后用于生成图片访问地址
+    api_public_base_url: str = ""  # 生成本地资源 URL 时使用的外部可访问地址
     api_timeout: int = 30  # API 请求超时时间（秒）
     
     # 监听配置
@@ -47,7 +68,7 @@ class Settings(BaseSettings):
     sw_username: str = ""
     sw_password: str = ""
     
-    @field_validator('imap_server', 'email_address', 'email_password', 'api_url', 'api_token')
+    @field_validator('api_url', 'api_token')
     @classmethod
     def validate_required_fields(cls, v, info):
         if not v:
@@ -56,7 +77,8 @@ class Settings(BaseSettings):
     
     model_config = {
         "env_file": ".env",
-        "env_file_encoding": "utf-8"
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
     }
 
 

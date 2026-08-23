@@ -1,14 +1,20 @@
 """
 邮件操作处理模块
 """
+import json
 import uuid
 import requests
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Dict, Any
 from loguru import logger
 
 from models import EmailMessage, ActionResult, APIRequest
 from config import settings
+from database import email_db
+from email_attachments import build_attachment_url
+from html_image import render_email_body_to_image_url
+from supplier_config import SupplierConfigRepository
 
 
 class BaseAction(ABC):
@@ -20,12 +26,107 @@ class BaseAction(ABC):
         pass
 
 
+def extract_fastgpt_reply(payload) -> str:
+    """兼容 FastGPT 的多种返回格式，提取回复文本。"""
+    if not isinstance(payload, dict):
+        return str(payload)
+    choices = payload.get('choices')
+    if isinstance(choices, list) and choices:
+        message = choices[0].get('message') or {}
+        if message.get('content'):
+            return message['content']
+    data = payload.get('data')
+    if isinstance(data, dict) and data.get('responseText'):
+        return data['responseText']
+    if payload.get('responseText'):
+        return payload['responseText']
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def extract_json_objects(text: str) -> list:
+    """从 AI 返回文本中提取所有顶层 JSON 对象（容忍 ``` 围栏与 --- 分隔）。
+
+    与供应商配置页「预览提取」的前端解析逻辑一致：括号配对扫描，
+    解析失败的片段直接跳过。
+    """
+    objects = []
+    cleaned = (text or "").replace("```json", "").replace("```", "")
+    index = 0
+    while index < len(cleaned):
+        start = cleaned.find("{", index)
+        if start == -1:
+            break
+        depth = 0
+        in_string = False
+        escaped = False
+        end = -1
+        for j in range(start, len(cleaned)):
+            ch = cleaned[j]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+        if end == -1:
+            break
+        try:
+            parsed = json.loads(cleaned[start:end + 1])
+            if isinstance(parsed, dict):
+                objects.append(parsed)
+        except json.JSONDecodeError:
+            pass
+        index = end + 1
+    return objects
+
+
+def parse_mail_type_from_ai_reply(text: str) -> str:
+    """从 FastGPT 返回文本中解析邮件分类结果 mail_type，解析不到返回空字符串。"""
+    for obj in extract_json_objects(text or ""):
+        mail_type = obj.get("mail_type")
+        if isinstance(mail_type, str) and mail_type.strip():
+            return mail_type.strip()
+    return ""
+
+
+def build_security_time(db) -> str:
+    """从系统配置读取重保时间，拼接为 开始时间/结束时间 格式，未配置时返回空字符串。"""
+    settings_map = db.get_system_settings()
+    guard_start = settings_map.get('guard_start_time')
+    guard_end = settings_map.get('guard_end_time')
+    if guard_start and guard_end:
+        return f"{guard_start}/{guard_end}"
+    return ""
+
+
 class APIForwardAction(BaseAction):
     """API转发操作"""
+
+    def __init__(self, db=None):
+        self.db = db or email_db
     
     def execute(self, email: EmailMessage, params: Dict[str, Any]) -> ActionResult:
         """转发邮件到API"""
+        self._record_forward_result(email, params, "forwarding")
         try:
+            # 只有确定进行 API 转发的邮件才渲染正文图片（解析阶段不再转图）；
+            # 渲染失败返回 None 不阻断转发，转发内容中不携带 image_url 即可
+            if not email.image_url:
+                email.image_url = render_email_body_to_image_url(
+                    email.html_content, email.content, email.uid
+                )
+
             # 生成随机聊天ID
             chat_id = str(uuid.uuid4())
             
@@ -51,7 +152,7 @@ class APIForwardAction(BaseAction):
             
             response = requests.post(
                 settings.api_url,
-                json=api_request.dict(),
+                json=api_request.model_dump(),
                 headers=headers,
                 timeout=settings.api_timeout,
                 verify=False
@@ -59,52 +160,158 @@ class APIForwardAction(BaseAction):
             
             if response.status_code == 200 or response.status_code == 202:
                 logger.info(f"成功转发邮件到API: {email.subject}")
-                return ActionResult(
+                response_payload = response.json()
+                mail_type = self._save_ai_reply_result(email, response_payload, params)
+                result = ActionResult(
                     success=True,
-                    message="邮件转发成功",
-                    data={"chat_id": chat_id, "response": response.json()}
+                    message="邮件解析成功",
+                    data={
+                        "chat_id": chat_id,
+                        "mail_type": mail_type,
+                        "response": response_payload,
+                    }
                 )
+                self._record_forward_result(email, params, "succeeded")
+                return result
             else:
                 logger.error(f"API转发失败: {response.status_code} - {response.text}")
-                return ActionResult(
+                result = ActionResult(
                     success=False,
-                    message=f"API转发失败: {response.status_code}"
+                    message=f"邮件解析失败: {response.status_code}"
                 )
+                self._record_forward_result(
+                    email, params, "failed", result.message
+                )
+                return result
                 
         except Exception as e:
             logger.error(f"API转发异常: {e}")
-            return ActionResult(
+            result = ActionResult(
                 success=False,
-                message=f"API转发异常: {str(e)}"
+                message=f"邮件解析异常: {str(e)}"
             )
-    
+            self._record_forward_result(email, params, "failed", result.message)
+            return result
+
+    def _email_record(self, email: EmailMessage, params: Dict[str, Any]):
+        record_id = params.get("_email_records_id")
+        if record_id is not None:
+            return self.db.get_email_record_by_id(record_id)
+        return self.db.get_email_record(email.uid)
+
+    def _record_forward_result(
+        self,
+        email: EmailMessage,
+        params: Dict[str, Any],
+        status: str,
+        error: str = "",
+    ) -> None:
+        email_record = self._email_record(email, params)
+        if not email_record:
+            return
+        if not self.db.update_email_api_forward_result(
+            email_record["id"], status, error
+        ):
+            logger.warning(f"邮件 API 转发状态回写失败: UID {email.uid}")
+
+    def _save_ai_reply_result(
+        self,
+        email: EmailMessage,
+        response_payload,
+        params: Dict[str, Any],
+    ) -> str:
+        """解析 FastGPT 返回值：回写邮件类型与提取解析结果，失败不影响转发结果。"""
+        try:
+            reply_text = extract_fastgpt_reply(response_payload)
+            mail_type = parse_mail_type_from_ai_reply(reply_text)
+            email_record = self._email_record(email, params)
+            if email_record:
+                if mail_type and self.db.update_email_record_mail_type(
+                    email_record["id"], mail_type
+                ):
+                    logger.info(f"邮件类型已回写: UID {email.uid} -> {mail_type}")
+                if reply_text.strip():
+                    self.db.update_email_record_extract_result(
+                        email_record["id"], reply_text
+                    )
+            return mail_type
+        except Exception as e:
+            logger.warning(f"解析回写 FastGPT 返回值失败（不影响转发）: {e}")
+            return ""
+
     def _build_content(self, email: EmailMessage, params: Dict[str, Any]) -> str:
         """构建邮件内容"""
         priority = params.get('priority', '')
         category = params.get('category', '')
-        
-        content_parts = []
-        
-        # 添加优先级和分类信息
-        # if priority:
-        #     content_parts.append(f"优先级: {priority}")
-        # if category:
-        #     content_parts.append(f"分类: {category}")
-        
-        # 添加邮件基本信息
-        content_parts.extend([
-            f"邮件ID: {email.uid}\n"
-            f"标题: {email.subject}",
-            f"发件人: {email.sender}",
-            # f"收件时间: {email.received_date.strftime('%Y-%m-%d %H:%M:%S')}",
-            f"正文: {email.content}"
-        ])
-        
-        # 添加附件信息
-        if email.attachments:
-            content_parts.append(f"附件: {', '.join(email.attachments)}")
-        
-        return "\n".join(content_parts)
+        email_record = self._email_record(email, params)
+        email_records_id = email_record.get('id') if email_record else None
+
+        # 构建邮件内容字典
+        content_dict = {
+            "email_records_id": email_records_id,
+            "email_id": email.uid,
+            "subject": email.subject,
+            "sender": email.sender,
+            "content": email.html_content or email.content,
+            "attachments": email.attachments,
+            "attachment_urls": [
+                build_attachment_url(relative_path)
+                for relative_path in email.attachments
+            ],
+            "supplier_name": None,
+            "supplier_can_reply_directly": None,
+            "supplier_cutover_extract_prompt": None,
+            "supplier_mail_classify_prompt": None,
+            "securityTime": build_security_time(self.db),
+        }
+        supplier = SupplierConfigRepository(self.db).get_by_email(email.sender)
+        if supplier:
+            content_dict["supplier_name"] = supplier["name"]
+            content_dict["supplier_can_reply_directly"] = True
+            content_dict["supplier_cutover_extract_prompt"] = supplier["cutover_extract_prompt"]
+            content_dict["supplier_mail_classify_prompt"] = supplier["supplier_mail_classify_prompt"]
+
+        # 添加优先级和分类信息（如果存在）
+        if priority:
+            content_dict["priority"] = priority
+        if category:
+            content_dict["category"] = category
+
+        if email.image_url:
+            content_dict["image_url"] = email.image_url
+
+        # 将字典转换为 JSON 字符串
+        return json.dumps(content_dict, ensure_ascii=False, indent=2)
+
+
+def email_message_from_record(record: Dict[str, Any]) -> EmailMessage:
+    receiver = record.get("receiver") or ""
+    recipients = []
+    if isinstance(receiver, str) and receiver.strip():
+        try:
+            parsed_receiver = json.loads(receiver)
+        except json.JSONDecodeError:
+            parsed_receiver = receiver
+        recipients = (
+            [str(item) for item in parsed_receiver if item]
+            if isinstance(parsed_receiver, list)
+            else [str(parsed_receiver)]
+        )
+
+    return EmailMessage(
+        uid=int(record["email_id"]),
+        subject=record.get("subject") or "",
+        sender=record.get("sender") or "",
+        recipients=recipients,
+        content=record.get("content") or "",
+        html_content=record.get("html_content"),
+        message_id=record.get("message_id"),
+        reply_to=record.get("reply_to"),
+        references=record.get("references"),
+        in_reply_to=record.get("in_reply_to"),
+        received_date=record.get("create_time") or datetime.now(),
+        attachments=record.get("attachments") or [],
+    )
 
 
 class LogAction(BaseAction):

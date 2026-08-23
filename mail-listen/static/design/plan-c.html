@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 C · 调度票板 — 供应商配置弹窗</title>
+<style>
+  /* ============ 方案 C：调度票板 Dispatch ============
+     场景：调度中心的撕票式工单板。每个配置区块是一条工单条，
+     顶部打孔、底部虚线撕边；信号红只用于印章式关键动作。
+     窄体大写标题来自翻牌调度屏。灰阶为底，红为唯一强调色。
+  ==================================================== */
+  :root{
+    --paper:#eef0f2; --ticket:#ffffff; --ticket-2:#f6f7f8;
+    --ink:#14161a; --ink-2:#3a3f47; --muted:#8a919c;
+    --line:#d6d9de; --dash:#b7bcc4;
+    --red:#e11d2e; --red-deep:#b3121f; --red-soft:#fdecee;
+    --mono:"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --disp:"Avenir Next Condensed","Helvetica Neue","PingFang SC",sans-serif;
+    --body:"Helvetica Neue","PingFang SC",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{
+    background:var(--paper);
+    background-image:radial-gradient(rgb(20 22 26 / 4%) 1px, transparent 1px);
+    background-size:22px 22px;
+    color:var(--ink); font-family:var(--body);
+    min-height:100dvh; padding:40px 20px 80px;
+  }
+  .topbar{
+    max-width:840px;margin:0 auto 16px;display:flex;justify-content:space-between;align-items:center;
+    font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--ink-2);text-transform:uppercase;
+  }
+  .topbar a{color:var(--red);text-decoration:none}
+  .topbar a:hover{text-decoration:underline}
+
+  /* ---------- 票板 ---------- */
+  .board{
+    max-width:840px;margin:0 auto;background:var(--ticket);
+    border:1px solid var(--line);border-top:6px solid var(--ink);
+    box-shadow:0 26px 60px rgb(20 22 26 / 16%);
+  }
+  .board-head{
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:20px 26px;border-bottom:1px solid var(--line);position:relative;
+  }
+  /* 打孔 */
+  .board-head::before{
+    content:"";position:absolute;top:8px;left:26px;right:26px;height:8px;
+    background:radial-gradient(circle 4px at 8px 4px, var(--paper) 4px, transparent 4.5px);
+    background-size:34px 8px;background-repeat:repeat-x;
+  }
+  .board-head .eyebrow{
+    font-family:var(--mono);font-size:11px;letter-spacing:.26em;color:var(--red);text-transform:uppercase;
+  }
+  .board-head h1{
+    font-family:var(--disp);font-size:30px;font-weight:700;letter-spacing:.05em;
+    text-transform:uppercase;margin-top:2px;
+  }
+  .close-btn{
+    width:36px;height:36px;border:1.5px solid var(--ink);background:var(--ticket);
+    font-size:18px;line-height:1;cursor:pointer;transition:.15s;
+  }
+  .close-btn:hover{background:var(--ink);color:var(--ticket)}
+  .board-body{padding:24px 26px;display:grid;gap:0}
+
+  /* ---------- 工单条：区块 ---------- */
+  .stub{padding:18px 0 20px;border-bottom:2px dashed var(--dash);display:grid;gap:12px}
+  .stub:last-of-type{border-bottom:none}
+  .stub-head{display:flex;align-items:center;gap:10px}
+  .stub-no{
+    font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.1em;
+    color:var(--ticket);background:var(--ink);padding:3px 8px;
+  }
+  .stub-head h2{
+    font-family:var(--disp);font-size:16px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  }
+  .stub-head .hint{font-size:12px;color:var(--muted)}
+  .stub-head .spacer{flex:1}
+
+  /* ---------- 表单控件 ---------- */
+  .field-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  label.f{display:grid;gap:6px}
+  label.f > span,.lbl{
+    font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--ink-2);text-transform:uppercase;
+  }
+  input[type="text"],input[type="email"],textarea{
+    font-family:var(--body);font-size:14px;color:var(--ink);
+    background:var(--ticket-2);border:none;border-bottom:2px solid var(--dash);
+    padding:10px 12px;transition:.15s;
+  }
+  input:focus,textarea:focus{
+    outline:none;background:var(--ticket);border-bottom-color:var(--ink);
+    box-shadow:0 2px 0 var(--ink);
+  }
+  textarea{resize:vertical;line-height:1.6;border:1.5px solid var(--dash)}
+  textarea:focus{border-color:var(--ink);box-shadow:0 2px 0 var(--ink)}
+
+  .check-row{display:flex;align-items:center;gap:9px;font-size:13.5px;color:var(--ink)}
+  .check-row input{
+    appearance:none;width:17px;height:17px;border:2px solid var(--ink);background:var(--ticket);
+    display:grid;place-content:center;cursor:pointer;transition:.15s;
+  }
+  .check-row input:checked{background:var(--red);border-color:var(--red)}
+  .check-row input:checked::before{
+    content:"";width:8px;height:5px;border-left:2px solid var(--ticket);border-bottom:2px solid var(--ticket);
+    transform:rotate(-45deg) translateY(-1px);
+  }
+  .check-row input:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+
+  /* ---------- 固定字段：票根 ---------- */
+  .fixed-list{display:grid;gap:8px}
+  details.ff{
+    border:1px solid var(--line);background:var(--ticket-2);
+    border-left:3px solid var(--ink);transition:.15s;
+  }
+  details.ff[open]{background:var(--ticket);border-left-color:var(--red)}
+  details.ff summary{
+    list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+    padding:10px 14px;font-family:var(--mono);font-size:13px;color:var(--ink);
+  }
+  details.ff summary::-webkit-details-marker{display:none}
+  details.ff summary .caret{color:var(--muted);font-size:10px;transition:transform .15s}
+  details.ff[open] summary .caret{transform:rotate(90deg)}
+  details.ff .body{padding:0 14px 12px}
+  .badge{
+    font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:2px 7px;
+    border:1px solid var(--dash);color:var(--muted);
+  }
+  .badge.req{border-color:var(--red);color:var(--red)}
+  .badge.mod{background:var(--red);border-color:var(--red);color:var(--ticket);font-weight:700}
+  .sub-title{
+    font-family:var(--mono);font-size:11px;letter-spacing:.16em;color:var(--muted);
+    text-transform:uppercase;margin-top:6px;
+  }
+
+  /* ---------- 自定义字段条 ---------- */
+  .line-card{
+    border:1px solid var(--line);background:var(--ticket);padding:16px 18px;position:relative;
+  }
+  .line-card::before{
+    content:"";position:absolute;top:-1px;left:0;right:0;height:5px;
+    background:repeating-linear-gradient(90deg,var(--red) 0 14px, var(--ink) 14px 28px);
+  }
+  .line-top{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:12px;margin-top:4px}
+  .line-top .f-name{width:240px}
+  .del-btn{
+    margin-left:auto;width:28px;height:28px;border:1.5px solid var(--ink);background:var(--ticket);
+    color:var(--ink);font-size:16px;line-height:1;cursor:pointer;transition:.15s;
+  }
+  .del-btn:hover{background:var(--red);border-color:var(--red);color:var(--ticket)}
+
+  /* ---------- 按钮：印章式主按钮 ---------- */
+  .btn{
+    font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+    padding:10px 18px;cursor:pointer;transition:.12s;border:1.5px solid var(--ink);background:var(--ticket);
+  }
+  .btn:active{transform:translateY(1px)}
+  .btn.add{color:var(--ink)}
+  .btn.add:hover{background:var(--ink);color:var(--ticket)}
+  .btn.primary{
+    background:var(--red);border:2px solid var(--red-deep);color:var(--ticket);font-weight:700;
+    box-shadow:0 3px 0 var(--red-deep);
+  }
+  .btn.primary:hover{background:var(--red-deep)}
+  .btn.ghost{border-color:var(--dash);color:var(--ink-2)}
+  .btn.ghost:hover{border-color:var(--ink);color:var(--ink)}
+  .btn:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+
+  /* ---------- 预览：票板告示 ---------- */
+  .preview-box{
+    font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--ink-2);
+    background:var(--ticket-2);border:1px solid var(--line);padding:14px 16px;white-space:pre-wrap;
+  }
+  .preview-box b{color:var(--red);font-weight:700}
+  details.advanced summary{cursor:pointer;font-size:12px;color:var(--muted);padding:6px 0}
+  details.advanced textarea{margin-top:8px;width:100%}
+
+  /* ---------- 底部撕边 + 操作 ---------- */
+  .board-foot{
+    display:flex;justify-content:space-between;align-items:center;gap:12px;
+    padding:18px 26px;background:var(--ticket-2);
+    border-top:2px dashed var(--dash);
+  }
+  .stamp-tag{
+    font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.18em;
+    color:var(--red);border:2px solid var(--red);padding:4px 10px;transform:rotate(-2deg);
+    text-transform:uppercase;
+  }
+
+  .plan-note{
+    max-width:840px;margin:20px auto 0;font-family:var(--mono);font-size:11px;
+    letter-spacing:.08em;color:var(--ink-2);line-height:1.8;text-align:center;
+  }
+  @media (max-width:680px){
+    .field-grid{grid-template-columns:1fr}
+    .board-head h1{font-size:24px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <a href="index.html">← 返回三方案目录</a>
+    <span>PLAN C / DISPATCH · <a href="plan-a.html">回到方案 A 深夜控制室 →</a></span>
+  </div>
+
+  <section class="board" aria-label="新增供应商表单（方案 C 预览）">
+    <div class="board-head">
+      <div>
+        <p class="eyebrow">Supplier Profile · Ticket SUP-014</p>
+        <h1>新增供应商</h1>
+      </div>
+      <button class="close-btn" type="button" aria-label="关闭">×</button>
+    </div>
+
+    <div class="board-body">
+      <!-- T-01 基础信息 -->
+      <div class="stub">
+        <div class="stub-head"><span class="stub-no">T-01</span><h2>基础信息</h2></div>
+        <div class="field-grid">
+          <label class="f"><span>Name / 名称</span><input type="text" value="RT" placeholder="例如 RT"></label>
+          <label class="f"><span>Email / 邮箱</span><input type="email" value="noc@supplier.com" placeholder="noc@supplier.com"></label>
+        </div>
+        <label class="check-row"><input type="checkbox" checked>该供应商邮箱可以直接回复</label>
+      </div>
+
+      <!-- T-02 固定字段 -->
+      <div class="stub">
+        <div class="stub-head">
+          <span class="stub-no">T-02</span><h2>固定字段提取规则</h2>
+          <span class="hint">内置默认，按需覆盖</span>
+        </div>
+        <div class="fixed-list">
+          <details class="ff" open>
+            <summary><span class="caret">▶</span>carrier_ticket_no <span class="badge req">必填</span> <span class="badge mod">已自定义</span></summary>
+            <div class="body"><textarea rows="2">从邮件标题中提取运营商单号，格式为 CR 开头。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>cutover_time <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">从邮件正文中提取割接时间，并转换为 UTC 时间。对应邮件内容中：Start Time 和 End Time。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>cutover_backup_time <span class="badge">非必填</span></summary>
+            <div class="body"><textarea rows="2">提取备用割接时间（Backup Time / Reserve Time 等），规则与 cutover_time 一致。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>cutover_timezone <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">转换为 UTC 则输出 UTC；原文无明确时区则输出空字符串。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>cutover_reason <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">优先提取 Reason 字段后的完整原因描述，不根据常识补充。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>location <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">提取割接地点 / Site / POP / DC / A End / Z End 等字段内容。</textarea></div>
+          </details>
+
+          <p class="sub-title">line_array 固定子字段</p>
+          <details class="ff">
+            <summary><span class="caret">▶</span>ImpactType <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">影响类型，根据 Downtime 判断：中断、闪断、Service interruption 等。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>ImpactDateTime <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">与 cutover_time 保持一致，转换为北京时间 UTC+8。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>ImpactDuration <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">影响时长，从 Downtime 获取；无影响则为 0。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>InteruptionsCounts <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">默认值 1。</textarea></div>
+          </details>
+        </div>
+      </div>
+
+      <!-- T-03 自定义字段 -->
+      <div class="stub">
+        <div class="stub-head">
+          <span class="stub-no">T-03</span><h2>line_array 自定义字段</h2>
+          <span class="spacer"></span>
+          <button class="btn add" type="button">+ 添加字段</button>
+        </div>
+        <div class="line-card">
+          <div class="line-top">
+            <label class="f f-name"><span>字段名</span><input type="text" value="CircuitTitle"></label>
+            <label class="check-row"><input type="checkbox" checked>作为线路查询关键字</label>
+            <button class="del-btn" type="button" aria-label="删除该字段">×</button>
+          </div>
+          <label class="f"><span>提取规则描述</span><textarea rows="2" placeholder="描述该字段在线路表格中的对应列和提取方式">对应表格中的 Circuit Title 列</textarea></label>
+        </div>
+      </div>
+
+      <!-- T-04 补充说明 -->
+      <div class="stub">
+        <div class="stub-head"><span class="stub-no">T-04</span><h2>补充说明</h2><span class="hint">附加到生成的提示词末尾</span></div>
+        <textarea rows="2" placeholder="例如：该供应商邮件正文中的时间均为曼谷时间 ICT（UTC+7）">该供应商邮件正文中的时间均为曼谷时间 ICT（UTC+7）</textarea>
+      </div>
+
+      <!-- T-05 预览 -->
+      <div class="stub">
+        <div class="stub-head">
+          <span class="stub-no">T-05</span><h2>生成的提示词预览</h2>
+          <span class="spacer"></span>
+          <button class="btn add" type="button">预览提示词</button>
+        </div>
+        <div class="preview-box">{
+  <b>"carrier_ticket_no"</b>: "CR202606060001",
+  <b>"cutover_time"</b>: "2026-06-06 16:00:00/2026-06-06 22:00:00",
+  <b>"cutover_timezone"</b>: "UTC",
+  <b>"line_query_keywords"</b>: ["CircuitTitle"],
+  <b>"line_array"</b>: [ { "ImpactType": "Service interruption", ... } ]
+}</div>
+        <details class="advanced">
+          <summary>高级：手工提示词（兼容旧配置，配置了提取字段时不会生效）</summary>
+          <textarea rows="3" placeholder="未配置提取字段时，使用此处手工填写的提示词"></textarea>
+        </details>
+      </div>
+    </div>
+
+    <div class="board-foot">
+      <span class="stamp-tag">Ready to dispatch</span>
+      <div style="display:flex;gap:10px">
+        <button class="btn ghost" type="button">取消</button>
+        <button class="btn primary" type="button">保存配置</button>
+      </div>
+    </div>
+  </section>
+
+  <p class="plan-note">
+    方案 C · 调度票板 —— 冷灰纸面 #EEF0F2 / 墨黑 #14161A / 信号红 #E11D2E（唯一强调色）·
+    顶部打孔 + 虚线撕边工单条 T-01–05 · 保存按钮为印章式立体红章 · 窄体大写标题取自翻牌调度屏
+  </p>
+</body>
+</html>
