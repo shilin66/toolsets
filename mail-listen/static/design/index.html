@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>供应商配置弹窗 · 三套重设计方案</title>
+<style>
+  :root{
+    --ink:#14161a; --paper:#f4f5f7; --muted:#6b7280; --line:#d9dce1; --red:#e11d2e;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:"Helvetica Neue","PingFang SC",system-ui,sans-serif;
+    padding:48px 24px 80px;
+  }
+  .wrap{max-width:1080px;margin:0 auto}
+  header{margin-bottom:40px;border-bottom:3px solid var(--ink);padding-bottom:20px}
+  header .eyebrow{
+    font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px; letter-spacing:.2em;
+    color:var(--red); text-transform:uppercase; margin-bottom:8px;
+  }
+  header h1{
+    font-family:"Avenir Next Condensed","Helvetica Neue","PingFang SC",sans-serif;
+    font-size:44px; line-height:1.05; letter-spacing:.01em; text-transform:uppercase;
+  }
+  header p{margin-top:10px;color:var(--muted);max-width:640px;font-size:14px;line-height:1.6}
+  .plans{display:grid;gap:20px}
+  .plan{
+    display:grid; grid-template-columns:120px 1fr auto; gap:20px; align-items:center;
+    border:1px solid var(--line); background:#fff; padding:22px 24px;
+    text-decoration:none; color:inherit;
+    transition:transform .15s ease, box-shadow .15s ease;
+  }
+  .plan:hover{transform:translateY(-2px);box-shadow:0 12px 32px rgb(20 22 26 / 12%)}
+  .plan:focus-visible{outline:3px solid var(--red);outline-offset:2px}
+  .plan .no{
+    font-family:"Avenir Next Condensed","Helvetica Neue",sans-serif;
+    font-size:52px; font-weight:700; line-height:1; color:var(--ink);
+  }
+  .plan .no small{display:block;font-family:"SF Mono",Menlo,monospace;font-size:11px;color:var(--muted);letter-spacing:.15em;margin-top:4px;font-weight:400}
+  .plan h2{font-size:19px;margin-bottom:6px}
+  .plan p{font-size:13px;color:var(--muted);line-height:1.6}
+  .plan .tags{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
+  .plan .tag{
+    font-family:"SF Mono",Menlo,monospace; font-size:11px; padding:3px 8px;
+    border:1px solid var(--line); color:var(--muted); border-radius:3px;
+  }
+  .plan .go{
+    font-family:"SF Mono",Menlo,monospace; font-size:13px; letter-spacing:.1em;
+    color:var(--red); white-space:nowrap;
+  }
+  .swatch-row{display:flex;gap:4px;margin-top:10px}
+  .swatch{width:26px;height:14px;border-radius:2px;border:1px solid rgb(0 0 0 / 8%)}
+  footer{margin-top:48px;font-family:"SF Mono",Menlo,monospace;font-size:11px;color:var(--muted);letter-spacing:.1em}
+  @media (max-width:720px){.plan{grid-template-columns:1fr}.plan .no{font-size:36px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Mail Listen · Admin Console / Redesign</p>
+    <h1>供应商配置弹窗<br>三套重设计方案</h1>
+    <p>同一份功能结构（固定字段规则、line_array 自定义字段、查询关键字、提示词预览），三种截然不同的视觉语言。每个方案都取自 NOC 运维的真实场景。</p>
+  </header>
+
+  <div class="plans">
+    <a class="plan" href="plan-a.html">
+      <div class="no">A<small>DARK NOC</small></div>
+      <div>
+        <h2>深夜控制室</h2>
+        <p>7×24 值守的深色 NOC 大屏语言。深海军蓝底、青/琥珀双信号色、等宽数据字体；头部带实时 UTC 时钟与监听脉冲点，区块以 SEC.01 编号。</p>
+        <div class="swatch-row">
+          <span class="swatch" style="background:#0a1120"></span>
+          <span class="swatch" style="background:#13203a"></span>
+          <span class="swatch" style="background:#4cc9f0"></span>
+          <span class="swatch" style="background:#ffb454"></span>
+          <span class="swatch" style="background:#e6edf7"></span>
+        </div>
+      </div>
+      <span class="go">查看方案 →</span>
+    </a>
+
+    <a class="plan" href="plan-b.html">
+      <div class="no">B<small>BLUEPRINT</small></div>
+      <div>
+        <h2>线路蓝图</h2>
+        <p>工程制图纸语言。浅蓝网格纸底、墨线描边、十字定位角标；字段按图纸注记方式编号，自定义字段行像一条 A 端到 Z 端的线路。</p>
+        <div class="swatch-row">
+          <span class="swatch" style="background:#f4f8fb"></span>
+          <span class="swatch" style="background:#16324f"></span>
+          <span class="swatch" style="background:#1d4ed8"></span>
+          <span class="swatch" style="background:#e8590c"></span>
+        </div>
+      </div>
+      <span class="go">查看方案 →</span>
+    </a>
+
+    <a class="plan" href="plan-c.html">
+      <div class="no">C<small>DISPATCH</small></div>
+      <div>
+        <h2>调度票板</h2>
+        <p>撕票式调度工单。冷灰纸面、信号红印章、虚线撕边与打孔；每个配置区块是一条可撕下的工单条，窄体大写标题来自翻牌调度屏。</p>
+        <div class="swatch-row">
+          <span class="swatch" style="background:#f6f7f8"></span>
+          <span class="swatch" style="background:#14161a"></span>
+          <span class="swatch" style="background:#e11d2e"></span>
+          <span class="swatch" style="background:#8a919c"></span>
+        </div>
+      </div>
+      <span class="go">查看方案 →</span>
+    </a>
+  </div>
+
+  <footer>MAIL-LISTEN / SUPPLIER DIALOG REDESIGN · 3 DIRECTIONS · STATIC PREVIEW</footer>
+</div>
+</body>
+</html>

@@ -15,8 +15,13 @@ class EmailMessage(BaseModel):
     recipients: List[str]
     content: str
     html_content: Optional[str] = None
+    message_id: Optional[str] = None
+    reply_to: Optional[str] = None
+    references: Optional[str] = None
+    in_reply_to: Optional[str] = None
     received_date: datetime
     attachments: List[str] = []
+    image_url: Optional[str] = None
     
     class Config:
         json_encoders = {

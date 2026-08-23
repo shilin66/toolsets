@@ -1,9 +1,11 @@
-# 生产环境配置
-version: '3.8'
+# 生产环境编排
+# 环境变量从项目根目录 .env 文件加载（env_file 注入容器环境）
+# 数据使用宿主机目录挂载（/opt/mail-listener），便于备份
 
 services:
   mail-listener:
     build: .
+    image: mail-listen:latest
     container_name: mail-listener-prod
     restart: always
     env_file:
@@ -14,7 +16,8 @@ services:
       - /opt/mail-listener/data:/app/data
       - /opt/mail-listener/logs:/app/logs
     ports:
-      - "5001:5001"
+      # API服务端口（与 .env 中 API_PORT 保持一致，默认 5001）
+      - "${API_PORT:-5001}:${API_PORT:-5001}"
     networks:
       - mail-listener-network
     logging:

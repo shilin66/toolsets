@@ -2,17 +2,20 @@
 邮件过滤器模块
 """
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from loguru import logger
 
+from database import email_db
 from models import EmailMessage, FilterRule
+from supplier_config import SupplierConfigRepository
 
 
 class EmailFilter:
     """邮件过滤器"""
     
-    def __init__(self):
+    def __init__(self, supplier_repository: Optional[SupplierConfigRepository] = None):
         self.rules: List[FilterRule] = []
+        self.supplier_repository = supplier_repository
     
     def add_rule(self, rule: FilterRule):
         """添加过滤规则"""
@@ -64,7 +67,7 @@ class EmailFilter:
             return condition.lower() in field_value if isinstance(field_value, str) else False
         elif isinstance(condition, list):
             # 列表匹配（任一匹配即可）
-            return any(self._check_field_condition(email, field, c) for c in condition)
+            return any(self._check_field_condtion(email, field, c) for c in condition)
         
         return False
     
@@ -80,6 +83,8 @@ class EmailFilter:
         
         if condition_type == 'contains':
             return value in field_value if isinstance(field_value, str) else False
+        elif condition_type == 'configured_supplier':
+            return self._is_configured_supplier_sender(field_value)
         elif condition_type == 'equals':
             return field_value == value
         elif condition_type == 'starts_with':
@@ -97,35 +102,26 @@ class EmailFilter:
         
         return False
 
+    def _is_configured_supplier_sender(self, sender: Any) -> bool:
+        if not isinstance(sender, str) or not sender:
+            return False
+        if self.supplier_repository is None:
+            self.supplier_repository = SupplierConfigRepository(email_db)
+        return self.supplier_repository.get_by_email(sender) is not None
+
 
 # 预定义的过滤规则示例
 def create_default_rules() -> List[FilterRule]:
     """创建默认过滤规则"""
     rules = [
         FilterRule(
-            name="ipmonitor的邮件",
+            name="供应商配置邮箱邮件",
             conditions={
-                "sender": {"type": "contains", "value": "ipmonitor@sinnet.com.cn"}
+                "sender": {"type": "configured_supplier"}
             },
             action="api_forward",
             action_params={"priority": "high"}
-        ),
-        FilterRule(
-            name="kamonitor2的邮件",
-            conditions={
-                "sender": {"type": "contains", "value": "kamonitor2@sinnet.com.cn"},
-            },
-            action="api_forward",
-            action_params={"category": "system"}
-        ),
-        FilterRule(
-            name="shixxxxlin的邮件",
-            conditions={
-                "sender": {"type": "contains", "value": "shixxxxlin@gmail.com"},
-            },
-            action="api_forward",
-            action_params={"category": "system"}
-        ),
+        )
     ]
     
     return rules

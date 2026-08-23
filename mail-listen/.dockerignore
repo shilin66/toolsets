@@ -20,11 +20,10 @@ wheels/
 .installed.cfg
 *.egg
 
-# 环境文件
-.env.bak
-.env.example
-.env.qq
-.env.test
+# 环境文件（敏感配置不打入镜像，运行时通过 env_file / --env-file / 挂载注入）
+.env
+.env.*
+!.env.example
 
 # IDE
 .idea/
@@ -44,8 +43,9 @@ data/
 
 # Docker
 Dockerfile
-docker-compose.yml
+docker-compose*.yml
 .dockerignore
+DOCKER_DEPLOY.md
 
 # 测试文件
 test_*.py

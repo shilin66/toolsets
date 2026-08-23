@@ -4,6 +4,14 @@ requests==2.32.5
 email-validator==2.3.0
 pydantic==2.12.4
 pydantic-settings==2.11.0
+cryptography==50.0.0
 loguru==0.7.3
 schedule==1.2.2
 flask==3.1.2
+openpyxl==3.1.5
+playwright==1.56.0
+rapidocr==3.9.1
+onnxruntime==1.27.0
+pillow==12.3.0
+numpy==2.3.4
+opencv-python==5.0.0.93

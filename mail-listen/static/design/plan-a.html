@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 A · 深夜控制室 — 供应商配置弹窗</title>
+<style>
+  /* ============ 方案 A：深夜控制室 Dark NOC ============
+     场景：7×24 NOC 值守大屏。深色降低夜间值守视觉疲劳，
+     青色=正常信号，琥珀=需要注意（自定义/已修改）。
+  ==================================================== */
+  :root{
+    --bg:#0a1120; --panel:#0f1830; --panel-2:#13203a;
+    --line:#1e2c47; --line-strong:#2b3d61;
+    --text:#e6edf7; --muted:#7c8db0; --dim:#4d5e80;
+    --cyan:#4cc9f0; --amber:#ffb454; --green:#3ddc97;
+    --danger:#ff6b6b;
+    --mono:"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --disp:"Avenir Next Condensed","Helvetica Neue","PingFang SC",sans-serif;
+    --body:"Helvetica Neue","PingFang SC",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{
+    background:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgb(76 201 240 / 7%), transparent),
+      var(--bg);
+    color:var(--text); font-family:var(--body);
+    min-height:100dvh; padding:40px 20px 80px;
+  }
+  .topbar{
+    max-width:860px;margin:0 auto 18px;display:flex;justify-content:space-between;align-items:center;
+    font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--muted);text-transform:uppercase;
+  }
+  .topbar a{color:var(--cyan);text-decoration:none}
+  .topbar a:hover{text-decoration:underline}
+  .utc-clock{color:var(--cyan)}
+  .status-dot{
+    display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);
+    margin-right:6px;vertical-align:1px;animation:pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgb(61 220 151 / 45%)}50%{opacity:.55;box-shadow:0 0 0 5px rgb(61 220 151 / 0)}}
+
+  /* ---------- 弹窗主体 ---------- */
+  .dialog{
+    max-width:860px;margin:0 auto;border:1px solid var(--line-strong);border-radius:12px;
+    background:linear-gradient(180deg,var(--panel),var(--panel-2));
+    box-shadow:0 30px 80px rgb(0 0 0 / 55%), inset 0 1px 0 rgb(255 255 255 / 4%);
+    overflow:hidden;
+  }
+  .dialog-head{
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:20px 24px;border-bottom:1px solid var(--line);
+  }
+  .dialog-head .eyebrow{
+    font-family:var(--mono);font-size:11px;letter-spacing:.24em;color:var(--cyan);text-transform:uppercase;
+  }
+  .dialog-head h1{font-family:var(--disp);font-size:26px;font-weight:700;letter-spacing:.02em;margin-top:2px}
+  .close-btn{
+    width:34px;height:34px;border-radius:8px;border:1px solid var(--line-strong);
+    background:transparent;color:var(--muted);font-size:18px;line-height:1;transition:.15s;
+  }
+  .close-btn:hover{color:var(--text);border-color:var(--cyan)}
+  .dialog-body{padding:24px;display:grid;gap:22px}
+
+  /* ---------- 区块：SEC 编号 ---------- */
+  .sec{display:grid;gap:12px}
+  .sec-head{display:flex;align-items:center;gap:10px}
+  .sec-no{
+    font-family:var(--mono);font-size:11px;color:var(--bg);background:var(--cyan);
+    padding:2px 7px;border-radius:4px;letter-spacing:.08em;font-weight:700;
+  }
+  .sec-head h2{font-size:14px;font-weight:700;letter-spacing:.04em}
+  .sec-head .note{font-size:12px;color:var(--muted)}
+  .sec-head .spacer{flex:1}
+
+  /* ---------- 表单控件 ---------- */
+  .field-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  label.f{display:grid;gap:6px}
+  label.f > span, .lbl{
+    font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;
+  }
+  input[type=text],input[type=email],textarea{
+    width:100%;background:rgb(10 17 32 / 70%);border:1px solid var(--line-strong);border-radius:8px;
+    color:var(--text);padding:10px 12px;font:14px var(--body);outline:none;transition:border-color .15s, box-shadow .15s;
+  }
+  input::placeholder,textarea::placeholder{color:var(--dim)}
+  input:focus,textarea:focus,button:focus-visible,summary:focus-visible{
+    border-color:var(--cyan);box-shadow:0 0 0 3px rgb(76 201 240 / 18%);outline:none;
+  }
+  textarea{resize:vertical;min-height:0;line-height:1.6}
+
+  /* 开关 */
+  .switch-row{display:flex;align-items:center;gap:10px}
+  .switch{
+    position:relative;width:40px;height:22px;border-radius:999px;border:1px solid var(--line-strong);
+    background:rgb(10 17 32 / 80%);appearance:none;cursor:pointer;transition:.15s;flex:none;
+  }
+  .switch::after{
+    content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+    background:var(--muted);transition:.15s;
+  }
+  .switch:checked{background:rgb(76 201 240 / 22%);border-color:var(--cyan)}
+  .switch:checked::after{left:20px;background:var(--cyan)}
+  .switch-row span{font-size:13px;color:var(--text)}
+
+  /* ---------- 固定字段列表 ---------- */
+  .fixed-list{display:grid;gap:8px}
+  details.ff{
+    border:1px solid var(--line);border-radius:8px;background:rgb(10 17 32 / 45%);
+    transition:border-color .15s;
+  }
+  details.ff:hover{border-color:var(--line-strong)}
+  details.ff summary{
+    list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;
+    padding:10px 14px;font-family:var(--mono);font-size:13px;
+  }
+  details.ff summary::-webkit-details-marker{display:none}
+  details.ff summary .caret{color:var(--dim);font-size:10px;transition:transform .15s}
+  details.ff[open] summary .caret{transform:rotate(90deg)}
+  .badge{
+    font-size:10px;padding:2px 7px;border-radius:4px;letter-spacing:.1em;font-family:var(--mono);
+  }
+  .badge.req{background:rgb(76 201 240 / 14%);color:var(--cyan)}
+  .badge.opt{background:rgb(124 141 176 / 14%);color:var(--muted)}
+  .badge.mod{background:rgb(255 180 84 / 14%);color:var(--amber)}
+  details.ff .body{padding:0 14px 14px;display:grid;gap:8px}
+  .sub-title{
+    font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--muted);
+    text-transform:uppercase;margin:8px 0 2px;display:flex;align-items:center;gap:10px;
+  }
+  .sub-title::after{content:"";flex:1;height:1px;background:var(--line)}
+
+  /* ---------- 自定义字段行 ---------- */
+  .line-card{
+    border:1px solid var(--line-strong);border-radius:10px;padding:14px;
+    background:rgb(10 17 32 / 55%);display:grid;gap:12px;position:relative;
+    box-shadow:inset 3px 0 0 var(--amber);
+  }
+  .line-top{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
+  .line-top .f-name{width:230px;flex:none}
+  .check{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:10px}
+  .check input{
+    appearance:none;width:16px;height:16px;border:1px solid var(--line-strong);border-radius:4px;
+    background:transparent;cursor:pointer;display:grid;place-items:center;transition:.15s;
+  }
+  .check input:checked{background:var(--amber);border-color:var(--amber)}
+  .check input:checked::after{content:"✓";font-size:11px;color:var(--bg);font-weight:700}
+  .del-btn{
+    width:30px;height:30px;border-radius:8px;border:1px solid var(--line-strong);background:transparent;
+    color:var(--muted);font-size:16px;margin-left:auto;transition:.15s;flex:none;
+  }
+  .del-btn:hover{color:var(--danger);border-color:var(--danger)}
+
+  /* ---------- 按钮 ---------- */
+  .btn{
+    border-radius:8px;padding:9px 16px;font:700 13px var(--body);letter-spacing:.02em;
+    cursor:pointer;border:1px solid transparent;transition:.15s;
+  }
+  .btn.ghost{background:transparent;border-color:var(--line-strong);color:var(--text)}
+  .btn.ghost:hover{border-color:var(--cyan);color:var(--cyan)}
+  .btn.primary{background:var(--cyan);color:var(--bg)}
+  .btn.primary:hover{background:#6fd7f5}
+  .btn.add{background:transparent;border-color:var(--line-strong);color:var(--cyan);font-family:var(--mono);font-size:12px;padding:7px 12px}
+  .btn.add:hover{border-color:var(--cyan)}
+
+  /* ---------- 预览区 ---------- */
+  .preview-box{
+    border:1px dashed var(--line-strong);border-radius:8px;background:rgb(10 17 32 / 60%);
+    padding:12px 14px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--muted);
+    white-space:pre-wrap;max-height:180px;overflow:auto;
+  }
+  .preview-box b{color:var(--cyan);font-weight:400}
+
+  details.advanced summary{
+    cursor:pointer;font-family:var(--mono);font-size:12px;color:var(--muted);letter-spacing:.06em;
+  }
+  details.advanced summary:hover{color:var(--text)}
+  details.advanced{display:grid;gap:10px}
+
+  .dialog-foot{
+    display:flex;justify-content:flex-end;gap:10px;padding:18px 24px;border-top:1px solid var(--line);
+    background:rgb(10 17 32 / 40%);
+  }
+  .plan-note{
+    max-width:860px;margin:22px auto 0;font-family:var(--mono);font-size:11px;
+    color:var(--dim);letter-spacing:.1em;line-height:1.8;
+  }
+  @media (max-width:640px){.field-grid{grid-template-columns:1fr}.line-top .f-name{width:100%}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <span><span class="status-dot"></span>LISTENING · IMAP IDLE</span>
+    <span class="utc-clock" id="utcClock">UTC --:--:--</span>
+    <a href="index.html">← 返回方案列表</a>
+  </div>
+
+  <section class="dialog" aria-label="新增供应商">
+    <div class="dialog-head">
+      <div>
+        <p class="eyebrow">Supplier Profile</p>
+        <h1>新增供应商</h1>
+      </div>
+      <button class="close-btn" type="button" aria-label="关闭">×</button>
+    </div>
+
+    <div class="dialog-body">
+      <!-- SEC.01 基础信息 -->
+      <div class="sec">
+        <div class="sec-head"><span class="sec-no">SEC.01</span><h2>基础信息</h2></div>
+        <div class="field-grid">
+          <label class="f"><span>Name / 名称</span><input type="text" value="RT" placeholder="例如 RT"></label>
+          <label class="f"><span>Email / 邮箱</span><input type="email" value="noc@supplier.com" placeholder="noc@supplier.com"></label>
+        </div>
+        <div class="switch-row">
+          <input class="switch" type="checkbox" id="canReply" checked>
+          <span>该供应商邮箱可以直接回复</span>
+        </div>
+      </div>
+
+      <!-- SEC.02 固定字段 -->
+      <div class="sec">
+        <div class="sec-head">
+          <span class="sec-no">SEC.02</span><h2>固定字段提取规则</h2>
+          <span class="note">内置默认，按需覆盖</span>
+        </div>
+        <div class="fixed-list">
+          <details class="ff" open>
+            <summary><span class="caret">▶</span>carrier_ticket_no <span class="badge req">必填</span> <span class="badge mod">已自定义</span></summary>
+            <div class="body">
+              <textarea rows="2">从邮件标题中提取运营商单号，格式为 CR 开头。</textarea>
+            </div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>cutover_time <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">从邮件正文中提取割接时间，并转换为 UTC 时间。对应邮件内容中：Start Time 和 End Time。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>cutover_backup_time <span class="badge opt">非必填</span></summary>
+            <div class="body"><textarea rows="2">提取备用割接时间（Backup Time / Reserve Time 等），规则与 cutover_time 一致。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>cutover_timezone <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">转换为 UTC 则输出 UTC；原文无明确时区则输出空字符串。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>cutover_reason <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">优先提取 Reason 字段后的完整原因描述，不根据常识补充。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>location <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">提取割接地点 / Site / POP / DC / A End / Z End 等字段内容。</textarea></div>
+          </details>
+
+          <p class="sub-title">line_array 固定子字段</p>
+          <details class="ff">
+            <summary><span class="caret">▶</span>ImpactType <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">影响类型，根据 Downtime 判断：中断、闪断、Service interruption 等。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>ImpactDateTime <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">与 cutover_time 保持一致，转换为北京时间 UTC+8。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>ImpactDuration <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">影响时长，从 Downtime 获取；无影响则为 0。</textarea></div>
+          </details>
+          <details class="ff">
+            <summary><span class="caret">▶</span>InteruptionsCounts <span class="badge req">必填</span></summary>
+            <div class="body"><textarea rows="2">默认值 1。</textarea></div>
+          </details>
+        </div>
+      </div>
+
+      <!-- SEC.03 自定义字段 -->
+      <div class="sec">
+        <div class="sec-head">
+          <span class="sec-no">SEC.03</span><h2>line_array 自定义字段</h2>
+          <span class="spacer"></span>
+          <button class="btn add" type="button">+ 添加字段</button>
+        </div>
+        <div class="line-card">
+          <div class="line-top">
+            <label class="f f-name"><span>字段名</span><input type="text" value="CircuitTitle"></label>
+            <label class="check"><input type="checkbox" checked>作为线路查询关键字</label>
+            <button class="del-btn" type="button" aria-label="删除该字段">×</button>
+          </div>
+          <label class="f"><span>提取规则描述</span><textarea rows="2" placeholder="描述该字段在线路表格中的对应列和提取方式">对应表格中的 Circuit Title 列</textarea></label>
+        </div>
+      </div>
+
+      <!-- SEC.04 补充说明 -->
+      <div class="sec">
+        <div class="sec-head"><span class="sec-no">SEC.04</span><h2>补充说明</h2><span class="note">附加到生成的提示词末尾</span></div>
+        <textarea rows="2" placeholder="例如：该供应商邮件正文中的时间均为曼谷时间 ICT（UTC+7）">该供应商邮件正文中的时间均为曼谷时间 ICT（UTC+7）</textarea>
+      </div>
+
+      <!-- SEC.05 预览 -->
+      <div class="sec">
+        <div class="sec-head">
+          <span class="sec-no">SEC.05</span><h2>生成的提示词预览</h2>
+          <span class="spacer"></span>
+          <button class="btn add" type="button">预览提示词</button>
+        </div>
+        <div class="preview-box">{
+  <b>"carrier_ticket_no"</b>: "CR202606060001",
+  <b>"cutover_time"</b>: "2026-06-06 16:00:00/2026-06-06 22:00:00",
+  <b>"cutover_timezone"</b>: "UTC",
+  <b>"line_query_keywords"</b>: ["CircuitTitle"],
+  <b>"line_array"</b>: [ { "ImpactType": "Service interruption", ... } ]
+}</div>
+        <details class="advanced">
+          <summary>高级：手工提示词（兼容旧配置，配置了提取字段时不会生效）</summary>
+          <textarea rows="3" placeholder="未配置提取字段时，使用此处手工填写的提示词"></textarea>
+        </details>
+      </div>
+    </div>
+
+    <div class="dialog-foot">
+      <button class="btn ghost" type="button">取消</button>
+      <button class="btn primary" type="button">保存配置</button>
+    </div>
+  </section>
+
+  <p class="plan-note">
+    方案 A · 深夜控制室 —— 深海军蓝 #0A1120 / 双信号色 青 #4CC9F0 + 琥珀 #FFB454 ·
+    等宽数据字体 SF Mono · 区块编号 SEC.01–05 · 头部实时 UTC 时钟与监听脉冲
+  </p>
+
+<script>
+  function tick(){
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    document.getElementById("utcClock").textContent =
+      `UTC ${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+  }
+  tick(); setInterval(tick, 1000);
+</script>
+</body>
+</html>

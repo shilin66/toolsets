@@ -10,24 +10,23 @@ import time
 from loguru import logger
 
 from api_server import app
-from mail_listener import MailListener
-from config import settings
+from mail_listener import listener_manager
+from config import settings, log_format
 
 
 class MainService:
     """主服务管理类"""
     
     def __init__(self):
-        self.mail_listener = None
         self.api_thread = None
         self.running = False
         
-        # 配置日志
+        # 配置日志（统一格式：带邮箱标识，见 config.log_format）
         logger.remove()
         logger.add(
             sys.stdout,
             level=settings.log_level,
-            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan> - <level>{message}</level>"
+            format=log_format,
         )
         
         logger.add(
@@ -35,7 +34,7 @@ class MainService:
             rotation="1 day",
             retention="30 days",
             level=settings.log_level,
-            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name} - {message}"
+            format=log_format,
         )
         
         # 设置信号处理
@@ -55,12 +54,10 @@ class MainService:
             logger.info("=" * 60)
             logger.info(f"API 地址: http://0.0.0.0:{settings.api_port}")
             logger.info("API 接口:")
-            logger.info("  POST   /api/alert       - 创建告警事件")
-            logger.info("  POST   /api/recovery    - 创建恢复事件")
-            logger.info("  GET    /api/event/<code> - 根据事件代码查询")
-            logger.info("  GET    /api/events      - 查询事件列表")
-            logger.info("  GET    /api/statistics  - 获取统计信息")
             logger.info("  GET    /health          - 健康检查")
+            logger.info("  POST   /api/tickets     - 新增工单记录")
+            logger.info("  GET    /api/template-xlsx - 生成模板 Excel")
+            logger.info("  POST   /api/template-xlsx - 生成并填充模板 Excel")
             logger.info("=" * 60)
             
             # 关闭 Flask 的默认日志
@@ -80,15 +77,14 @@ class MainService:
             logger.error(f"API 服务启动失败: {e}")
     
     def start_mail_listener(self):
-        """启动邮件监听服务（在主线程中运行）"""
+        """启动邮件监听服务（多邮箱，监听在独立线程中运行）"""
         try:
             logger.info("=" * 60)
             logger.info("启动邮件监听服务")
             logger.info("=" * 60)
-            
-            self.mail_listener = MailListener()
-            self.mail_listener.start()
-            
+
+            listener_manager.start_all()
+
         except Exception as e:
             logger.error(f"邮件监听服务启动失败: {e}")
             import traceback
@@ -99,8 +95,6 @@ class MainService:
         logger.info("=" * 60)
         logger.info("邮件监听系统启动")
         logger.info("=" * 60)
-        logger.info(f"邮箱: {settings.email_address}")
-        logger.info(f"IMAP服务器: {settings.imap_server}:{settings.imap_port}")
         logger.info(f"日志级别: {settings.log_level}")
         logger.info("=" * 60)
         
@@ -124,9 +118,11 @@ class MainService:
         logger.info("按 Ctrl+C 停止服务")
         logger.info("=" * 60)
         
-        # 在主线程中启动邮件监听服务
+        # 启动邮件监听服务（监听线程独立运行，主线程保持存活）
         try:
             self.start_mail_listener()
+            while self.running:
+                time.sleep(1)
         except KeyboardInterrupt:
             logger.info("收到中断信号")
         except Exception as e:
@@ -146,13 +142,12 @@ class MainService:
         self.running = False
         
         # 停止邮件监听服务
-        if self.mail_listener:
-            try:
-                logger.info("停止邮件监听服务...")
-                self.mail_listener.stop()
-                logger.info("✓ 邮件监听服务已停止")
-            except Exception as e:
-                logger.error(f"停止邮件监听服务时出错: {e}")
+        try:
+            logger.info("停止邮件监听服务...")
+            listener_manager.stop_all()
+            logger.info("✓ 邮件监听服务已停止")
+        except Exception as e:
+            logger.error(f"停止邮件监听服务时出错: {e}")
         
         # API 服务会随着主程序退出而停止
         logger.info("✓ API 服务已停止")
@@ -175,8 +170,8 @@ class MainService:
         else:
             logger.info("✗ API 服务: 已停止")
         
-        # 邮件监听服务状态（在主线程中运行）
-        if self.mail_listener and self.running:
+        # 邮件监听服务状态（监听线程独立运行）
+        if self.running:
             logger.info("✓ 邮件监听服务: 运行中")
         else:
             logger.info("✗ 邮件监听服务: 已停止")

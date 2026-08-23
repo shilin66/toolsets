@@ -4,28 +4,122 @@
 import email
 import time
 import threading
+import smtplib
+import re
+from html import escape
 from typing import List, Optional, Callable
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage as ReplyMessage
 from email.header import decode_header
-from email.utils import parsedate_to_datetime
+from email.utils import parseaddr, parsedate_to_datetime
 from loguru import logger
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError
 from models import EmailMessage
 from config import settings
+from database import email_db
+from email_attachments import save_attachment
+from mail_accounts import MailAccountConfig
+
+
+def _clean_header_value(value: Optional[str]) -> str:
+    """展开邮件折叠头，避免生成回复邮件时 header 注入/换行错误。"""
+    if not value:
+        return ""
+    unfolded = re.sub(r"\r?\n[ \t]+", " ", value)
+    return unfolded.replace("\r", "").replace("\n", "").strip()
+
+
+def _extract_html_body(html_content: str) -> str:
+    """尽量取出原 HTML 的 body 内容，便于作为引用片段嵌入回复。"""
+    if not html_content:
+        return ""
+    body_match = re.search(r"<body\b[^>]*>(.*?)</body>", html_content, flags=re.IGNORECASE | re.DOTALL)
+    return body_match.group(1).strip() if body_match else html_content.strip()
+
+
+def _plain_text_to_html(text: str) -> str:
+    escaped = escape(text or "")
+    return escaped.replace("\n", "<br>\n")
+
+
+def build_reply_message(
+    original_email: EmailMessage,
+    reply_content: str,
+    from_address: Optional[str] = None,
+    html_content: Optional[str] = None,
+    recipients: Optional[List[str]] = None,
+) -> ReplyMessage:
+    """构建一封带邮件线程头的回复邮件。
+
+    recipients 传入时覆盖默认收件人（原邮件 reply_to 或 sender），支持多个地址。
+    """
+    sender = _clean_header_value(from_address or settings.email_address)
+    if recipients:
+        cleaned = [_clean_header_value(address) for address in recipients]
+        recipient = ", ".join(address for address in cleaned if address)
+    else:
+        recipient = _clean_header_value(original_email.reply_to or original_email.sender)
+    subject = _clean_header_value(original_email.subject or "")
+    if not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}"
+
+    reply = ReplyMessage()
+    reply["From"] = sender
+    reply["To"] = recipient
+    reply["Subject"] = subject
+
+    message_id = _clean_header_value(original_email.message_id)
+    if message_id:
+        reply["In-Reply-To"] = message_id
+
+        references = _clean_header_value(original_email.references)
+        reference_parts = references.split() if references else []
+        if message_id not in reference_parts:
+            reference_parts.append(message_id)
+        reply["References"] = " ".join(reference_parts)
+
+    reply.set_content(reply_content)
+    if html_content:
+        quoted_html = _extract_html_body(html_content)
+        reply_html = (
+            "<html><body>"
+            f"<div>{_plain_text_to_html(reply_content)}</div>"
+            "<br>"
+            "<blockquote style=\"margin:0 0 0 .8em;border-left:2px solid #ccc;"
+            "padding-left:1em;color:#555;\">"
+            f"{quoted_html}"
+            "</blockquote>"
+            "</body></html>"
+        )
+        reply.add_alternative(reply_html, subtype="html")
+
+    return reply
 
 
 class EmailClient:
-    """邮件客户端"""
+    """邮件客户端（按邮箱账号配置连接）"""
 
-    def __init__(self):
+    def __init__(self, account: MailAccountConfig):
+        self.account = account
         self.client: Optional[IMAPClient] = None
         self.connected = False
         self.idle_thread: Optional[threading.Thread] = None
         self.idle_running = False
         self.idle_callback: Optional[Callable] = None
         self._idle_lock = threading.Lock()
-    
+
+    def _with_account_context(self, func):
+        """包装函数：执行时注入账号日志上下文，使整条调用链（含 IDLE/
+        搜索子线程）的日志带上邮箱标识。"""
+        address = self.account.email_address
+
+        def wrapper(*args, **kwargs):
+            with logger.contextualize(account=address):
+                return func(*args, **kwargs)
+
+        return wrapper
+
     def _make_timezone_aware(self, dt: datetime) -> datetime:
         """确保datetime对象包含时区信息"""
         if dt.tzinfo is None:
@@ -84,9 +178,9 @@ class EmailClient:
         try:
             logger.debug(f"开始搜索，超时时间: {timeout}秒，条件: {search_criteria}")
             
-            # 使用线程池执行器实现超时控制
+            # 使用线程池执行器实现超时控制（包装器保证搜索线程内日志带邮箱标识）
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(do_search)
+                future = executor.submit(self._with_account_context(do_search))
                 try:
                     messages = future.result(timeout=timeout)
                     logger.debug(f"搜索完成，找到 {len(messages)} 封邮件")
@@ -103,31 +197,112 @@ class EmailClient:
             if "Broken pipe" in error_str or isinstance(e, (ConnectionError, OSError)):
                 logger.warning(f"检测到连接断开 ({e})，标记为未连接状态")
                 self.connected = False
-                
-            return []
+            
+            # 向上抛出，由调用方区分“搜索失败”与“真的无邮件”，避免静默重复重试/误回退
+            raise
 
     def connect(self) -> bool:
         """连接到邮箱服务器"""
+        return self._with_account_context(self._connect_impl)()
+
+    def _connect_impl(self) -> bool:
+        account = self.account
         try:
             self.client = IMAPClient(
-                settings.imap_server,
-                port=settings.imap_port,
-                ssl=settings.imap_use_ssl,
+                account.imap_server,
+                port=account.imap_port,
+                ssl=account.imap_use_ssl,
                 use_uid=True,
             )
-            self.client.login(settings.email_address, settings.email_password)
-            self.client.select_folder('INBOX')
+            self.client.login(account.email_address, account.email_password)
             self.client._imap.debug = 4
+            self._send_client_id()
+            self.client.select_folder('INBOX')
             self.connected = True
-            logger.info(f"成功连接到邮箱: {settings.email_address} (SSL: {settings.imap_use_ssl})")
+            logger.info(f"成功连接到邮箱: {account.email_address} (SSL: {account.imap_use_ssl})")
             return True
         except Exception as e:
-            logger.error(f"连接邮箱失败: {e}")
+            logger.error(f"连接邮箱失败 [{account.email_address}]: {e}")
+            if "Unsafe Login" in str(e):
+                logger.error(
+                    "网易邮箱拦截提示：确认已开启 IMAP 服务并使用客户端授权码（非登录密码）；"
+                    "若仍失败，请登录网页版邮箱检查是否有安全验证提示"
+                )
             self.connected = False
+            return False
+
+    def _send_client_id(self):
+        """发送 IMAP ID 命令（RFC 2971）声明客户端身份。
+
+        网易邮箱（163/126/yeah.net）要求客户端先发送 ID，
+        否则 SELECT 邮箱时返回 "SELECT Unsafe Login" 拒绝访问。
+        不支持 ID 的服务器忽略此命令即可，不影响连接。
+        """
+        try:
+            imap = self.client._imap
+            # 部分服务器（网易/腾讯）登录后才重新广播 CAPABILITY，
+            # 预登录的能力列表不可靠，因此不检查能力直接尝试发送，失败不影响连接；
+            # 括号内的 key/value 按 atom 解析，无需引号转义（值中不能含空格）
+            typ, data = imap._simple_command(
+                'ID', '("name" "mail-listen" "version" "1.0" "vendor" "mail-listen")'
+            )
+            if typ != 'OK':
+                logger.warning(f"IMAP ID 命令未被接受（不影响后续操作）: {data}")
+        except Exception as e:
+            logger.warning(f"IMAP ID 命令发送失败（不影响后续操作）: {e}")
+
+    def reply_email(
+        self,
+        original_email: EmailMessage,
+        reply_content: str,
+        html_content: Optional[str] = None,
+        recipients: Optional[List[str]] = None,
+    ) -> bool:
+        """回复邮件（使用当前账号的 SMTP 配置），可传 recipients 覆盖收件人。"""
+        return self._with_account_context(self._reply_email_impl)(
+            original_email, reply_content, html_content, recipients
+        )
+
+    def _reply_email_impl(
+        self,
+        original_email: EmailMessage,
+        reply_content: str,
+        html_content: Optional[str] = None,
+        recipients: Optional[List[str]] = None,
+    ) -> bool:
+        account = self.account
+        smtp_server = account.smtp_server or account.imap_server
+        reply_message = build_reply_message(
+            original_email,
+            reply_content=reply_content,
+            from_address=account.email_address,
+            html_content=html_content,
+            recipients=recipients,
+        )
+
+        try:
+            if account.smtp_use_ssl:
+                smtp_client = smtplib.SMTP_SSL(smtp_server, account.smtp_port)
+            else:
+                smtp_client = smtplib.SMTP(smtp_server, account.smtp_port)
+
+            with smtp_client as client:
+                if account.smtp_use_tls and not account.smtp_use_ssl:
+                    client.starttls()
+                client.login(account.email_address, account.email_password)
+                client.send_message(reply_message)
+
+            logger.info(f"成功回复邮件: {original_email.subject}")
+            return True
+        except Exception as e:
+            logger.error(f"回复邮件失败: {e}")
             return False
 
     def disconnect(self):
         """断开连接"""
+        self._with_account_context(self._disconnect_impl)()
+
+    def _disconnect_impl(self):
         if self.client and self.connected:
             try:
                 self.client.logout()
@@ -135,6 +310,19 @@ class EmailClient:
                 logger.info("已断开邮箱连接")
             except Exception as e:
                 logger.error(f"断开连接时出错: {e}")
+
+    def _is_uid_within_hours(self, uid: int, cutoff_date: datetime) -> bool:
+        """解析前用 INTERNALDATE（服务器收件时间）轻量预检时间范围，
+        避免对超范围邮件白做全文解析与正文转图；获取失败时按在范围内处理（保留邮件）。"""
+        try:
+            response = self.client.fetch(uid, ['INTERNALDATE'])
+            if uid in response and b'INTERNALDATE' in response[uid]:
+                internal_date = self._make_timezone_aware(response[uid][b'INTERNALDATE'])
+                return internal_date >= cutoff_date
+            return True
+        except Exception as e:
+            logger.debug(f"获取 UID {uid} 的 INTERNALDATE 失败: {e}，默认保留")
+            return True
 
     def get_unread_messages(self) -> List[EmailMessage]:
         """获取未读邮件（优化版，支持大量邮件）"""
@@ -148,41 +336,33 @@ class EmailClient:
             # 如果配置了小时过滤，尝试使用SINCE搜索
             if settings.email_hours_filter > 0:
                 since_date = self._get_cutoff_datetime(settings.email_hours_filter)
-                
-                # 尝试多种日期格式，兼容不同的IMAP服务器
-                date_formats = [
-                    since_date.strftime("%d-%b-%Y"),  # 标准格式: 06-Nov-2025
-                    since_date.strftime("%Y-%m-%d"),  # ISO格式: 2025-11-06
-                    since_date.strftime("%m/%d/%Y"),  # 美式格式: 11/06/2025
-                ]
-                
                 logger.info(f"搜索 {settings.email_hours_filter} 小时内的未读邮件（自 {since_date.strftime('%Y-%m-%d %H:%M:%S')}）")
-                
-                # 尝试不同的日期格式
-                for date_format in date_formats:
+
+                try:
+                    # IMAP 日期条件必须拆分为独立 token（'SINCE' + 日期），
+                    # 合并成单字符串会被整体加引号导致服务器报 Parse command error；
+                    # datetime 由 imapclient 自动序列化为 RFC 3501 格式（如 22-Aug-2026）；
+                    # SINCE 仅精确到天，小时级过滤由后续客户端时间过滤完成
+                    messages = self._search_with_timeout(
+                        ['UNSEEN', 'SINCE', since_date], timeout=10
+                    )
+                    logger.info(f"SINCE 搜索到 {len(messages)} 封邮件")
+                except Exception as e:
+                    logger.warning(f"服务器不支持SINCE搜索({e})，回退到获取所有未读邮件进行客户端过滤")
                     try:
-                        search_criteria = ['UNSEEN', f'SINCE {date_format}']
-                        logger.debug(f"尝试日期格式: {date_format}")
-                        messages = self._search_with_timeout(search_criteria, timeout=10)
-                        
-                        if messages:
-                            logger.info(f"使用日期格式 '{date_format}' 搜索到 {len(messages)} 封邮件")
-                            break
-                        else:
-                            logger.debug(f"日期格式 '{date_format}' 未找到邮件")
-                    except Exception as e:
-                        logger.debug(f"日期格式 '{date_format}' 搜索失败: {e}")
-                        continue
-                
-                # 如果所有日期格式都失败，回退到获取所有未读邮件
-                if not messages:
-                    logger.warning("服务器可能不支持SINCE搜索，回退到获取所有未读邮件进行客户端过滤")
-                    messages = self._search_with_timeout(['UNSEEN'])
-                    logger.info(f"获取到所有未读邮件: {len(messages)} 封，将进行客户端时间过滤")
+                        messages = self._search_with_timeout(['UNSEEN'])
+                        logger.info(f"获取到所有未读邮件: {len(messages)} 封，将进行客户端时间过滤")
+                    except Exception as fallback_error:
+                        logger.error(f"未读邮件搜索失败: {fallback_error}")
+                        return []
             else:
                 # 没有配置小时过滤，直接搜索所有未读邮件
                 logger.info("搜索所有未读邮件")
-                messages = self._search_with_timeout(['UNSEEN'])
+                try:
+                    messages = self._search_with_timeout(['UNSEEN'])
+                except Exception as e:
+                    logger.error(f"未读邮件搜索失败: {e}")
+                    return []
             
             if not messages:
                 logger.info("没有找到未读邮件")
@@ -206,6 +386,18 @@ class EmailClient:
             
             for uid in messages:
                 try:
+                    if email_db.email_exists(uid, receiver=self.account.email_address):
+                        logger.info(f"邮件 UID {uid} 已处理过，跳过解析和转图片")
+                        if settings.mark_as_read:
+                            self.client.add_flags(uid, ['\\Seen'])
+                        continue
+
+                    # INTERNALDATE 预检：超范围邮件直接跳过，避免白做解析与转图；
+                    # 解析后仍保留基于 Date 头的二次过滤（两字段可能不一致）
+                    if cutoff_date and not self._is_uid_within_hours(uid, cutoff_date):
+                        logger.debug(f"跳过超出时间范围的邮件 UID {uid}（INTERNALDATE 预检）")
+                        continue
+
                     email_msg = self._parse_email(uid)
                     if email_msg:
                         # 客户端时间过滤（适用于所有邮箱服务器）
@@ -254,7 +446,11 @@ class EmailClient:
             subject = self._decode_header(msg.get('Subject', ''))
 
             # 解析发件人
-            sender = self._decode_header(msg.get('From', ''))
+            sender = self._extract_email_address(msg.get('From', ''))
+            reply_to = self._extract_email_address(msg.get('Reply-To', ''))
+            message_id = msg.get('Message-ID', '')
+            references = msg.get('References', '')
+            in_reply_to = msg.get('In-Reply-To', '')
 
             # 解析收件人
             recipients = [self._decode_header(msg.get('To', ''))]
@@ -263,22 +459,30 @@ class EmailClient:
             date_str = msg.get('Date')
             received_date = parsedate_to_datetime(date_str) if date_str else datetime.now()
 
-            # 解析邮件内容
+            # 解析邮件内容；正文转图片已后移至 API 转发执行时（actions.APIForwardAction），
+            # 确保只有确定进行 API 转发的邮件才渲染；非转发邮件不消耗渲染资源，
+            # 也不再出现“转图后被时间过滤丢弃”的白做场景
             content, html_content = self._extract_content(msg)
-            content = (html_content or "") + (content or "")
+            image_url = None
             # 解析附件
-            attachments = self._extract_attachments(msg)
-
-            return EmailMessage(
+            attachments = self._extract_attachments(msg, uid)
+            emailMsg =  EmailMessage(
                 uid=uid,
                 subject=subject,
                 sender=sender,
                 recipients=recipients,
                 content=content,
                 html_content=html_content,
+                message_id=message_id,
+                reply_to=reply_to,
+                references=references,
+                in_reply_to=in_reply_to,
                 received_date=received_date,
-                attachments=attachments
+                attachments=attachments,
+                image_url=image_url
             )
+            # self.reply_email(emailMsg, '回复一下', html_content)
+            return emailMsg
 
         except Exception as e:
             logger.error(f"解析邮件 {uid} 失败: {e}")
@@ -303,6 +507,12 @@ class EmailClient:
 
         return decoded_string
 
+    def _extract_email_address(self, header: str) -> str:
+        """从邮件地址头中提取邮箱地址"""
+        decoded_header = self._decode_header(header)
+        _, address = parseaddr(decoded_header)
+        return address or decoded_header
+
     def _extract_content(self, msg) -> tuple[str, Optional[str]]:
         """提取邮件内容"""
         text_content = ""
@@ -325,48 +535,45 @@ class EmailClient:
             elif content_type == "text/html":
                 html_content = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
         # 如果HTML内容存在，提取body部分并处理特殊标签
-        if html_content:
-            try:
-                from bs4 import BeautifulSoup
-
-                # 解析HTML
-                soup = BeautifulSoup(html_content, 'html.parser')
-                print('======================\n')
-                print(soup)
-
-                # 提取body内容
-                body = soup.find('body')
-                if body:
-                    # 移除所有img标签
-                    for img in body.find_all('img'):
-                        img.decompose()
-
-                    # 将<br>标签替换为换行符
-                    for br in body.find_all('br'):
-                        br.replace_with('\n')
-
-                    # 获取处理后的文本
-                    html_content = body.get_text()
-                else:
-                    # 如果没有找到body标签，处理整个HTML
-                    # 移除所有img标签
-                    for img in soup.find_all('img'):
-                        img.decompose()
-
-                    # 将<br>标签替换为换行符
-                    for br in soup.find_all('br'):
-                        br.replace_with('\n')
-
-                    # 获取处理后的文本
-                    html_content = soup.get_text()
-
-            except Exception as e:
-                logger.warning(f"处理HTML内容时出错: {e}")
+        # if html_content:
+        #     try:
+        #         from bs4 import BeautifulSoup
+        #
+        #         # 解析HTML
+        #         soup = BeautifulSoup(html_content, 'html.parser')
+        #
+        #         # 提取body内容
+        #         body = soup.find('body')
+        #         if body:
+        #             # 移除所有img标签
+        #             for img in body.find_all('img'):
+        #                 img.decompose()
+        #
+        #             # 将<br>标签替换为换行符
+        #             for br in body.find_all('br'):
+        #                 br.replace_with('\n')
+        #
+        #             # 获取处理后的文本
+        #             html_content = body.get_text()
+        #         else:
+        #             # 如果没有找到body标签，处理整个HTML
+        #             # 移除所有img标签
+        #             for img in soup.find_all('img'):
+        #                 img.decompose()
+        #
+        #             # 将<br>标签替换为换行符
+        #             for br in soup.find_all('br'):
+        #                 br.replace_with('\n')
+        #
+        #             # 获取处理后的文本
+        #             html_content = soup.get_text()
+        #
+        #     except Exception as e:
+        #         logger.warning(f"处理HTML内容时出错: {e}")
 
         return text_content.strip(), html_content
 
-    def _extract_attachments(self, msg) -> List[str]:
-        """提取附件信息"""
+    def _extract_attachments(self, msg, uid: int) -> List[str]:
         attachments = []
 
         if msg.is_multipart():
@@ -375,7 +582,11 @@ class EmailClient:
                 if "attachment" in content_disposition:
                     filename = part.get_filename()
                     if filename:
-                        attachments.append(self._decode_header(filename))
+                        payload = part.get_payload(decode=True)
+                        if payload is None:
+                            logger.warning(f"附件 {filename} 内容为空，跳过保存")
+                            continue
+                        attachments.append(save_attachment(uid, self._decode_header(filename), payload))
 
         return attachments
 
@@ -387,12 +598,27 @@ class EmailClient:
 
         emails = []
         try:
+            cutoff_date = (
+                self._get_cutoff_datetime(settings.email_hours_filter)
+                if settings.email_hours_filter > 0
+                else None
+            )
             for uid in uids:
+                if email_db.email_exists(uid, receiver=self.account.email_address):
+                    logger.info(f"邮件 UID {uid} 已处理过，跳过解析和转图片")
+                    if settings.mark_as_read:
+                        self.client.add_flags(uid, ['\\Seen'])
+                    continue
+
+                # INTERNALDATE 预检：超范围邮件直接跳过，避免白做解析与转图
+                if cutoff_date and not self._is_uid_within_hours(uid, cutoff_date):
+                    logger.debug(f"跳过超出时间范围的邮件 UID {uid}（INTERNALDATE 预检）")
+                    continue
+
                 email_msg = self._parse_email(uid)
                 if email_msg:
-                    # 检查小时过滤
-                    if settings.email_hours_filter > 0:
-                        cutoff_date = self._get_cutoff_datetime(settings.email_hours_filter)
+                    # 检查小时过滤（基于 Date 头的二次过滤，两字段可能不一致）
+                    if cutoff_date:
                         email_date = self._make_timezone_aware(email_msg.received_date)
                         if email_date < cutoff_date:
                             logger.debug(f"跳过超出时间范围的邮件: {email_msg.subject}")
@@ -424,8 +650,10 @@ class EmailClient:
         self.idle_callback = callback
         self.idle_running = True
 
-        # 启动IDLE监听线程
-        self.idle_thread = threading.Thread(target=self._idle_loop, daemon=True)
+        # 启动IDLE监听线程（子线程不自动继承 contextvars，显式传递邮箱标识）
+        self.idle_thread = threading.Thread(
+            target=self._with_account_context(self._idle_loop), daemon=True
+        )
         self.idle_thread.start()
 
         logger.info("IDLE模式监听已启动")

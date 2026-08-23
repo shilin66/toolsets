@@ -1,6 +1,6 @@
 # Mail Listen - 邮件监听系统
 
-一个功能强大的邮件监听和处理系统，支持实时监听邮箱、智能过滤邮件、自动执行操作，并提供完整的 REST API 接口用于事件管理和统计查询。
+一个邮件监听和处理系统，支持实时监听邮箱、智能过滤邮件、自动执行操作，并记录邮件基础信息。
 
 ## 功能特性
 
@@ -8,9 +8,8 @@
 - **智能过滤规则**：基于发件人、主题、内容等条件灵活配置过滤规则
 - **自动化操作**：支持 API 转发、日志记录等多种操作，可扩展自定义操作
 - **并发处理**：支持多线程并发处理邮件，提高处理效率
-- **事件管理**：完整的告警和恢复事件管理，支持事件关联和持续时间统计
-- **REST API**：提供丰富的 API 接口，支持事件创建、查询和统计
-- **数据持久化**：使用 SQLite 数据库存储邮件和事件记录
+- **REST API**：提供健康检查和模板 Excel 生成接口
+- **数据持久化**：使用 SQLite 数据库存储邮件记录
 - **时间过滤**：支持按时间范围过滤邮件，避免处理历史邮件
 
 ## 系统架构
@@ -18,13 +17,61 @@
 系统由两个主要服务组成：
 
 1. **邮件监听服务**（Mail Listener）：负责连接邮箱、监听新邮件、应用过滤规则并执行相应操作
-2. **API 服务**（API Server）：提供 REST API 接口，用于事件管理、查询和统计
+2. **API 服务**（API Server）：提供健康检查和模板 Excel 生成接口
 
 ## 快速开始
 
+### Playwright RPA 登录
+
+当前阶段提供独立的登录机器人，尚未接入邮件监听流程。账号、密码和登录地址只从环境变量读取，成功后将浏览器会话保存到
+`data/rpa/auth-state.json`，供后续自动上报流程复用。
+
+```bash
+conda activate mail-listen
+python -m playwright install chromium
+cp .env.example .env
+# 在 .env 中填写 RPA_ 登录配置及 OPENAI_COMPATIBLE_ 视觉模型配置
+python -m rpa
+```
+
+Playwright 只截取验证码元素，再由本地白名单解析器计算识别出的算式。可以通过环境变量选择识别方式。
+
+本地 RapidOCR 不访问外部接口，适合当前这种数字算术验证码：
+
+```env
+RPA_CAPTCHA_RECOGNIZER=ocr
+```
+
+OCR 模式会先识别原图；候选不符合受限算术语法时，再依次尝试灰度、
+颜色阈值和放大版本。全部失败时，错误消息会列出截断后的 OCR 候选，
+便于结合失败截图定位新字形。
+
+多模态模式使用兼容 OpenAI Chat Completions 图片输入协议的视觉模型：
+
+```env
+RPA_CAPTCHA_RECOGNIZER=multimodal
+OPENAI_COMPATIBLE_BASE_URL=https://api.openai.com/v1
+OPENAI_COMPATIBLE_API_KEY=replace-with-your-api-key
+OPENAI_COMPATIBLE_MODEL=replace-with-your-vision-model
+OPENAI_COMPATIBLE_TIMEOUT_SECONDS=120
+```
+
+`multimodal` 是默认值，并且模型必须支持图片输入。选择 `ocr` 时不要求配置
+`OPENAI_COMPATIBLE_API_KEY` 和 `OPENAI_COMPATIBLE_MODEL`。
+
+默认选择器已按“请输入用户名 / 请输入密码 / 请输入验证码 / 登录”配置。如果实际页面的验证码不是输入框后面的第一个
+`img` 元素，请用浏览器开发者工具确认验证码元素，再通过 `RPA_CAPTCHA_IMAGE_SELECTOR` 覆盖。
+登录失败时会先清空表单中的账号、密码和验证码，再把诊断截图写入 `data/rpa/artifacts/`。认证会话和诊断截图均已排除在 Git 之外。
+如果登录前或登录后误显示“网页已禁用开发者工具”，机器人会自动刷新一次；
+连续两次仍被拦截时会判定登录失败、给出明确错误并保存失败截图，绝不会把
+该红字页面保存为登录成功页面。
+登录成功后会等待页面触发 `load` 事件，保存完整页面截图到
+`data/rpa/artifacts/login-success.png`，然后保存浏览器会话并退出。可通过
+`RPA_SUCCESS_SCREENSHOT_PATH` 修改截图路径；文件会以仅当前用户可读写的权限保存。
+
 ### 环境要求
 
-- Python 3.8+
+- Python 3.12+
 - IMAP 邮箱账号（支持 IMAP 协议的邮箱服务）
 
 ### 安装依赖
@@ -86,21 +133,17 @@ python api_server.py
 
 ### Docker 部署
 
+完整部署说明（环境变量加载、数据持久化、生产配置、运维命令）见 [DOCKER_DEPLOY.md](./DOCKER_DEPLOY.md)。快速开始：
+
 ```bash
-# 构建镜像
-docker build -t mail-listen .
+# 准备配置
+cp .env.example .env   # 填写邮箱、API 等配置
 
-# 运行容器
-docker run -d \
-  --name mail-listen \
-  -p 5000:5000 \
-  -v $(pwd)/.env:/app/.env \
-  -v $(pwd)/data:/app/data \
-  -v $(pwd)/logs:/app/logs \
-  mail-listen
+# 构建并启动（环境变量自动从 .env 加载）
+docker compose up -d --build
 
-# 使用 docker-compose
-docker-compose up -d
+# 验证
+curl http://localhost:5001/health
 ```
 
 ## 配置说明
@@ -216,20 +259,19 @@ GET /health
 }
 ```
 
-### 2. 创建告警事件
+### 2. 新增工单记录
 
 ```http
-POST /api/alert
+POST /api/tickets
 Content-Type: application/json
 
 {
-  "email_id": 12345,
-  "email_type": "alert",
-  "event_code": "SERVER01_CPU_HIGH",
-  "event_type": "node_down",
-  "monitor_id": "monitor_001",
-  "status": "active",
-  "alert_time": "2025-11-10 12:00:00"
+  "email_records_id": 1,
+  "carrier_ticket_no": "RT123456",
+  "cut_start_time": "2026-06-11 10:00:00",
+  "cut_end_time": "2026-06-11 12:00:00",
+  "status": "created",
+  "cut_task_id": "CUT-001"
 }
 ```
 
@@ -237,54 +279,34 @@ Content-Type: application/json
 ```json
 {
   "success": true,
-  "message": "告警事件创建成功",
+  "message": "工单记录创建成功",
   "data": {
-    "event_id": 1,
-    "email_id": 12345,
-    "event_code": "SERVER01_CPU_HIGH",
-    "event_type": "node_down",
-    "status": "active",
-    "alert_time": "2025-11-10 12:00:00"
+    "id": 1,
+    "email_records_id": 1,
+    "status": "created",
+    "carrier_ticket_no": "RT123456",
+    "cut_task_id": "CUT-001",
+    "cut_start_time": "2026-06-11 10:00:00",
+    "cut_end_time": "2026-06-11 12:00:00",
+    "update_time": "2026-06-11 12:30:00",
+    "create_time": "2026-06-11 12:30:00"
   }
 }
 ```
 
-### 3. 创建恢复事件
+### 3. 查询线路表
+
+先按 `supplier` 精确匹配 `Supplier` 列，再查询 `Supplier Circuit ID` 包含 `keywords` 任意一个关键词的数据。
+线路表会在 API 服务启动时从 `data/线路表.xlsx` 加载到内存；如果更新该文件，需要重启服务后生效。
 
 ```http
-POST /api/recovery
+POST /api/circuits/query
 Content-Type: application/json
 
 {
-  "email_id": 12346,
-  "email_type": "recovery",
-  "event_code": "SERVER01_CPU_HIGH",
-  "event_type": "node_down",
-  "monitor_id": "monitor_001",
-  "status": "resolved",
-  "recovery_time": "2025-11-10 12:05:00"
+  "supplier": "RT",
+  "keywords": ["751630", "1285332"]
 }
-```
-
-响应：
-```json
-{
-  "success": true,
-  "message": "恢复事件处理成功",
-  "data": {
-    "event_id": 1,
-    "email_id": 12346,
-    "event_code": "SERVER01_CPU_HIGH",
-    "status": "resolved",
-    "recovery_time": "2025-11-10 12:05:00"
-  }
-}
-```
-
-### 4. 查询事件
-
-```http
-GET /api/event?event_code=SERVER01_CPU_HIGH&status=active&limit=10
 ```
 
 响应：
@@ -294,89 +316,56 @@ GET /api/event?event_code=SERVER01_CPU_HIGH&status=active&limit=10
   "message": "查询成功",
   "data": [
     {
-      "id": 1,
-      "code": "SERVER01_CPU_HIGH",
-      "type": "node_down",
-      "status": "active",
-      "alert_time": "2025-11-10 12:00:00",
-      "recovery_time": null,
-      "duration_minutes": 5.0,
-      "is_timeout": false
+      "supplier": "RT",
+      "supplier_circuit_id": "751630",
+      "circuit_id": "语音电路",
+      "line_type": "",
+      "status":"正常",
+      "remark": "中断才通知..."
+    }
+  ]
+}
+```
+
+### 4. 生成模板 Excel
+
+```http
+GET /api/template-xlsx
+```
+
+响应：
+```json
+{
+  "success": true,
+  "message": "Excel 文件生成成功",
+  "data": {
+    "filename": "template.xlsx",
+    "file_path": "/app/data/template.xlsx",
+    "download_url": "http://localhost:5000/api/template-xlsx/download/template.xlsx"
+  }
+}
+```
+
+### 5. 生成并填充模板 Excel
+
+```http
+POST /api/template-xlsx
+Content-Type: application/json
+
+{
+  "filename": "output.xlsx",
+  "circuits": [
+    {
+      "客户名称": "客户A",
+      "电路代号": "CIRCUIT-001"
     }
   ],
-  "count": 1
-}
-```
-
-### 5. 查询事件列表
-
-```http
-GET /api/events?event_type=node_down&status=active&limit=10&offset=0
-```
-
-### 6. 获取统计信息
-
-```http
-GET /api/statistics
-```
-
-响应：
-```json
-{
-  "success": true,
-  "message": "查询成功",
-  "data": {
-    "email_records": {
-      "total": 1000,
-      "today": 50,
-      "type_distribution": {
-        "alert": 600,
-        "recovery": 400
-      }
-    },
-    "event_records": {
-      "total": 500,
-      "today": 25,
-      "active_alerts": 10,
-      "status_distribution": {
-        "active": 10,
-        "resolved": 490
-      },
-      "type_distribution": {
-        "node_down": 200,
-        "hardware": 150,
-        "ups_failure": 150
-      }
+  "reasons": [
+    {
+      "割接线路/设备名称": "线路A",
+      "割接原因": "维护"
     }
-  }
-}
-```
-
-### 7. 告警持续时间统计
-
-```http
-GET /api/alert-duration-stats?start_time=2025-11-01 00:00:00&end_time=2025-11-30 23:59:59&threshold_seconds=300
-```
-
-响应：
-```json
-{
-  "success": true,
-  "message": "查询成功",
-  "data": {
-    "start_time": "2025-11-01 00:00:00",
-    "end_time": "2025-11-30 23:59:59",
-    "by_type": [
-      {
-        "type": "node_down",
-        "total_count": 50,
-        "timeout_count": 15,
-        "avg_duration": 520.3,
-        "max_duration": 1800,
-        "min_duration": 60
-      }
-    ]
-  }
+  ]
 }
 ```
 
@@ -389,23 +378,25 @@ GET /api/alert-duration-stats?start_time=2025-11-01 00:00:00&end_time=2025-11-30
 | id | INTEGER | 主键 |
 | email_id | INTEGER | 邮件 UID（唯一） |
 | sender | TEXT | 发件人 |
-| event_id | INTEGER | 关联的事件 ID |
-| type | TEXT | 邮件类型（alert/recovery） |
+| receiver | TEXT | 收件人 |
+| subject | TEXT | 邮件主题 |
+| subject_hash | TEXT | 邮件主题 SHA-256 |
+| content | TEXT | 邮件正文 |
+| content_hash | TEXT | 邮件正文 SHA-256 |
 | update_time | DATETIME | 更新时间 |
 | create_time | DATETIME | 创建时间 |
 
-### event_records 表
+### ticket_records 表
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | INTEGER | 主键 |
-| code | TEXT | 事件代码 |
-| monitor_id | TEXT | 监控 ID |
-| type | TEXT | 事件类型 |
-| status | TEXT | 状态（active/resolved） |
-| alert_time | DATETIME | 告警时间 |
-| recovery_time | DATETIME | 恢复时间 |
-| duration_seconds | INTEGER | 持续时间（秒） |
+| email_records_id | INTEGER | 关联的 email_records.id |
+| status | TEXT | 工单状态 |
+| carrier_ticket_no | TEXT | 运营商单号 |
+| cut_task_id | TEXT | 割接任务号 |
+| cut_start_time | DATETIME | 割接开始时间 |
+| cut_end_time | DATETIME | 割接结束时间 |
 | update_time | DATETIME | 更新时间 |
 | create_time | DATETIME | 创建时间 |
 
