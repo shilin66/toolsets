@@ -3,6 +3,7 @@ import json
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from time import monotonic
@@ -19,6 +20,7 @@ CutoverReportManualInterventionError = (
 )
 PortalSessionSettings = session_config_module.PortalSessionSettings
 PortalEnvironment = session_models_module.PortalEnvironment
+CutoverReportRpaError = cutover_report_module.CutoverReportRpaError
 
 
 BACKBONE_PAGE = """<!doctype html>
@@ -55,6 +57,12 @@ BACKBONE_PAGE = """<!doctype html>
     <div class="el-form-item"><label class="el-form-item__label">是否涉及集团维护设备或业务影响超出本省范围：</label>
       <label class="el-radio"><input type="radio" name="cross-province" value="是">是</label>
       <label class="el-radio"><input type="radio" name="cross-province" value="否">否</label>
+    </div>
+    <div class="el-form-item"><label class="el-form-item__label">割接对象所属机构：</label>
+      <select id="trunk-district"><option></option><option selected>国际</option></select>
+    </div>
+    <div class="el-form-item"><label class="el-form-item__label">割接对象类型：</label>
+      <select id="trunk-kind"><option></option><option selected>高阶通道</option></select>
     </div>
     <div class="el-form-item"><label class="el-form-item__label">系统名称：</label>
       <textarea id="systems" readonly></textarea>
@@ -245,8 +253,10 @@ BACKBONE_PAGE = """<!doctype html>
 
 
 class FakeBackbonePortalHandler(BaseHTTPRequestHandler):
+    page_body = BACKBONE_PAGE
+
     def do_GET(self):
-        body = BACKBONE_PAGE
+        body = self.page_body
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -258,6 +268,141 @@ class FakeBackbonePortalHandler(BaseHTTPRequestHandler):
 
 
 class PortalBackboneReportRpaTest(unittest.TestCase):
+    @contextmanager
+    def _system_selection_page(self):
+        settings = PortalSessionSettings(
+            _env_file=None, timeout_ms=1_500, report_action_delay_ms=0,
+        )
+        with cutover_report_module.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(viewport={"width": 1920, "height": 980})
+                context.route("**/*", lambda route: route.abort())
+                page = context.new_page()
+                page.set_default_timeout(settings.timeout_ms)
+                page.set_content('<iframe style="width:100%;height:850px;border:0"></iframe>')
+                frame = page.frames[-1]
+                frame.set_content(BACKBONE_PAGE.decode())
+                frame.locator("#title").fill("骨干割接测试")
+                frame.locator("#category").select_option(label="线路割接")
+                yield PortalCutoverReportRpa(settings), page, frame
+            finally:
+                browser.close()
+
+    def test_system_selection_scrolls_clear_of_fixed_reset_footer(self):
+        with self._system_selection_page() as (rpa, page, frame):
+            frame.evaluate("""() => {
+                const input = document.querySelector('#systems');
+                input.parentElement.style.marginTop = '1200px';
+                input.scrollIntoView({block: 'end'});
+                const rect = input.getBoundingClientRect();
+                const reset = document.createElement('button');
+                reset.textContent = '重置';
+                reset.style.cssText = `position:fixed;bottom:0;left:${rect.x}px;width:${rect.width}px;height:80px;z-index:1000`;
+                document.body.append(reset);
+                window.resetCount = 0;
+                reset.onclick = () => {
+                    window.resetCount++;
+                    document.querySelector('#title').value = '';
+                    document.querySelector('#category').value = '';
+                };
+            }""")
+            self.assertEqual(frame.locator("#systems").evaluate("""e => {
+                const r = e.getBoundingClientRect();
+                return document.elementFromPoint(r.x+r.width/2, r.y+r.height/2).textContent;
+            }"""), "重置")
+
+            rpa._set_backbone_field(page, "割接对象", "系统名称", ["系统甲"])
+
+            self.assertEqual(frame.locator("#systems").input_value(), "系统甲")
+            self.assertEqual(frame.locator("#title").input_value(), "骨干割接测试")
+            self.assertEqual(frame.evaluate("window.resetCount"), 0)
+
+    def test_system_selection_does_not_click_persistent_obstruction(self):
+        with self._system_selection_page() as (rpa, page, frame):
+            frame.evaluate("""() => {
+                const reset = document.createElement('button');
+                reset.textContent = '重置';
+                reset.style.cssText = 'position:fixed;inset:0;z-index:1000';
+                document.body.append(reset);
+                window.resetCount = 0;
+                reset.onclick = () => { window.resetCount++; document.querySelector('#title').value = ''; };
+            }""")
+
+            with self.assertRaises((CutoverReportRpaError, cutover_report_module.PlaywrightTimeoutError)):
+                rpa._set_backbone_field(page, "割接对象", "系统名称", ["系统甲"])
+
+            self.assertEqual(frame.locator("#title").input_value(), "骨干割接测试")
+            self.assertEqual(frame.evaluate("window.resetCount"), 0)
+
+    def test_system_selection_rejects_empty_prerequisites_before_opening_dialog(self):
+        for selector, label in (("#trunk-district", "割接对象所属机构"), ("#trunk-kind", "割接对象类型")):
+            with self.subTest(field=label), self._system_selection_page() as (rpa, page, frame):
+                frame.locator(selector).evaluate("e => { e.options[0].value = ''; e.options[0].textContent = '请选择'; }")
+                frame.locator(selector).select_option(value="")
+                with self.assertRaisesRegex(CutoverReportRpaError, label):
+                    rpa._set_backbone_field(page, "割接对象", "系统名称", ["系统甲"])
+                self.assertFalse(frame.locator("#system-dialog").is_visible())
+                self.assertEqual(frame.locator("#title").input_value(), "骨干割接测试")
+
+    def test_basic_info_guard_rejects_changed_saved_title(self):
+        with self._system_selection_page() as (rpa, page, frame):
+            frame.locator("#title").fill("")
+            with self.assertRaisesRegex(CutoverReportRpaError, "标题"):
+                rpa._assert_backbone_basic_info_retained(page, {"基本信息": {"标题": "骨干割接测试"}})
+
+    def test_basic_info_guard_rejects_changed_saved_category(self):
+        with self._system_selection_page() as (rpa, page, frame):
+            frame.locator("#category").evaluate("e => { e.add(new Option('设备割接')); e.value = '设备割接'; }")
+            with self.assertRaisesRegex(CutoverReportRpaError, "割接分类"):
+                rpa._assert_backbone_basic_info_retained(page, {"基本信息": {"割接分类": "线路割接"}})
+
+    def test_fill_stops_when_basic_info_is_cleared_during_object_selection(self):
+        for selector, event in (("#trunk-kind", "change"), ("#system-confirm", "click")):
+            with self.subTest(clear_at=selector):
+                script = f"""<script>
+                    document.querySelector('{selector}').addEventListener('{event}', () => {{
+                        document.querySelector('#title').value = '';
+                    }});
+                </script>""".encode()
+
+                class ClearingPortalHandler(FakeBackbonePortalHandler):
+                    page_body = BACKBONE_PAGE + script
+
+                with ThreadingHTTPServer(("127.0.0.1", 0), ClearingPortalHandler) as server:
+                    server_thread = threading.Thread(target=server.serve_forever)
+                    server_thread.start()
+                    try:
+                        with tempfile.TemporaryDirectory() as temp_dir:
+                            temp_path = Path(temp_dir)
+                            state_path = temp_path / "auth-state.json"
+                            state_path.write_text(json.dumps({"cookies": [], "origins": []}))
+                            settings = PortalSessionSettings(
+                                _env_file=None,
+                                test_login_url=f"http://127.0.0.1:{server.server_port}/portal/#/pLogin",
+                                test_mobile_login_url=f"http://127.0.0.1:{server.server_port}/portal/#/login",
+                                test_session_check_url=f"http://127.0.0.1:{server.server_port}/portal/#/",
+                                test_state_path=state_path,
+                                headless=True, timeout_ms=2_000, report_action_delay_ms=0,
+                            )
+                            with self.assertRaisesRegex(CutoverReportRpaError, "标题") as caught:
+                                PortalCutoverReportRpa(settings).fill_backbone_form(
+                                    {
+                                        "基本信息": {"标题": "骨干割接测试", "割接分类": "线路割接"},
+                                        "割接对象": {"割接对象类型": "高阶通道", "系统名称": ["系统甲"]},
+                                    },
+                                    attachment_paths=(), environment=PortalEnvironment.TEST,
+                                    screenshot_path=temp_path / "backbone.png",
+                                )
+                            self.assertTrue(caught.exception.screenshot_path.is_file())
+                            self.assertNotIn(
+                                "backbone_submit_succeeded",
+                                [step.step for step in caught.exception.operation_log],
+                            )
+                    finally:
+                        server.shutdown()
+                        server_thread.join()
+
     def test_batches_independent_personnel_text_inputs(self):
         with ThreadingHTTPServer(("127.0.0.1", 0), FakeBackbonePortalHandler) as server:
             server_thread = threading.Thread(target=server.serve_forever)

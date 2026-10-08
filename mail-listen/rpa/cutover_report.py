@@ -454,13 +454,19 @@ class PortalCutoverReportRpa:
                     if section == "人员信息":
                         self._fill_backbone_personnel_fields(page, fields_to_fill)
                     else:
+                        if section == "割接对象":
+                            self._assert_backbone_basic_info_retained(page, form_data)
                         for field_name, value in fields_to_fill:
+                            if section == "割接对象" and field_name == "系统名称":
+                                self._assert_backbone_basic_info_retained(page, form_data)
                             self._set_backbone_field(
                                 page,
                                 section,
                                 field_name,
                                 value,
                             )
+                        if section == "割接对象":
+                            self._assert_backbone_basic_info_retained(page, form_data)
                     if filled:
                         self._capture_operation_step(
                             page,
@@ -470,6 +476,7 @@ class PortalCutoverReportRpa:
                             label,
                         )
 
+                self._assert_backbone_basic_info_retained(page, form_data)
                 uploaded_filenames = self._upload_backbone_attachments(
                     page,
                     attachment_paths,
@@ -939,7 +946,13 @@ class PortalCutoverReportRpa:
     ) -> None:
         control = form_item.locator("textarea:visible, input:visible").first
         self._pace_before_action(page)
-        control.click(force=True)
+        for field_name in ("割接对象所属机构", "割接对象类型"):
+            self._assert_backbone_field_value(page, field_name)
+        # The fixed footer can cover an in-viewport input; forced clicks hit Reset.
+        control.evaluate(
+            "element => element.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'})"
+        )
+        control.click()
         self._wait_for_page_settled(page)
 
         deadline = monotonic() + self._settings.timeout_ms / 1000
@@ -983,6 +996,45 @@ class PortalCutoverReportRpa:
         if not all(value in selected_value for value in values):
             raise CutoverReportManualInterventionError(
                 "综调系统未保留全部系统名称选择，请转人工处理"
+            )
+
+    def _assert_backbone_basic_info_retained(
+        self,
+        page: Page,
+        form_data: Mapping[str, object],
+    ) -> None:
+        fields = form_data.get("基本信息")
+        if not isinstance(fields, Mapping):
+            return
+        for field_name in ("标题", "割接分类", "割接原因分类", "割接省份"):
+            expected = fields.get(field_name)
+            if expected is not None and expected != "":
+                self._assert_backbone_field_value(page, field_name, str(expected))
+
+    def _assert_backbone_field_value(
+        self,
+        page: Page,
+        field_name: str,
+        expected: str | None = None,
+    ) -> None:
+        aliases = self._BACKBONE_LABEL_ALIASES.get(field_name, (field_name,))
+        form_item = self._find_form_item(page, aliases)
+        native_select = form_item.locator("select").first
+        if native_select.count() > 0:
+            selected = native_select.locator("option:checked")
+            actual = (
+                selected.first.inner_text().strip()
+                if native_select.input_value().strip() and selected.count()
+                else ""
+            )
+        else:
+            control = form_item.locator(
+                'textarea:visible, input:visible:not([type="radio"]):not([type="checkbox"]):not([type="file"])'
+            ).first
+            actual = control.input_value().strip()
+        if not actual or (expected is not None and actual != expected.strip()):
+            raise CutoverReportRpaError(
+                f"骨干线路字段为空或填报值已改变：{field_name}，已停止填报"
             )
 
     @staticmethod
