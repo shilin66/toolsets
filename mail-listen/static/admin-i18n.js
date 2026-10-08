@@ -313,8 +313,8 @@ const I18N_MESSAGES_ZH_CN = {
     },
     list: {
       synced: "割接任务已同步",
-      unmatchedLines: "未匹配线路 · {count}",
-      unmatchedLinesHint: "存在线路未匹配，请进入邮件详情核对提取结果或手动绑定 Circuit ID。",
+      unmatchedLines: "线路待确认 · {count}",
+      unmatchedLinesHint: "存在线路未确定（零匹配、多匹配或缺少 Circuit ID 等），请进入邮件详情核对并确认唯一线路或手动绑定 Circuit ID。",
       allStatus: "全部状态",
       allTag: "全部标签",
       allSupplier: "全部供应商",
@@ -339,7 +339,7 @@ const I18N_MESSAGES_ZH_CN = {
       moreFilters: "更多筛选", from: "发", to: "收", idDescending: "ID 倒序",
       allTags: "查看全部标签", moreActions: "更多操作",
       pageRange: "{start}–{end} 条，共 {total} 封邮件",
-      emailStatus: { unmatched_lines: "未匹配线路", reply_pending: "待确认回复", rule_skipped: "命中规则", rejected_closed: "已拒绝关闭", duplicate_ignored: "重复已忽略", no_task: "无任务" },
+      emailStatus: { unmatched_lines: "线路待确认", reply_pending: "待确认回复", rule_skipped: "命中规则", rejected_closed: "已拒绝关闭", duplicate_ignored: "重复已忽略", no_task: "无任务" },
     },
     detail: {
       breadcrumbList: "割接任务列表",
@@ -916,8 +916,8 @@ const I18N_MESSAGES_EN = {
     },
     list: {
       synced: "Cutover tasks synced",
-      unmatchedLines: "Unmatched · {count}",
-      unmatchedLinesHint: "Some lines have no match. Open the email detail to check the extraction or bind a Circuit ID manually.",
+      unmatchedLines: "Lines to confirm · {count}",
+      unmatchedLinesHint: "Some lines are unresolved (no match, multiple matches, missing Circuit ID, etc.). Open the email detail to confirm a unique line or bind a Circuit ID manually.",
       allStatus: "All statuses",
       allTag: "All tags",
       allSupplier: "All suppliers",
@@ -942,7 +942,7 @@ const I18N_MESSAGES_EN = {
       moreFilters: "More Filters", from: "From", to: "To", idDescending: "ID descending",
       allTags: "View all tags", moreActions: "More actions",
       pageRange: "{start}–{end} of {total} emails",
-      emailStatus: { unmatched_lines: "Unmatched lines", reply_pending: "Reply pending", rule_skipped: "Rule matched", rejected_closed: "Rejected and closed", duplicate_ignored: "Duplicate ignored", no_task: "No task" },
+      emailStatus: { unmatched_lines: "Lines to confirm", reply_pending: "Reply pending", rule_skipped: "Rule matched", rejected_closed: "Rejected and closed", duplicate_ignored: "Duplicate ignored", no_task: "No task" },
     },
     detail: {
       breadcrumbList: "Cutover Tasks",
@@ -1519,8 +1519,8 @@ const I18N_MESSAGES_ZH_HK = {
     },
     list: {
       synced: "割接任務已同步",
-      unmatchedLines: "未匹配線路 · {count}",
-      unmatchedLinesHint: "存在線路未匹配，請進入郵件詳情核對提取結果或手動綁定 Circuit ID。",
+      unmatchedLines: "線路待確認 · {count}",
+      unmatchedLinesHint: "存在線路未確定（零匹配、多匹配或缺少 Circuit ID 等），請進入郵件詳情核對並確認唯一線路或手動綁定 Circuit ID。",
       allStatus: "全部狀態",
       allTag: "全部標籤",
       allSupplier: "全部供應商",
@@ -1545,7 +1545,7 @@ const I18N_MESSAGES_ZH_HK = {
       moreFilters: "更多篩選", from: "發", to: "收", idDescending: "ID 倒序",
       allTags: "查看全部標籤", moreActions: "更多操作",
       pageRange: "{start}–{end} 條，共 {total} 封郵件",
-      emailStatus: { unmatched_lines: "未匹配線路", reply_pending: "待確認回覆", rule_skipped: "命中規則", rejected_closed: "已拒絕關閉", duplicate_ignored: "重複已忽略", no_task: "無任務" },
+      emailStatus: { unmatched_lines: "線路待確認", reply_pending: "待確認回覆", rule_skipped: "命中規則", rejected_closed: "已拒絕關閉", duplicate_ignored: "重複已忽略", no_task: "無任務" },
     },
     detail: {
       breadcrumbList: "割接任務列表",

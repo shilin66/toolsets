@@ -1788,7 +1788,7 @@ const TaskDetailPanel = defineComponent({
       if (value === "中断") {
         if (!("中断原因" in card[sectionName])) {
           const payload = localTask.value.fill_payload || {};
-          card[sectionName]["中断原因"] = `Location: ${payload.location || ""} Reason: ${payload.cutover_reason || ""}`;
+          card[sectionName]["中断原因"] = `${card[sectionName]["标题"] || ""}--Location: ${payload.location || ""} Reason: ${payload.cutover_reason || ""}`;
         }
         if (!("中断时间 (分钟)" in card[sectionName])) {
           card[sectionName]["中断时间 (分钟)"] = backboneInterruptionMinutes.value[cardIndex] ?? "";
@@ -1884,7 +1884,7 @@ const TaskDetailPanel = defineComponent({
             } else {
               const payload = task.fill_payload || {};
               if (!("中断原因" in basicInfo)) {
-                basicInfo["中断原因"] = `Location: ${payload.location || ""} Reason: ${payload.cutover_reason || ""}`;
+                basicInfo["中断原因"] = `${basicInfo["标题"] || ""}--Location: ${payload.location || ""} Reason: ${payload.cutover_reason || ""}`;
               }
               if (!("中断时间 (分钟)" in basicInfo)) {
                 basicInfo["中断时间 (分钟)"] = backboneInterruptionMinutes.value[cardIndex] ?? "";

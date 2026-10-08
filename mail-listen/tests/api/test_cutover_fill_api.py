@@ -232,7 +232,11 @@ class CutoverFillPayloadTest(unittest.TestCase):
         self.assertEqual(backbone["基本信息"]["需要配合的省"], "")
         self.assertEqual(
             backbone["基本信息"]["中断原因"],
-            "Location: Odense - Aabenraa (Denmark) Reason: Scheduled maintenance.",
+            f'{backbone["基本信息"]["标题"]}--Location: Odense - Aabenraa (Denmark) Reason: Scheduled maintenance.',
+        )
+        self.assertEqual(
+            backbone["其他"]["割接原因"],
+            f'{backbone["基本信息"]["标题"]}--Location:Odense - Aabenraa (Denmark). Reason: Scheduled maintenance.',
         )
         self.assertEqual(
             backbone["基本信息"]["是否涉及集团维护设备或业务影响超出本省范围"],

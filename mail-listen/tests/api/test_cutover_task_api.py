@@ -1305,6 +1305,80 @@ class CutoverTaskApiTest(unittest.TestCase):
         self.assertEqual(filtered['total'], 0)
         self.assertEqual(filtered['items'], [])
 
+    def test_email_listing_marks_multiple_matches_and_clears_after_binding(self):
+        candidates = [CUSTOMER_CIRCUIT, dict(CUSTOMER_CIRCUIT, circuit_id='OTHER')]
+        self.db.replace_all_supplier_circuits(candidates)
+        response = self.post_fill(self.fill_payload(), circuits=candidates)
+        self.assertEqual(response.status_code, 400)
+
+        for query in ('', '?status=unmatched_lines'):
+            with self.subTest(query=query):
+                response = self.client.get('/api/cutover/emails' + query, headers=self.headers)
+                self.assertEqual(response.status_code, 200)
+                data = response.get_json()['data']
+                self.assertEqual(data['total'], 1)
+                self.assertEqual(data['items'][0]['unmatched_line_count'], 1)
+                self.assertEqual(data['items'][0]['task_count'], 0)
+
+        bound = self.client.put(
+            f'/api/cutover/emails/{self.email_records_id}/line-bindings',
+            headers=self.headers,
+            json={'line_index': 0, 'circuit_id': CUSTOMER_CIRCUIT['circuit_id']},
+        )
+        self.assertEqual(bound.status_code, 200)
+        item = self.client.get('/api/cutover/emails', headers=self.headers).get_json()['data']['items'][0]
+        self.assertEqual(item['unmatched_line_count'], 0)
+        filtered = self.client.get('/api/cutover/emails?status=unmatched_lines', headers=self.headers).get_json()['data']
+        self.assertEqual(filtered['total'], 0)
+
+    def test_email_listing_counts_each_unresolved_line_once(self):
+        self.db.replace_all_supplier_circuits([
+            CUSTOMER_CIRCUIT,
+            dict(BACKBONE_CIRCUIT, circuit_id='CANDIDATE-1'),
+            dict(BACKBONE_CIRCUIT, circuit_id='CANDIDATE-2'),
+            dict(BACKBONE_CIRCUIT, supplier_circuit_id='empty-id', circuit_id=''),
+        ])
+        payload = self.mixed_fill_payload()
+        payload['line_array_info']['data'].extend([
+            {'CircuitIDRT': 'missing'},
+            {'CircuitIDRT': 'empty-id'},
+        ])
+        self.db.update_email_line_match_payload(self.email_records_id, payload)
+        data = self.client.get('/api/cutover/emails?status=unmatched_lines', headers=self.headers).get_json()['data']
+        self.assertEqual(data['total'], 1)
+        self.assertEqual(data['items'][0]['unmatched_line_count'], 3)
+
+    def test_email_listing_marks_invalid_binding_without_counting_resolved_lines(self):
+        self.db.replace_all_supplier_circuits([CUSTOMER_CIRCUIT])
+        payload = self.mixed_fill_payload()
+        payload['line_array_info']['data'][1]['bound_circuit_id'] = 'deleted-circuit'
+        self.db.update_email_line_match_payload(self.email_records_id, payload)
+        data = self.client.get('/api/cutover/emails?status=unmatched_lines', headers=self.headers).get_json()['data']
+        self.assertEqual(data['total'], 1)
+        self.assertEqual(data['items'][0]['unmatched_line_count'], 1)
+
+    def test_email_listing_accepts_valid_manual_unlisted_binding(self):
+        payload = self.fill_payload()
+        payload['line_array_info']['data'][0].update(bound_circuit_id='manual-id', bound_line_type='骨干')
+        self.db.update_email_line_match_payload(self.email_records_id, payload)
+        item = self.client.get('/api/cutover/emails', headers=self.headers).get_json()['data']['items'][0]
+        self.assertEqual(item['unmatched_line_count'], 0)
+
+    def test_email_listing_legacy_fallback_includes_ambiguous_and_empty_id_lines(self):
+        task_id = self.first_task_id(self.post_fill(self.fill_payload()))
+        task = self.db.get_cutover_task(task_id)
+        task['fill_result']['validation_messages'] = [
+            {'type': 'multiple_matches'}, {'type': 'empty_circuit_id'},
+            {'type': 'manual_unlisted'}, {'type': 'abnormal_line_status'},
+        ]
+        self.db.update_cutover_task(task_id, fill_result=task['fill_result'], fill_payload={})
+        with self.db.get_connection() as conn:
+            conn.execute("UPDATE email_records SET line_match_payload = ''")
+            conn.commit()
+        data = self.client.get('/api/cutover/emails?status=unmatched_lines', headers=self.headers).get_json()['data']
+        self.assertEqual(data['total'], 1)
+        self.assertEqual(data['items'][0]['unmatched_line_count'], 2)
+
     def test_email_listing_marks_partial_match_once_across_split_tasks(self):
         self.db.replace_all_supplier_circuits([CUSTOMER_CIRCUIT, BACKBONE_CIRCUIT])
         payload = self.mixed_fill_payload()
@@ -1985,12 +2059,17 @@ class CutoverTaskApiTest(unittest.TestCase):
 
         # Then
         self.assertEqual(response.status_code, 200)
-        basic_info = self.db.get_cutover_task(task_id)["fill_result"][
+        backbone = self.db.get_cutover_task(task_id)["fill_result"][
             "backbone_circuits"
-        ][0]["基本信息"]
+        ][0]
+        basic_info = backbone["基本信息"]
         self.assertEqual(
             basic_info["中断原因"],
-            "Location: Odense - Aabenraa (Denmark) Reason: Scheduled maintenance.",
+            f'{basic_info["标题"]}--Location: Odense - Aabenraa (Denmark) Reason: Scheduled maintenance.',
+        )
+        self.assertEqual(
+            backbone["其他"]["割接原因"],
+            f'{basic_info["标题"]}--Location:Odense - Aabenraa (Denmark). Reason: Scheduled maintenance.',
         )
 
     def test_switch_backbone_task_to_customer(self):

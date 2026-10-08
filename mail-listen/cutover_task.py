@@ -346,7 +346,7 @@ def _convert_fill_result_to_backbone(task):
             '是否跨专业': '否'
         }
         if interrupt_minutes is not None:
-            basic_info['中断原因'] = f'Location: {location} Reason: {cutover_reason}'
+            basic_info['中断原因'] = f'{title}--Location: {location} Reason: {cutover_reason}'
             basic_info['中断时间 (分钟)'] = interrupt_minutes
         duration_text = str(line.get('ImpactDuration') or '').strip()
         backbone_interruption_minutes.append(

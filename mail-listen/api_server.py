@@ -686,6 +686,30 @@ def match_supplier_circuits_by_payload(payload):
     }
 
 
+def count_unresolved_cutover_lines(payload):
+    """只有唯一且有 Circuit ID 的匹配（含有效人工绑定）才算线路已确定。"""
+    lines = payload.get('line_array')
+    if lines is None:
+        lines = (payload.get('line_array_info') or {}).get('data') or []
+    if not isinstance(lines, list):
+        raise ValueError('line_array 必须是数组')
+    keywords_fields = payload.get('line_query_keywords') or list(DEFAULT_LINE_QUERY_KEYWORDS)
+    unresolved_count = 0
+    for line in lines:
+        if not isinstance(line, dict):
+            continue
+        try:
+            circuits = resolve_line_circuits(
+                payload.get('supplier'), line, line_keywords(line, keywords_fields),
+            )
+        except ValueError:
+            unresolved_count += 1
+            continue
+        if len(circuits) != 1 or not normalize_excel_value(circuits[0].get('circuit_id')):
+            unresolved_count += 1
+    return unresolved_count
+
+
 def parse_cutover_datetime(value, timezone_name='UTC'):
     value = normalize_excel_value(value)
     if not value:
@@ -860,7 +884,7 @@ def backbone_fixed_sections(
             '是否增加、删除或更改光开关(OLP)': '否',
             '是否影响联通': '否',
             '是否需要集团网管配置操作': '否',
-            '割接原因': f'{title}Location:{location}. Reason: {cutover_reason}',
+            '割接原因': f'{title}--Location:{location}. Reason: {cutover_reason}',
             '风险操作影响范围': BACKBONE_RISK_IMPACT_SCOPE,
             '是否为境外运营商割接或联通割接(跳过变更操作方案校验)': '是'
         },
@@ -910,7 +934,7 @@ def build_backbone_circuit(
         '是否跨专业': '否'
     }
     if interrupt_minutes is not None:
-        basic_info['中断原因'] = f'Location: {location} Reason: {cutover_reason}'
+        basic_info['中断原因'] = f'{title}--Location: {location} Reason: {cutover_reason}'
         basic_info['中断时间 (分钟)'] = interrupt_minutes
 
     return {
@@ -2932,12 +2956,10 @@ def list_cutover_task_emails():
                 )
                 if match_payload:
                     try:
-                        line_table = match_supplier_circuits_by_payload(match_payload)
-                        item['unmatched_line_count'] = sum(
-                            not line.get('circuits') for line in line_table['lines']
-                        )
+                        item['unmatched_line_count'] = count_unresolved_cutover_lines(match_payload)
                     except (ValueError, TypeError, AttributeError) as match_error:
                         logger.warning(f"列表重查线路表失败: email_records_id={item['id']}, {match_error}")
+                        item['unmatched_line_count'] = max(item['unmatched_line_count'], 1)
                 for task in item.get('tasks', []):
                     task['status_label'] = cutover_task_status_label(task.get('status'))
                     task['line_type_label'] = cutover_line_type_label(task.get('line_type'))

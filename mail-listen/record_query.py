@@ -398,7 +398,7 @@ class RecordQueryRepository:
                     task["line_count"] = _cutover_task_line_count(task.get("line_type"), fill_result)
                     task["validation_count"] = len(fill_result.get("validation_messages") or [])
                     task["unmatched_line_count"] = sum(
-                        message.get("type") == "unmatched_line"
+                        message.get("type") in {"unmatched_line", "multiple_matches", "empty_circuit_id"}
                         for message in fill_result.get("validation_messages") or []
                     )
                     tasks_by_email[task["email_records_id"]].append(task)

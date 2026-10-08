@@ -119,6 +119,22 @@ class AdminFrontendApiTest(unittest.TestCase):
         self.assertIn(".sheet-table th.customer-protection-column", styles)
         self.assertIn(".sheet-table th.customer-impact-duration-column", styles)
 
+    def test_backbone_interruption_reason_defaults_prefix_the_card_title(self):
+        source = (
+            Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            'card[sectionName]["中断原因"] = `${card[sectionName]["标题"] || ""}--Location: ${payload.location || ""} Reason: ${payload.cutover_reason || ""}`;',
+            source,
+        )
+        self.assertIn(
+            'basicInfo["中断原因"] = `${basicInfo["标题"] || ""}--Location: ${payload.location || ""} Reason: ${payload.cutover_reason || ""}`;',
+            source,
+        )
+        self.assertIn('if (!("中断原因" in card[sectionName]))', source)
+        self.assertIn('if (!("中断原因" in basicInfo))', source)
+
     def test_supplier_form_uses_reply_email_without_direct_reply_toggle(self):
         source = (
             Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
@@ -150,6 +166,15 @@ class AdminFrontendApiTest(unittest.TestCase):
             source,
         )
         self.assertIn("if (isRejectedScene(scene))", source)
+
+    def test_cutover_list_uses_one_warning_for_all_unresolved_lines(self):
+        project_dir = Path(__file__).resolve().parents[2]
+        source = (project_dir / "static" / "admin-views.js").read_text(encoding="utf-8")
+        translations = (project_dir / "static" / "admin-i18n.js").read_text(encoding="utf-8")
+        self.assertIn('v-if="row.unmatched_line_count"', source)
+        self.assertIn('unmatchedLines: "线路待确认 · {count}"', translations)
+        self.assertIn('unmatched_lines: "线路待确认"', translations)
+        self.assertIn('零匹配、多匹配或缺少 Circuit ID', translations)
 
     def test_backbone_interruption_duration_uses_inline_minutes_control(self):
         source = (
