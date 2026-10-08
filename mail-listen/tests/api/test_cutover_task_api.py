@@ -15,7 +15,7 @@ os.environ.setdefault('API_URL', 'https://api.example.com')
 os.environ.setdefault('API_TOKEN', 'token')
 os.environ.setdefault('API_KEY', 'test-key')
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import api_server
 import cutover_task
@@ -625,7 +625,7 @@ class CutoverTaskApiTest(unittest.TestCase):
         overseas_field = (
             "是否为境外运营商割接或联通割接(跳过变更操作方案校验)"
         )
-        circuit["其他"][overseas_field] = "是"
+        circuit["其他"][overseas_field] = "否"
 
         saved = self.client.patch(
             f"/api/cutover/tasks/{backbone_task_id}",
@@ -651,15 +651,18 @@ class CutoverTaskApiTest(unittest.TestCase):
             reopened_circuit["人员信息"]["操作审核人电话"],
             "edited-reviewer@example.com",
         )
-        self.assertEqual(reopened_circuit["其他"][overseas_field], "是")
+        self.assertEqual(reopened_circuit["其他"][overseas_field], "否")
 
-    def test_patch_backbone_task_merges_systems_with_same_window(self):
+    def test_patch_backbone_task_preserves_forms_with_same_window(self):
         tasks = self.fill_tasks(self.post_fill_mixed(self.mixed_fill_payload()))
         backbone_task_id = tasks[1]["id"]
         original = self.db.get_cutover_task(backbone_task_id)["fill_result"]["backbone_circuits"][0]
         first = dict(original)
+        first["基本信息"] = dict(original["基本信息"], 标题="第一张已确认表单")
         first["割接对象"] = dict(original["割接对象"], 系统名称=["BB-A"])
         second = dict(original)
+        second["基本信息"] = dict(original["基本信息"], 标题="第二张已确认表单")
+        second["人员信息"] = dict(original["人员信息"], 现场指挥人电话="manual@example.com")
         second["割接对象"] = dict(original["割接对象"], 系统名称=["BB-B"])
 
         response = self.client.patch(
@@ -670,8 +673,42 @@ class CutoverTaskApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         circuits = self.db.get_cutover_task(backbone_task_id)["fill_result"]["backbone_circuits"]
-        self.assertEqual(len(circuits), 1)
-        self.assertEqual(circuits[0]["割接对象"]["系统名称"], ["BB-A", "BB-B"])
+        self.assertEqual(circuits, [first, second])
+
+    def test_report_uses_saved_backbone_forms_without_merging_or_regenerating(self):
+        tasks = self.fill_tasks(self.post_fill_mixed(self.mixed_fill_payload()))
+        task_id = tasks[1]["id"]
+        forms = [
+            {
+                "基本信息": {"标题": title, "中断类型": "中断", "中断时间 (分钟)": minutes},
+                "割接对象": {
+                    "系统名称": [system],
+                    "割接开始时间": "2026-10-10 01:00:00",
+                    "割接结束时间": "2026-10-10 02:00:00",
+                },
+                "人员信息": {"现场指挥人电话": phone},
+                "其他": {"风险操作影响范围": None},
+            }
+            for title, system, minutes, phone in (
+                ("人工标题一", "BB-A", 15, "manual-one@example.com"),
+                ("人工标题二", "BB-B", 25, "manual-two@example.com"),
+            )
+        ]
+        saved = self.client.patch(
+            f"/api/cutover/tasks/{task_id}", headers=self.headers,
+            json={"backbone_circuits": forms},
+        )
+        self.assertEqual(saved.status_code, 200)
+        confirmed = self.client.post(f"/api/cutover/tasks/{task_id}/confirm", headers=self.headers)
+        self.assertEqual(confirmed.status_code, 200)
+        with patch.object(api_server, "ensure_source_email_archived"), patch.object(
+            api_server, "report_cutover_task", return_value={"status": "success"},
+        ) as report, patch.object(api_server, "submit_cutover_report_job", side_effect=lambda job: job()):
+            response = self.client.post(
+                f"/api/cutover/tasks/{task_id}/report", headers=self.headers, json={},
+            )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(report.call_args.args[0]["fill_result"]["backbone_circuits"], forms)
 
     def test_patch_rejects_cross_type_field(self):
         task_id = self.first_task_id(self.post_fill(self.fill_payload()))
@@ -704,6 +741,43 @@ class CutoverTaskApiTest(unittest.TestCase):
         updated = self.db.get_cutover_task(task_id)
         self.assertEqual(updated["fill_result"]["circuits"][0]["客户名称"], "手工客户")
         self.assertEqual(updated["status"], "draft")
+
+    def test_empty_customer_circuits_can_be_saved_but_not_confirmed_or_reported(self):
+        task_id = self.first_task_id(self.post_fill(self.fill_payload()))
+        with patch.object(api_server, "DATA_DIR", Path(self.tmpdir.name)):
+            saved = self.client.patch(
+                f"/api/cutover/tasks/{task_id}", headers=self.headers,
+                json={"circuits": []},
+            )
+        self.assertEqual(saved.status_code, 200)
+        task = self.db.get_cutover_task(task_id)
+        self.assertEqual(task["fill_result"]["circuits"], [])
+        self.assertEqual(task["status"], "draft")
+        excel_path = api_server.customer_excel_path(
+            Path(self.tmpdir.name), mailbox_address="noc@example.com",
+            email_uid=1000, filename=task["customer_excel_filename"],
+        )
+        self.assertTrue(excel_path.is_file())
+        wb = api_server.load_workbook(excel_path)
+        self.assertEqual(wb["电路表"].max_row, 1)
+        wb.close()
+        confirmed = self.client.post(f"/api/cutover/tasks/{task_id}/confirm", headers=self.headers)
+        self.assertEqual(confirmed.status_code, 400)
+        self.assertIn("至少保留一条电路", confirmed.get_json()["message"])
+        self.assertEqual(self.db.get_cutover_task(task_id)["status"], "draft")
+
+        for status in ("confirmed", "report_failed"):
+            with self.subTest(status=status):
+                self.db.update_cutover_task(task_id, status=status)
+                with patch.object(api_server, "submit_cutover_report_job") as submit:
+                    response = self.client.post(
+                        f"/api/cutover/tasks/{task_id}/report", headers=self.headers, json={},
+                    )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("至少保留一条电路", response.get_json()["message"])
+                submit.assert_not_called()
+                self.assertEqual(self.db.get_cutover_task(task_id)["status"], status)
+                self.assertEqual(self.db.get_cutover_reports(task_id), [])
 
     def test_confirm_and_report_flow(self):
         task_id = self.first_task_id(self.post_fill(self.fill_payload()))
@@ -1864,7 +1938,7 @@ class CutoverTaskApiTest(unittest.TestCase):
             backbone_circuit["其他"][
                 "是否为境外运营商割接或联通割接(跳过变更操作方案校验)"
             ],
-            "否",
+            "是",
         )
         self.assertEqual(
             task["fill_result"]["backbone_interruption_minutes"],

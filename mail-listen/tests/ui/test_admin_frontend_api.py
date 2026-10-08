@@ -13,7 +13,7 @@ os.environ.setdefault('API_URL', 'https://api.example.com')
 os.environ.setdefault('API_TOKEN', 'token')
 os.environ.setdefault('API_KEY', 'test-key')
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 api_server = importlib.import_module("api_server")
 
@@ -54,19 +54,19 @@ class AdminFrontendApiTest(unittest.TestCase):
         self.assertIn('data-rpa-default-environment="production"', html)
 
         source = (
-            Path(__file__).resolve().parent / "static" / "admin.js"
+            Path(__file__).resolve().parents[2] / "static" / "admin.js"
         ).read_text(encoding="utf-8")
         self.assertIn('class="rpa-environment-badge"', source)
         self.assertIn("portalEnvironmentTone", source)
         self.assertIn("common.rpaProductionEnvironment", source)
 
         translations = (
-            Path(__file__).resolve().parent / "static" / "admin-i18n.js"
+            Path(__file__).resolve().parents[2] / "static" / "admin-i18n.js"
         ).read_text(encoding="utf-8")
         self.assertNotIn('production: "生产环境"', translations)
 
         styles = (
-            Path(__file__).resolve().parent / "static" / "admin.css"
+            Path(__file__).resolve().parents[2] / "static" / "admin.css"
         ).read_text(encoding="utf-8")
         self.assertIn(".rpa-environment-badge.is-test", styles)
         self.assertIn(".rpa-environment-badge.is-production", styles)
@@ -95,7 +95,7 @@ class AdminFrontendApiTest(unittest.TestCase):
         self.assertEqual(invalid.status_code, 401)
 
     def test_customer_cutover_enum_controls_are_declared(self):
-        source = (Path(__file__).resolve().parent / "static" / "admin-views.js").read_text()
+        source = (Path(__file__).resolve().parents[2] / "static" / "admin-views.js").read_text()
 
         self.assertIn('"客户电路在割接段是否有保护": ["无保护", "有保护"]', source)
         self.assertIn('"预计影响客户业务时长": ["不中断", "瞬断"]', source)
@@ -115,13 +115,13 @@ class AdminFrontendApiTest(unittest.TestCase):
             source,
         )
 
-        styles = (Path(__file__).resolve().parent / "static" / "admin.css").read_text()
+        styles = (Path(__file__).resolve().parents[2] / "static" / "admin.css").read_text()
         self.assertIn(".sheet-table th.customer-protection-column", styles)
         self.assertIn(".sheet-table th.customer-impact-duration-column", styles)
 
     def test_supplier_form_uses_reply_email_without_direct_reply_toggle(self):
         source = (
-            Path(__file__).resolve().parent / "static" / "admin-views.js"
+            Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
         ).read_text(encoding="utf-8")
 
         self.assertIn('reply_email: ""', source)
@@ -132,7 +132,7 @@ class AdminFrontendApiTest(unittest.TestCase):
 
     def test_reply_task_exposes_editable_cc_recipients(self):
         source = (
-            Path(__file__).resolve().parent / "static" / "admin-views.js"
+            Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
         ).read_text(encoding="utf-8")
 
         self.assertIn('v-model="replyCcRecipients"', source)
@@ -142,7 +142,7 @@ class AdminFrontendApiTest(unittest.TestCase):
 
     def test_cutover_list_tags_use_pending_scene_before_reply_is_sent(self):
         source = (
-            Path(__file__).resolve().parent / "static" / "admin-shared.js"
+            Path(__file__).resolve().parents[2] / "static" / "admin-shared.js"
         ).read_text(encoding="utf-8")
 
         self.assertIn(
@@ -153,10 +153,10 @@ class AdminFrontendApiTest(unittest.TestCase):
 
     def test_backbone_interruption_duration_uses_inline_minutes_control(self):
         source = (
-            Path(__file__).resolve().parent / "static" / "admin-views.js"
+            Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
         ).read_text(encoding="utf-8")
         styles = (
-            Path(__file__).resolve().parent / "static" / "admin.css"
+            Path(__file__).resolve().parents[2] / "static" / "admin.css"
         ).read_text(encoding="utf-8")
         self.assertIn('class="backbone-interruption-control"', source)
         self.assertIn('aria-label="中断时间 (分钟)"', source)
@@ -173,7 +173,7 @@ class AdminFrontendApiTest(unittest.TestCase):
 
     def test_system_settings_declares_backbone_personnel_fields(self):
         source = (
-            Path(__file__).resolve().parent / "static" / "admin-views.js"
+            Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
         ).read_text(encoding="utf-8")
 
         self.assertIn('backbone_noc_phone: nocPhone.value.trim()', source)
@@ -189,7 +189,7 @@ class AdminFrontendApiTest(unittest.TestCase):
 
     def test_cutover_task_declares_non_blocking_actions_and_live_report_progress(self):
         source = (
-            Path(__file__).resolve().parent / "static" / "admin-views.js"
+            Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
         ).read_text(encoding="utf-8")
 
         self.assertIn('const reportProgressVisible = ref(false)', source)
@@ -200,13 +200,13 @@ class AdminFrontendApiTest(unittest.TestCase):
 
     def test_cutover_email_detail_declares_api_forward_status_and_retry(self):
         source = (
-            Path(__file__).resolve().parent / "static" / "admin-views.js"
+            Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
         ).read_text(encoding="utf-8")
         styles = (
-            Path(__file__).resolve().parent / "static" / "admin.css"
+            Path(__file__).resolve().parents[2] / "static" / "admin.css"
         ).read_text(encoding="utf-8")
         translations = (
-            Path(__file__).resolve().parent / "static" / "admin-i18n.js"
+            Path(__file__).resolve().parents[2] / "static" / "admin-i18n.js"
         ).read_text(encoding="utf-8")
 
         self.assertIn('const apiForwardBusy = ref(false)', source)
@@ -226,7 +226,7 @@ class AdminFrontendApiTest(unittest.TestCase):
     def test_cutover_email_line_match_table_uses_circuit_columns_and_block_state(self):
         # Given
         source = (
-            Path(__file__).resolve().parent / "static" / "admin-views.js"
+            Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
         ).read_text(encoding="utf-8")
 
         # When / Then

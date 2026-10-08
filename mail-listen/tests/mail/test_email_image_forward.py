@@ -17,7 +17,7 @@ os.environ.setdefault('API_TOKEN', 'token')
 os.environ.setdefault('API_KEY', 'test-key')
 os.environ.setdefault('API_PUBLIC_BASE_URL', 'http://mail-listen.example.com')
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import api_server
 import email_client

@@ -1,8 +1,8 @@
 import unittest
 from pathlib import Path
 
-from .session_config import PortalSessionSettings
-from .session_models import PortalEnvironment, PortalSessionError
+from rpa.session_config import PortalSessionSettings
+from rpa.session_models import PortalEnvironment, PortalSessionError
 
 
 class PortalSessionSettingsTest(unittest.TestCase):

@@ -14,7 +14,7 @@ os.environ.setdefault('API_URL', 'https://api.example.com')
 os.environ.setdefault('API_TOKEN', 'token')
 os.environ.setdefault('API_KEY', 'test-key')
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import api_server
 from database import EmailDatabase

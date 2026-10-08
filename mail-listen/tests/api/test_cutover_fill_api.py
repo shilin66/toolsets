@@ -13,7 +13,7 @@ os.environ.setdefault('API_URL', 'https://api.example.com')
 os.environ.setdefault('API_TOKEN', 'token')
 os.environ.setdefault('API_KEY', 'test-key')
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import api_server
 import cutover_task
@@ -247,7 +247,7 @@ class CutoverFillPayloadTest(unittest.TestCase):
             backbone["其他"][
                 "是否为境外运营商割接或联通割接(跳过变更操作方案校验)"
             ],
-            "否",
+            "是",
         )
         self.assertEqual(
             backbone["人员信息"],
@@ -684,7 +684,7 @@ class CutoverFillPayloadTest(unittest.TestCase):
             data["backbone_circuits"][0]["其他"][
                 "是否为境外运营商割接或联通割接(跳过变更操作方案校验)"
             ],
-            "否",
+            "是",
         )
         # msg 只含摘要与任务详情链接，不展示具体填报字段
         self.assertIn("割接填报摘要", data["msg"])

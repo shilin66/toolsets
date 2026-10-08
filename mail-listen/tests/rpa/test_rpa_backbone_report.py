@@ -232,7 +232,9 @@ BACKBONE_PAGE = """<!doctype html>
         && document.querySelector("#cutover-start").value === "2026-11-11 05:00"
         && document.querySelector("#cutover-end").value === "2026-12-10 12:00"
         && document.querySelector("#risk").value === "割接影响传输通道及其承载的客户电路，IP中继等"
-        && document.querySelector('input[name="overseas-cutover"]:checked').value === "0"
+        && document.querySelector('input[name="overseas-cutover"]:checked').value === (
+          document.cookie.includes("backbone_overseas_yes=1") ? "1" : "0"
+        )
         && document.querySelector("#confirmed").checked
         && document.querySelector("#attachment").files[0].name === "方案.pdf";
       if (valid) document.querySelector("#success").hidden = false;
@@ -485,6 +487,12 @@ class PortalBackboneReportRpaTest(unittest.TestCase):
                 )
 
     def test_fills_sibling_backbone_duration_without_standalone_label(self):
+        self._assert_fills_backbone_form("否")
+
+    def test_report_service_preserves_yes_in_backbone_radio_selection(self):
+        self._assert_fills_backbone_form("是")
+
+    def _assert_fills_backbone_form(self, overseas_value):
         with ThreadingHTTPServer(("127.0.0.1", 0), FakeBackbonePortalHandler) as server:
             server_thread = threading.Thread(target=server.serve_forever)
             server_thread.start()
@@ -493,7 +501,16 @@ class PortalBackboneReportRpaTest(unittest.TestCase):
                     temp_path = Path(temp_dir)
                     state_path = temp_path / "auth-state.json"
                     state_path.write_text(
-                        json.dumps({"cookies": [], "origins": []}),
+                        json.dumps({"cookies": [{
+                            "name": "backbone_overseas_yes",
+                            "value": "1" if overseas_value == "是" else "0",
+                            "domain": "127.0.0.1",
+                            "path": "/",
+                            "expires": -1,
+                            "httpOnly": False,
+                            "secure": False,
+                            "sameSite": "Lax",
+                        }], "origins": []}),
                         encoding="utf-8",
                     )
                     attachment_path = temp_path / "方案.pdf"
@@ -526,15 +543,19 @@ class PortalBackboneReportRpaTest(unittest.TestCase):
                         },
                         "其他": {
                             "风险操作影响范围": "割接影响传输通道及其承载的客户电路，IP中继等",
-                            "是否为境外运营商割接或联通割接(跳过变更操作方案校验)": "否",
+                            "是否为境外运营商割接或联通割接(跳过变更操作方案校验)": overseas_value,
                         },
                         "确认项": {
                             "该割接已按照集团相关文件要求经过省公司领导审批。": "是",
                         },
                     }
 
+                    service = importlib.import_module("cutover_report")
+                    forms = service._resolve_backbone_forms({
+                        "fill_result": {"backbone_circuits": [form_data]},
+                    })
                     result = PortalCutoverReportRpa(settings).fill_backbone_form(
-                        form_data,
+                        forms[0],
                         attachment_paths=(attachment_path,),
                         environment=PortalEnvironment.TEST,
                         screenshot_path=temp_path / "backbone-success.png",

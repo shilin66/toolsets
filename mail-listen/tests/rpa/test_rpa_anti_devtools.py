@@ -6,7 +6,7 @@ from pathlib import Path
 
 from rpa.config import RpaSettings
 from rpa.login import LoginFailedError, PortalLoginRpa
-from test_rpa_login import (
+from tests.rpa.test_rpa_login import (
     DASHBOARD_PAGE,
     FakeCaptchaRecognizer,
     FakePortalHandler,

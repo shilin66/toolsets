@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from loguru import logger
 from pydantic import ValidationError
 
+from cutover_task import validate_task_for_submission
 from email_attachments import attachment_path_from_relative
 from mail_artifacts import (
     MailArtifactError,
@@ -244,6 +245,10 @@ def _resolve_customer_excel(
     *,
     data_dir: Path | None,
 ) -> Path:
+    try:
+        validate_task_for_submission({**task, "line_type": "customer"})
+    except ValueError as error:
+        raise CutoverReportError(str(error)) from error
     filename = task.get("customer_excel_filename")
     if not isinstance(filename, str) or not filename:
         raise CutoverReportError("客户线路割接任务没有可上报的 Excel")
@@ -283,23 +288,7 @@ def _resolve_backbone_forms(
         raise CutoverReportError("骨干线路任务没有可上报的表单数据")
     if not all(isinstance(form, Mapping) and form for form in forms):
         raise CutoverReportError("骨干线路任务的表单数据格式无效")
-    sanitized_forms = []
-    for form in forms:
-        sanitized_form = dict(form)
-        basic_info = form.get("基本信息")
-        if isinstance(basic_info, Mapping):
-            sanitized_basic_info = dict(basic_info)
-            if sanitized_basic_info.get("中断类型") != "中断":
-                sanitized_basic_info.pop("中断原因", None)
-            sanitized_form["基本信息"] = sanitized_basic_info
-        other = form.get("其他")
-        sanitized_other = dict(other) if isinstance(other, Mapping) else {}
-        sanitized_other[
-            "是否为境外运营商割接或联通割接(跳过变更操作方案校验)"
-        ] = "否"
-        sanitized_form["其他"] = sanitized_other
-        sanitized_forms.append(sanitized_form)
-    return sanitized_forms
+    return forms
 
 
 def _resolve_email_attachments(

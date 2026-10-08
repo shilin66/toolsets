@@ -64,6 +64,7 @@ DOCKER_DEPLOY.md
 
 # 测试文件
 test_*.py
+tests/
 *_test.py
 
 # 文档

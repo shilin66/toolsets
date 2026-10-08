@@ -84,6 +84,7 @@ from cutover_task import (
     get_cutover_task_detail,
     save_cutover_fill_tasks,
     switch_task_line_type,
+    validate_task_for_submission,
 )
 from record_query import QueryPage, RecordQueryRepository, build_query_page
 from supplier_circuits import (
@@ -3661,6 +3662,11 @@ def report_cutover_task_route(task_id):
                 'success': False,
                 'message': '上报类型必须与割接任务线路类型一致'
             }), 400
+
+        try:
+            validate_task_for_submission(task)
+        except ValueError as error:
+            return jsonify({'success': False, 'message': str(error)}), 400
 
         report_id = email_db.add_cutover_report(
             task_id,

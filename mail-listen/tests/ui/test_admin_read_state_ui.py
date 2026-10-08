@@ -4,7 +4,7 @@ from pathlib import Path
 
 class AdminReadStateUiTest(unittest.TestCase):
     def test_cutover_list_and_detail_declare_read_state_controls(self):
-        project_dir = Path(__file__).resolve().parent
+        project_dir = Path(__file__).resolve().parents[2]
         source = (project_dir / "static" / "admin-views.js").read_text(encoding="utf-8")
         styles = (project_dir / "static" / "admin.css").read_text(encoding="utf-8")
         translations = (project_dir / "static" / "admin-i18n.js").read_text(encoding="utf-8")

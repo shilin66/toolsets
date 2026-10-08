@@ -21,6 +21,52 @@ save_source_email_archive = mail_artifacts_module.save_source_email_archive
 
 
 class CutoverReportServiceTest(unittest.TestCase):
+    def test_report_preparation_preserves_all_saved_backbone_values(self):
+        form = {
+            "基本信息": {
+                "中断类型": "不中断", "中断原因": "人工保存的内容",
+                "中断时间 (分钟)": None,
+            },
+            "割接对象": {"系统名称": [], "割接开始时间": "2026-10-10 01:00:00"},
+            "人员信息": {"现场指挥人电话": "manual@example.com"},
+        }
+        forms = cutover_report_service._resolve_backbone_forms(
+            {"fill_result": {"backbone_circuits": [form]}}
+        )
+        self.assertEqual(forms, [form])
+
+    def test_customer_report_rejects_empty_saved_circuits_even_with_existing_excel(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "old.xlsx").write_bytes(b"old-workbook")
+            task = {
+                "customer_excel_filename": "old.xlsx",
+                "fill_result": {"circuits": []},
+                "source_mailbox_address": "noc@example.com", "source_email_uid": 2519,
+            }
+            with self.assertRaisesRegex(cutover_report_service.CutoverReportError, "至少保留一条电路"):
+                cutover_report_service._resolve_customer_excel(task, data_dir=root)
+
+    def test_preserves_saved_overseas_cutover_choice_for_rpa(self):
+        field = "是否为境外运营商割接或联通割接(跳过变更操作方案校验)"
+        for value in ("是", "否"):
+            with self.subTest(value=value):
+                form = {"其他": {field: value, "割接原因": "人工核对后的原因"}}
+                task = {"fill_result": {"backbone_circuits": [form]}}
+
+                forms = cutover_report_service._resolve_backbone_forms(task)
+
+                self.assertEqual(forms[0]["其他"], form["其他"])
+                self.assertEqual(form["其他"][field], value)
+
+    def test_does_not_add_overseas_cutover_default_during_report(self):
+        form = {"其他": {"割接原因": "历史任务数据"}}
+        task = {"fill_result": {"backbone_circuits": [form]}}
+
+        forms = cutover_report_service._resolve_backbone_forms(task)
+
+        self.assertEqual(forms[0], form)
+
     def test_emits_each_captured_step_as_serialized_progress(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -72,6 +118,7 @@ class CutoverReportServiceTest(unittest.TestCase):
                 "id": 10,
                 "email_records_id": 135,
                 "line_type": "customer",
+                "fill_result": {"circuits": [{"电路代号": "manual-circuit"}]},
                 "customer_excel_filename": excel_path.name,
                 "source_mailbox_address": "noc@example.com",
                 "source_email_uid": 2519,
@@ -153,6 +200,7 @@ class CutoverReportServiceTest(unittest.TestCase):
                 "id": 10,
                 "email_records_id": 135,
                 "line_type": "customer",
+                "fill_result": {"circuits": [{"电路代号": "manual-circuit"}]},
                 "customer_excel_filename": excel_path.name,
                 "source_mailbox_address": "noc@example.com",
                 "source_email_uid": 2519,
@@ -222,7 +270,10 @@ class CutoverReportServiceTest(unittest.TestCase):
                     "中断类型": "中断",
                     "中断原因": "Location: Romania Reason: measurement",
                 },
-                "其他": {"割接原因": "历史任务数据"},
+                "其他": {
+                    "割接原因": "历史任务数据",
+                    "是否为境外运营商割接或联通割接(跳过变更操作方案校验)": "是",
+                },
             }
             expected_form_data = {
                 "基本信息": {
@@ -232,7 +283,7 @@ class CutoverReportServiceTest(unittest.TestCase):
                 },
                 "其他": {
                     "割接原因": "历史任务数据",
-                    "是否为境外运营商割接或联通割接(跳过变更操作方案校验)": "否",
+                    "是否为境外运营商割接或联通割接(跳过变更操作方案校验)": "是",
                 },
             }
 

@@ -12,6 +12,17 @@
 - **数据持久化**：使用 SQLite 数据库存储邮件记录
 - **时间过滤**：支持按时间范围过滤邮件，避免处理历史邮件
 
+## 自动化测试
+
+测试按模块集中在 `tests/`，目录说明与单项运行命令见 [测试说明](tests/README.rst)。
+在项目根目录执行：
+
+```bash
+API_KEY=test-key python -m unittest discover -s tests -t .
+```
+
+浏览器用例使用 localhost 模拟服务，需要安装 Playwright Chromium，不需要连接企业内网。
+
 ## 系统架构
 
 系统由两个主要服务组成：

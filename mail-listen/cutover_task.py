@@ -252,10 +252,6 @@ def apply_task_edit(task_id, edits):
         value = edits[field]
         if not isinstance(value, list):
             raise ValueError(f'{field} 必须是数组')
-        if field == 'backbone_circuits':
-            from api_server import merge_backbone_circuits_by_time
-
-            value = merge_backbone_circuits_by_time(value)
         if fill_result.get(field) != value:
             fill_result[field] = value
             changed = True
@@ -265,7 +261,7 @@ def apply_task_edit(task_id, edits):
 
     excel_filename = task.get('customer_excel_filename')
     customer_changed = task.get('line_type') == CUTOVER_LINE_TYPE_CUSTOMER
-    if customer_changed and fill_result.get('circuits'):
+    if customer_changed:
         # 延迟导入，避免与 api_server 形成循环依赖
         from api_server import build_template_workbook, save_workbook_output
 
@@ -517,6 +513,15 @@ def switch_task_line_type(task_id, target_type):
     return email_db.get_cutover_task(task_id)
 
 
+def validate_task_for_submission(task):
+    """提交只使用已保存的数据；客户线路至少需要一条电路。"""
+    if task.get('line_type') == CUTOVER_LINE_TYPE_CUSTOMER:
+        fill_result = task.get('fill_result') or {}
+        circuits = fill_result.get('circuits') if isinstance(fill_result, dict) else None
+        if not isinstance(circuits, list) or not circuits:
+            raise ValueError('客户线路割接任务至少保留一条电路后才能确认或上报')
+
+
 def confirm_task(task_id):
     """人工确认任务：draft -> confirmed。"""
     task = email_db.get_cutover_task(task_id)
@@ -527,6 +532,7 @@ def confirm_task(task_id):
             f"仅待确认状态的任务可以确认，当前状态：{cutover_task_status_label(task.get('status'))}"
         )
 
+    validate_task_for_submission(task)
     email_db.update_cutover_task(
         task_id,
         status=CUTOVER_TASK_STATUS_CONFIRMED,
