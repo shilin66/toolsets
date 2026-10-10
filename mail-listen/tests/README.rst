@@ -9,7 +9,7 @@
 - ``storage/``：数据库、原始邮件归档和文件迁移。
 - ``rpa/``：登录、上报、会话、验证码和反调试异常处理。
 - ``scripts/``：邮箱探测和发件箱写入脚本的隔离测试。
-- ``ui/``：工作台页面入口、静态控件声明和样式约束。
+- ``ui/``：工作台页面入口、静态控件声明、样式约束和真实浏览器回归。
 
 运行
 ----
@@ -43,9 +43,12 @@
 
    python -m playwright install chromium
    API_KEY=test-key python -m unittest discover -s tests/rpa -t .
+   API_KEY=test-key python -m unittest tests.ui.test_cutover_regeneration_ui
 
 自动化用例使用临时数据库、模拟邮箱或 localhost 模拟页面，不需要连接企业内网。
-``ui/`` 的用例检查静态声明，并非真实页面端到端测试；真实桌面 UI 验收以 1280px 及以上宽度为准。
+``ui/test_cutover_regeneration_ui.py`` 使用临时数据库和本地 Flask 服务，在真实 Chromium
+中验证提取结果编辑、未保存修改拦截、重新生成确认和线路绑定保留。其余 UI 用例以静态检查为主。
+桌面 UI 验收以 1280px 及以上宽度为准。
 
 手动工具
 --------

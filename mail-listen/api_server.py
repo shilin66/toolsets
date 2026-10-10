@@ -47,6 +47,7 @@ from actions import (
     build_security_time,
     email_message_from_record,
     extract_fastgpt_reply,
+    extract_json_objects,
 )
 from config import settings, log_format
 from email_client import EmailClient
@@ -2671,7 +2672,43 @@ def saved_email_fill_payload(record):
         full_task = email_db.get_cutover_task(task['id'])
         if full_task and full_task.get('fill_payload'):
             return full_task['fill_payload']
-    return {}
+    extracted = {}
+    for obj in extract_json_objects(record.get('extract_result') or ''):
+        extracted.update(obj)
+    return extracted
+
+
+def prepare_cutover_payload(record, payload):
+    if not isinstance(payload, dict):
+        raise ValueError('割接参数必须是 JSON 对象')
+    supplier = get_supplier_config_repository().get_by_email(record.get('sender') or '')
+    if not supplier or not supplier['name'].strip():
+        raise ValueError('来源邮件未找到对应的供应商配置，请先配置供应商后再生成割接任务')
+    prepared = deepcopy(payload)
+    prepared['email_records_id'] = record['id']
+    prepared['supplier'] = supplier['name'].strip()
+    if 'line_array' in prepared:
+        lines = prepared['line_array']
+        prepared.pop('line_array_info', None)
+    elif 'line_array_info' in prepared:
+        info = prepared['line_array_info']
+        if not isinstance(info, dict):
+            raise ValueError('line_array_info 必须是 JSON 对象')
+        lines = info.get('data', [])
+    else:
+        lines = []
+    if not isinstance(lines, list) or any(not isinstance(line, dict) for line in lines):
+        raise ValueError('线路必须是 JSON 对象数组')
+    return prepared
+
+
+def merge_cutover_extraction(record, incoming):
+    payload = deepcopy(saved_email_fill_payload(record))
+    if 'line_array' in incoming or 'line_array_info' in incoming:
+        payload.pop('line_array', None)
+        payload.pop('line_array_info', None)
+    payload.update(incoming)
+    return without_line_bindings(prepare_cutover_payload(record, payload))
 
 
 @app.route('/api/cutover/emails/<int:email_records_id>/line-bindings', methods=['PUT'])
@@ -2684,7 +2721,7 @@ def update_cutover_line_binding(email_records_id):
         binding = request.get_json(silent=True)
         if not isinstance(binding, dict):
             raise ValueError('绑定信息必须是 JSON 对象')
-        payload = saved_email_fill_payload(record)
+        payload = prepare_cutover_payload(record, saved_email_fill_payload(record))
         lines = extraction_lines(payload)
         index = binding.get('line_index')
         if type(index) is not int or not 0 <= index < len(lines):
@@ -2694,7 +2731,7 @@ def update_cutover_line_binding(email_records_id):
             raise ValueError('Circuit ID 必须是字符串')
         lines[index]['bound_circuit_id'] = circuit_id.strip()
         lines[index]['bound_line_type'] = binding.get('line_type', '')
-        build_cutover_fill_response(payload)
+        build_cutover_fill_response(payload, sender_email=record.get('sender'))
         line_table = match_supplier_circuits_by_payload(payload)
         if not email_db.update_email_line_match_payload(email_records_id, payload):
             raise RuntimeError('线路绑定保存失败')
@@ -2706,16 +2743,16 @@ def update_cutover_line_binding(email_records_id):
 @app.route('/api/cutover/emails/<int:email_records_id>/extraction', methods=['PUT'])
 @require_api_key
 def update_cutover_extraction(email_records_id):
-    if not email_db.get_email_record_by_id(email_records_id):
+    record = email_db.get_email_record_by_id(email_records_id)
+    if not record:
         return jsonify(success=False, message='邮件记录不存在'), 404
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify(success=False, message='提取结果必须是 JSON 对象'), 400
     try:
-        payload['email_records_id'] = email_records_id
         # 保存提取结果即重新自动匹配，清除所有历史或请求携带的手动绑定。
-        payload = without_line_bindings(payload)
-        build_cutover_fill_response(payload)
+        payload = merge_cutover_extraction(record, payload)
+        build_cutover_fill_response(payload, sender_email=record.get('sender'))
         line_table = match_supplier_circuits_by_payload(payload)
         if not email_db.update_email_record_extract_result(email_records_id, json.dumps(without_line_bindings(payload), ensure_ascii=False)):
             raise RuntimeError('提取结果保存失败')
@@ -2747,7 +2784,9 @@ def generate_cutover_tasks():
         return jsonify(success=False, message=message, data=data), status
 
     try:
-        payload = request.get_json(silent=True) or {}
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return failure_response('割接参数必须是 JSON 对象', 400)
 
         email_records_id = payload.get('email_records_id')
         if email_records_id is None:
@@ -2761,6 +2800,7 @@ def generate_cutover_tasks():
             return failure_response(f'邮件记录不存在：email_records_id={email_records_id}', 404)
 
         detail_record_id = email_records_id
+        payload = prepare_cutover_payload(email_record, payload)
         result = build_cutover_fill_response(
             payload,
             sender_email=email_record.get('sender'),
@@ -3054,23 +3094,15 @@ def get_cutover_email_detail(email_records_id):
             task['status_label'] = cutover_task_status_label(task.get('status'))
             task['line_type_label'] = cutover_line_type_label(task.get('line_type'))
 
-        persisted_match_payload = detail.pop('line_match_payload', None)
+        fill_payload = saved_email_fill_payload(detail)
+        detail.pop('line_match_payload', None)
+        supplier = get_supplier_config_repository().get_by_email(detail.get('sender') or '')
+        detail['supplier_name'] = supplier['name'] if supplier else None
         line_table = None
-        fill_payload = persisted_match_payload
-        for task in ([] if fill_payload else detail.get('tasks', [])):
-            full_task = email_db.get_cutover_task(task.get('id'))
-            fill_payload = (full_task or {}).get('fill_payload')
-            if not fill_payload:
-                continue
+        if fill_payload:
             try:
+                fill_payload = prepare_cutover_payload(detail, fill_payload)
                 line_table = match_supplier_circuits_by_payload(fill_payload)
-            except Exception as match_error:
-                logger.warning(f"邮件详情重查线路表失败: email_records_id={email_records_id}, {match_error}")
-                line_table = {'error': str(match_error)}
-            break
-        if line_table is None and persisted_match_payload:
-            try:
-                line_table = match_supplier_circuits_by_payload(persisted_match_payload)
             except Exception as match_error:
                 logger.warning(f"邮件详情重查线路表失败: email_records_id={email_records_id}, {match_error}")
                 line_table = {'error': str(match_error)}

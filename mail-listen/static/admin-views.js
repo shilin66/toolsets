@@ -2603,10 +2603,24 @@ const ViewCutoverEmailDetail = defineComponent({
     const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
     const extractionDraft = ref("");
+    const savedExtractionDraft = ref("");
     const extractionBusy = ref(false);
     const manualBindings = reactive({});
     const manualBindingTypes = reactive({});
     const editingLineBindings = reactive({});
+    const extractionDirty = computed(() => {
+      try {
+        return JSON.stringify(JSON.parse(extractionDraft.value)) !== JSON.stringify(JSON.parse(savedExtractionDraft.value));
+      } catch {
+        return extractionDraft.value !== savedExtractionDraft.value;
+      }
+    });
+    const unsavedLineBindings = computed(() => (email.value?.line_table?.lines || []).some((entry, index) =>
+      (!isAutomaticLineMatch(entry) || editingLineBindings[index]) && (
+        (manualBindings[index] || "").trim() !== (entry.line?.bound_circuit_id || "").trim() ||
+        (manualBindingTypes[index] || "") !== (entry.line?.bound_line_type || entry.circuits?.[0]?.line_type || "客户")
+      ),
+    ));
     function isAutomaticLineMatch(line) {
       return !line.line?.bound_circuit_id && line.circuits?.length === 1 && !line.task_generation_blocked;
     }
@@ -2648,11 +2662,25 @@ const ViewCutoverEmailDetail = defineComponent({
       return payload;
     }
 
+    async function confirmTaskRegeneration() {
+      if (!email.value?.tasks?.length) return true;
+      try {
+        await ElMessageBox.confirm(
+          tt("cutover.detail.regenerateConfirmMessage"), tt("cutover.detail.regenerateTasks"),
+          {confirmButtonText: tt("cutover.detail.regenerateConfirm"), cancelButtonText: tt("common.cancel"), type: "warning"},
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
     async function saveExtraction(generate = false) {
       if (extractionBusy.value) return;
       extractionBusy.value = true;
       try {
         const payload = extractionPayload();
+        if (generate && !(await confirmTaskRegeneration())) return;
         const saved = await requestJson(`/api/cutover/emails/${props.emailRecordId}/extraction`, {
           method: "PUT", body: JSON.stringify(payload),
         });
@@ -2665,8 +2693,9 @@ const ViewCutoverEmailDetail = defineComponent({
           manualBindings[index] = entry.line.bound_circuit_id || "";
           manualBindingTypes[index] = entry.line.bound_line_type || entry.circuits?.[0]?.line_type || "客户";
         });
-        email.value.extract_result = JSON.stringify(cleanExtraction(payload), null, 2);
+        email.value.extract_result = JSON.stringify(cleanExtraction(saved.fill_payload), null, 2);
         extractionDraft.value = email.value.extract_result;
+        savedExtractionDraft.value = extractionDraft.value;
         if (generate) {
           const result = await requestJson("/api/cutover/tasks/generate", {method: "POST", body: JSON.stringify(saved.fill_payload)});
           await loadDetail();
@@ -2684,6 +2713,10 @@ const ViewCutoverEmailDetail = defineComponent({
 
     function cleanExtraction(payload) {
       const result = JSON.parse(JSON.stringify(payload));
+      delete result.supplier;
+      delete result.supplier_name;
+      delete result.email_records_id;
+      if (Object.prototype.hasOwnProperty.call(result, "line_array")) delete result.line_array_info;
       for (const line of result.line_array || result.line_array_info?.data || []) {
         delete line.bound_circuit_id;
         delete line.bound_line_type;
@@ -2711,14 +2744,17 @@ const ViewCutoverEmailDetail = defineComponent({
 
     async function regenerateTasks() {
       if (extractionBusy.value) return;
+      if (extractionDirty.value || unsavedLineBindings.value) {
+        ElMessage.warning(tt("cutover.detail.unsavedGenerationInputs"));
+        return;
+      }
       extractionBusy.value = true;
       try {
-        const draft = extractionDraft.value;
+        if (!(await confirmTaskRegeneration())) return;
         const result = await requestJson("/api/cutover/tasks/generate", {
           method: "POST", body: JSON.stringify({...email.value.fill_payload, email_records_id: props.emailRecordId}),
         });
         await loadDetail();
-        extractionDraft.value = draft;
         if (!result.tasks?.length) {
           throw new Error((result.validation_messages || []).map((item) => item.message).join("；") || result.msg);
         }
@@ -2757,8 +2793,10 @@ const ViewCutoverEmailDetail = defineComponent({
       try {
         email.value = await requestJson(`/api/cutover/emails/${props.emailRecordId}`);
         const extracted = Object.assign({}, ...extractJsonObjects(email.value.extract_result || ""));
-        const payload = Object.keys(extracted).length ? extracted : (email.value.fill_payload || {});
+        const saved = email.value.fill_payload || {};
+        const payload = Object.keys(saved).length ? saved : extracted;
         extractionDraft.value = JSON.stringify(cleanExtraction(payload), null, 2);
+        savedExtractionDraft.value = extractionDraft.value;
         Object.keys(editingLineBindings).forEach((key) => delete editingLineBindings[key]);
         Object.keys(manualBindings).forEach((key) => delete manualBindings[key]);
         Object.keys(manualBindingTypes).forEach((key) => delete manualBindingTypes[key]);
@@ -3150,6 +3188,7 @@ const ViewCutoverEmailDetail = defineComponent({
               <div class="extraction-toolbar">
                 <span class="extraction-format-label">JSON</span>
                 <span>{{ $t('cutover.detail.extractionEditorHint') }}</span>
+                <span v-if="email.supplier_name" class="muted">{{ $t('common.supplier') }}：{{ email.supplier_name }}</span>
               </div>
               <el-input v-model="extractionDraft" type="textarea" :rows="16" :disabled="extractionBusy"
                         :aria-label="$t('cutover.detail.extractResult')" class="extraction-editor" spellcheck="false"></el-input>

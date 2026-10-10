@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import api_server
 import cutover_task
 from database import EmailDatabase
+from supplier_config import SupplierConfigCreate, SupplierConfigRepository
 
 
 class CutoverFillPayloadTest(unittest.TestCase):
@@ -36,6 +37,9 @@ class CutoverFillPayloadTest(unittest.TestCase):
         self.client = api_server.app.test_client()
         self.headers = {"Authorization": "Bearer test-key"}
         self.email_records_id = self.insert_email_record()
+        SupplierConfigRepository(self.db).create(SupplierConfigCreate(
+            name="RT", email="noc@supplier.example.com", cutover_extract_prompt="提取割接字段。",
+        ))
 
     def tearDown(self):
         self.source_email_patch.stop()
@@ -110,7 +114,7 @@ class CutoverFillPayloadTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         data = response.get_json()["data"]
-        self.assertEqual(captured_queries, [(None, ["SO-123456"])])
+        self.assertEqual(captured_queries, [("RT", ["SO-123456"])])
         self.assertEqual(data["customer_excel"]["filename"], "cutoverCR202606060001.xlsx")
         self.assertEqual(data["backbone_circuits"], [])
         self.assertEqual(data["validation_messages"], [])

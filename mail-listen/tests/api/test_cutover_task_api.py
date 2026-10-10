@@ -69,6 +69,9 @@ class CutoverTaskApiTest(unittest.TestCase):
         self.client = api_server.app.test_client()
         self.headers = {"Authorization": "Bearer test-key"}
         self.email_records_id = self.insert_email_record()
+        self.supplier_config = SupplierConfigRepository(self.db).create(SupplierConfigCreate(
+            name="RT", email="noc@supplier.example.com", cutover_extract_prompt="提取割接字段。",
+        ))
 
     def tearDown(self):
         self.session_service_patch.stop()
@@ -100,6 +103,143 @@ class CutoverTaskApiTest(unittest.TestCase):
         line["bound_circuit_id"] = "missing"
         with self.assertRaises(ValueError):
             api_server.build_cutover_fill_response(payload)
+
+    def test_generation_uses_config_supplier_for_both_routes_and_all_personnel(self):
+        self.db.replace_all_supplier_circuits([BACKBONE_CIRCUIT])
+        payload = self.fill_payload()
+        payload.pop("supplier")
+        payload["carrier"] = "UNRELATED-CARRIER"
+        payload["line_array_info"]["data"][0]["CircuitIDRT"] = "1940953"
+        results = []
+        for route in ("/api/cutover/fill", "/api/cutover/tasks/generate"):
+            with self.subTest(route=route), patch.object(api_server, "ensure_source_email_archived"):
+                response = self.client.post(route, headers=self.headers, json=payload)
+                self.assertTrue(response.get_json()["success"], response.get_json())
+                task = self.db.get_cutover_task(response.get_json()["data"]["tasks"][0]["id"])
+                self.assertEqual(task["supplier"], "RT")
+                self.assertEqual(task["fill_payload"]["supplier"], "RT")
+                card = task["fill_result"]["backbone_circuits"][0]
+                self.assertEqual(card["基本信息"]["标题"], "(EUR)RT网内割接00/26012495")
+                self.assertEqual(card["人员信息"], api_server.build_backbone_personnel_fields(
+                    "RT", "noc@supplier.example.com", api_server.get_backbone_personnel_settings(),
+                ))
+                results.append(task["fill_result"])
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0], results[1])
+
+    def test_supplied_supplier_cannot_override_configured_supplier(self):
+        response = self.post_fill(self.fill_payload(supplier="OTHER"))
+        self.assertEqual(response.status_code, 200)
+        task = self.db.get_cutover_task(self.first_task_id(response))
+        self.assertEqual(task["supplier"], "RT")
+        self.assertEqual(task["fill_payload"]["supplier"], "RT")
+
+    def test_missing_supplier_config_rejects_writes_without_changing_existing_data(self):
+        generated = self.post_fill(self.fill_payload())
+        task = self.db.get_cutover_task(self.first_task_id(generated))
+        record = self.db.get_email_record_by_id(self.email_records_id)
+        SupplierConfigRepository(self.db).delete(self.supplier_config["id"])
+        cases = [
+            ("post", "/api/cutover/tasks/generate", self.fill_payload()),
+            ("post", "/api/cutover/fill", self.fill_payload()),
+            ("put", f"/api/cutover/emails/{self.email_records_id}/extraction", self.fill_payload()),
+            ("put", f"/api/cutover/emails/{self.email_records_id}/line-bindings", {"line_index": 0, "circuit_id": "manual", "line_type": "骨干"}),
+        ]
+        for method, route, body in cases:
+            with self.subTest(route=route):
+                response = getattr(self.client, method)(route, headers=self.headers, json=body)
+                self.assertFalse(response.get_json()["success"])
+                self.assertIn("供应商配置", response.get_json()["message"])
+                self.assertEqual(self.db.get_cutover_task(task["id"]), task)
+                current = self.db.get_email_record_by_id(self.email_records_id)
+                self.assertEqual(current["line_match_payload"], record["line_match_payload"])
+                self.assertEqual(current["extract_result"], record["extract_result"])
+
+    def test_partial_extraction_preserves_parameters_but_honors_explicit_clears(self):
+        payload = self.fill_payload(cutover_timezone="Asia/Shanghai", line_query_keywords=["OrderNumber"])
+        payload["line_array_info"]["data"][0].update(bound_circuit_id="manual", bound_line_type="骨干")
+        self.db.update_email_line_match_payload(self.email_records_id, payload)
+        response = self.client.put(
+            f"/api/cutover/emails/{self.email_records_id}/extraction", headers=self.headers,
+            json={"cutover_reason": "", "location": None},
+        )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        saved = response.get_json()["data"]["fill_payload"]
+        self.assertEqual(saved["supplier"], "RT")
+        for key in ("carrier_ticket_no", "cutover_time", "cutover_timezone", "line_query_keywords"):
+            self.assertEqual(saved[key], payload[key])
+        self.assertEqual(saved["cutover_reason"], "")
+        self.assertIsNone(saved["location"])
+        self.assertNotIn("bound_circuit_id", saved["line_array_info"]["data"][0])
+        before = self.db.get_email_record_by_id(self.email_records_id)
+        invalid = self.client.put(
+            f"/api/cutover/emails/{self.email_records_id}/extraction", headers=self.headers, json={"cutover_time": ""},
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(self.db.get_email_record_by_id(self.email_records_id)["line_match_payload"], before["line_match_payload"])
+
+    def test_replacing_line_array_does_not_restore_previous_alias_or_deleted_lines(self):
+        for old_key, new_key in (("line_array_info", "line_array"), ("line_array", "line_array_info")):
+            with self.subTest(old_key=old_key):
+                payload = self.fill_payload()
+                old_lines = payload.pop("line_array_info")["data"]
+                payload[old_key] = old_lines if old_key == "line_array" else {"data": old_lines}
+                self.db.update_email_line_match_payload(self.email_records_id, payload)
+                new_lines = [dict(old_lines[0], CircuitIDRT="replacement")]
+                for replacement in (new_lines, []):
+                    response = self.client.put(
+                        f"/api/cutover/emails/{self.email_records_id}/extraction", headers=self.headers,
+                        json={new_key: replacement if new_key == "line_array" else {"data": replacement}},
+                    )
+                    self.assertEqual(response.status_code, 200, response.get_json())
+                    saved = response.get_json()["data"]["fill_payload"]
+                    self.assertNotIn(old_key, saved)
+                    self.assertEqual(api_server.extraction_lines(saved), replacement)
+
+    def test_binding_enriches_legacy_payload_and_regeneration_keeps_binding(self):
+        payload = self.fill_payload()
+        payload.pop("supplier")
+        self.db.update_email_line_match_payload(self.email_records_id, payload)
+        bound = self.client.put(
+            f"/api/cutover/emails/{self.email_records_id}/line-bindings", headers=self.headers,
+            json={"line_index": 0, "circuit_id": "manual-backbone", "line_type": "骨干"},
+        )
+        self.assertEqual(bound.status_code, 200)
+        saved = bound.get_json()["data"]["fill_payload"]
+        self.assertEqual(saved["supplier"], "RT")
+        generated = self.post_fill(saved)
+        self.assertEqual(generated.status_code, 200)
+        task = self.db.get_cutover_task(self.first_task_id(generated))
+        self.assertEqual(task["fill_result"]["backbone_circuits"][0]["割接对象"]["系统名称"], ["manual-backbone"])
+        self.assertEqual(api_server.extraction_lines(task["fill_payload"])[0]["bound_circuit_id"], "manual-backbone")
+
+    def test_detail_enriches_legacy_parameters_without_rebuilding_saved_form(self):
+        generated = self.post_fill(self.fill_payload(), circuits=[BACKBONE_CIRCUIT])
+        task_id = self.first_task_id(generated)
+        task = self.db.get_cutover_task(task_id)
+        task["fill_result"]["backbone_circuits"][0]["人员信息"]["现场指挥人员名称"] = "用户确认的人员"
+        self.db.update_cutover_task(task_id, fill_result=task["fill_result"])
+        legacy = dict(task["fill_payload"])
+        legacy.pop("supplier")
+        self.db.update_email_line_match_payload(self.email_records_id, legacy)
+        before_task = self.db.get_cutover_task(task_id)
+        before_record = self.db.get_email_record_by_id(self.email_records_id)
+        response = self.client.get(f"/api/cutover/emails/{self.email_records_id}", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        detail = response.get_json()["data"]
+        self.assertEqual(detail["supplier_name"], "RT")
+        self.assertEqual(detail["fill_payload"]["supplier"], "RT")
+        self.assertEqual(self.db.get_cutover_task(task_id), before_task)
+        self.assertEqual(self.db.get_email_record_by_id(self.email_records_id)["line_match_payload"], before_record["line_match_payload"])
+
+    def test_null_or_malformed_line_arrays_are_rejected_without_restoring_old_lines(self):
+        self.db.update_email_line_match_payload(self.email_records_id, self.fill_payload())
+        before = self.db.get_email_record_by_id(self.email_records_id)
+        for body in ({"line_array": None}, {"line_array": ["invalid"]}, {"line_array_info": None}, {"line_array_info": {"data": None}}):
+            with self.subTest(body=body):
+                response = self.client.put(f"/api/cutover/emails/{self.email_records_id}/extraction", headers=self.headers, json=body)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(self.db.get_email_record_by_id(self.email_records_id)["line_match_payload"], before["line_match_payload"])
 
     def test_unlisted_manual_binding_generates_selected_type_with_warning(self):
         for line_type, result_key in (("客户", "circuits"), ("骨干", "backbone_circuits")):
@@ -1630,12 +1770,7 @@ class CutoverTaskApiTest(unittest.TestCase):
 
     def test_email_listing_supplier_sender_time_filters(self):
         # 供应商过滤与列表显示口径一致：按发件人所属供应商匹配，而非任务上的供应商
-        SupplierConfigRepository(self.db).create(SupplierConfigCreate(
-            name="RT",
-            email="noc@supplier.example.com",
-            can_reply_directly=True,
-            cutover_extract_prompt="提取割接字段。",
-        ))
+        self.assertEqual(SupplierConfigRepository(self.db).get_by_email("noc@supplier.example.com")["name"], "RT")
         self.post_fill(self.fill_payload())
 
         matched_sender = self.client.get("/api/cutover/emails?sender=supplier.example", headers=self.headers)
@@ -1874,12 +2009,7 @@ class CutoverTaskApiTest(unittest.TestCase):
 
     def test_listing_suppliers_follow_sender_config_for_all_emails(self):
         # 供应商列统一按发件人所属供应商显示，不取任务聚合值；发件人未配置时才退回任务聚合值
-        SupplierConfigRepository(self.db).create(SupplierConfigCreate(
-            name="RT",
-            email="noc@supplier.example.com",
-            can_reply_directly=True,
-            cutover_extract_prompt="提取割接字段。",
-        ))
+        self.assertEqual(SupplierConfigRepository(self.db).get_by_email("noc@supplier.example.com")["name"], "RT")
         rejected_email_id = self.insert_email_record(content="拒绝场景邮件正文")
         self.assertTrue(self.db.update_email_record_cutover_scene(rejected_email_id, "major_event"))
         task_id = self.first_task_id(self.post_fill(self.fill_payload()))
