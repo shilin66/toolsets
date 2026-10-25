@@ -6,6 +6,7 @@ import time
 import threading
 import re
 from html import escape
+from html.parser import HTMLParser
 from typing import List, Optional, Callable
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage as ReplyMessage
@@ -41,6 +42,54 @@ def _extract_html_body(html_content: str) -> str:
 def _plain_text_to_html(text: str) -> str:
     escaped = escape(text or "")
     return escaped.replace("\n", "<br>\n")
+
+
+class _QuoteTextParser(HTMLParser):
+    """为仅含 HTML 的原邮件生成纯文本引用，不包含样式和脚本内容。"""
+
+    blocks = {"p", "div", "br", "hr", "li", "tr", "blockquote", "pre",
+              "h1", "h2", "h3", "h4", "h5", "h6"}
+    omitted = {"head", "style", "script", "template"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.omit_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.omitted:
+            self.omit_depth += 1
+        if not self.omit_depth:
+            if tag in self.blocks:
+                self.parts.append("\n")
+            elif tag in {"td", "th"}:
+                self.parts.append("\t")
+
+    def handle_endtag(self, tag):
+        if tag in self.omitted:
+            self.omit_depth = max(0, self.omit_depth - 1)
+        elif not self.omit_depth and tag in self.blocks:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.omit_depth:
+            self.parts.append(data)
+
+
+def _html_to_quote_text(html_content: str) -> str:
+    parser = _QuoteTextParser()
+    parser.feed(html_content)
+    parser.close()
+    return "".join(parser.parts).strip()
+
+
+def _decode_body_part(part) -> str:
+    """尊重 MIME 声明的字符集；未知字符集按 UTF-8 解码并保留替换标记。"""
+    payload = part.get_payload(decode=True) or b""
+    try:
+        return payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+    except LookupError:
+        return payload.decode("utf-8", errors="replace")
 
 
 def build_reply_message(
@@ -85,9 +134,18 @@ def build_reply_message(
             reference_parts.append(message_id)
         reply["References"] = " ".join(reference_parts)
 
-    reply.set_content(reply_content)
-    if html_content:
-        quoted_html = _extract_html_body(html_content)
+    source_html = html_content if html_content is not None else original_email.html_content
+    quoted_html = _extract_html_body(source_html or "")
+    quoted_text = (original_email.content or "").strip() or _html_to_quote_text(quoted_html)
+    plain_body = reply_content
+    if quoted_text:
+        quote = "\n".join(f"> {line}" for line in quoted_text.splitlines())
+        plain_body = f"{reply_content}\n\n{quote}"
+    reply.set_content(plain_body)
+
+    if not quoted_html and quoted_text:
+        quoted_html = f'<pre style="white-space:pre-wrap;">{escape(quoted_text)}</pre>'
+    if quoted_html:
         reply_html = (
             "<html><body>"
             f"<div>{_plain_text_to_html(reply_content)}</div>"
@@ -557,15 +615,15 @@ class EmailClient:
 
                 if "attachment" not in content_disposition:
                     if content_type == "text/plain":
-                        text_content += part.get_payload(decode=True).decode('utf-8', errors='ignore')
+                        text_content += _decode_body_part(part)
                     elif content_type == "text/html":
-                        html_content = part.get_payload(decode=True).decode('utf-8', errors='ignore')
+                        html_content = _decode_body_part(part)
         else:
             content_type = msg.get_content_type()
             if content_type == "text/plain":
-                text_content = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
+                text_content = _decode_body_part(msg)
             elif content_type == "text/html":
-                html_content = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
+                html_content = _decode_body_part(msg)
         # 如果HTML内容存在，提取body部分并处理特殊标签
         # if html_content:
         #     try:

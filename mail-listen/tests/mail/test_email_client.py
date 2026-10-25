@@ -197,7 +197,7 @@ class EmailClientParsingTest(unittest.TestCase):
         self.assertEqual(reply["Subject"], "Re: Original subject")
         self.assertEqual(reply["In-Reply-To"], "<message-1@example.com>")
         self.assertEqual(reply["References"], "<root@example.com> <message-1@example.com>")
-        self.assertIn("收到", reply.get_content())
+        self.assertIn("收到", reply.get_body(preferencelist=("plain",)).get_content())
 
     def test_build_reply_message_falls_back_to_sender(self):
         original = EmailMessage(
@@ -321,6 +321,90 @@ class EmailClientParsingTest(unittest.TestCase):
         self.assertIn("回复一下", html_body.get_content())
         self.assertIn("原始HTML内容", html_body.get_content())
         self.assertIn("回复一下", plain_body.get_content())
+        self.assertIn("hello", plain_body.get_content())
+
+    def test_plain_original_is_quoted_in_both_reply_bodies(self):
+        original = EmailMessage(
+            uid=1, subject="Maintenance", sender="sender@example.com",
+            recipients=["receiver@example.com"],
+            content="Dear customer!\r\nCircuit <A&B>\r\n  Start: 20:00",
+            received_date="2026-10-20T10:00:00+08:00",
+        )
+        for html in (None, "", "<html><body> \n </body></html>"):
+            with self.subTest(html=html):
+                reply = build_reply_message(original, "收到 <谢谢>", html_content=html)
+                parsed = BytesParser(policy=policy.default).parsebytes(reply.as_bytes())
+                plain = parsed.get_body(preferencelist=("plain",)).get_content()
+                self.assertIn("收到 <谢谢>", plain)
+                self.assertIn("> Dear customer!\n> Circuit <A&B>\n>   Start: 20:00", plain)
+                html_body = parsed.get_body(preferencelist=("html",))
+                self.assertIsNotNone(html_body)
+                markup = html_body.get_content()
+                self.assertIn("Dear customer!", markup)
+                self.assertIn("Circuit &lt;A&amp;B&gt;", markup)
+                self.assertIn("收到 &lt;谢谢&gt;", markup)
+                self.assertIn("<blockquote", markup)
+
+    def test_html_only_original_has_readable_plain_quote(self):
+        original = EmailMessage(
+            uid=1, subject="Maintenance", sender="sender@example.com",
+            recipients=["receiver@example.com"], content="",
+            html_content=("<html><head><style>.hidden {color:red}</style></head>"
+                          "<body><p>Dear customer!</p><p>Circuit A&amp;B<br>Start: 20:00</p>"
+                          "<script>secret_script()</script></body></html>"),
+            received_date="2026-10-20T10:00:00+08:00",
+        )
+        reply = build_reply_message(original, "收到")
+        parsed = BytesParser(policy=policy.default).parsebytes(reply.as_bytes())
+        plain = parsed.get_body(preferencelist=("plain",)).get_content()
+        self.assertIn("> Dear customer!", plain)
+        self.assertIn("> Circuit A&B\n> Start: 20:00", plain)
+        self.assertNotIn("color:red", plain)
+        self.assertNotIn("secret_script", plain)
+        self.assertNotIn("<p>", plain)
+        self.assertIn("Circuit A&amp;B", parsed.get_body(preferencelist=("html",)).get_content())
+
+    def test_empty_original_does_not_add_empty_quote(self):
+        original = EmailMessage(
+            uid=1, subject="Empty", sender="sender@example.com",
+            recipients=["receiver@example.com"], content="",
+            received_date="2026-10-20T10:00:00+08:00",
+        )
+        reply = build_reply_message(original, "收到")
+        self.assertEqual(reply.get_content().strip(), "收到")
+
+    def test_parse_and_reply_preserves_declared_charset(self):
+        for charset, text in (("koi8-r", "Dear customer!\nРаботы ■ ∙"),
+                              ("gb18030", "原始通知\n线路维护")):
+            for multipart in (False, True):
+                with self.subTest(charset=charset, multipart=multipart):
+                    raw = RawEmailMessage()
+                    raw["Subject"] = "Maintenance"
+                    raw["From"] = "sender@example.com"
+                    raw["To"] = "receiver@example.com"
+                    raw.set_content(text, charset=charset, cte="quoted-printable")
+                    if multipart:
+                        raw.add_alternative("<p>" + text + "</p>", subtype="html", charset=charset)
+                    client = EmailClient(_test_account())
+                    client.client = FakeIMAPClient({1: raw.as_bytes()})
+                    original = client._parse_email(1)
+                    self.assertIsNotNone(original)
+                    self.assertEqual(original.content, text)
+                    if multipart:
+                        self.assertIn(text, original.html_content)
+                    reply = build_reply_message(original, "Received")
+                    parsed = BytesParser(policy=policy.default).parsebytes(reply.as_bytes())
+                    self.assertIn(text.splitlines()[1], parsed.get_body(preferencelist=("plain",)).get_content())
+                    self.assertIn(text.splitlines()[1], parsed.get_body(preferencelist=("html",)).get_content())
+
+    def test_unknown_charset_falls_back_without_silently_dropping_bytes(self):
+        raw = (b'Content-Type: text/plain; charset="unknown-charset"\r\n\r\n'
+               b'Notice \xff end')
+        client = EmailClient(_test_account())
+        client.client = FakeIMAPClient({1: raw})
+        original = client._parse_email(1)
+        self.assertIsNotNone(original)
+        self.assertEqual(original.content, "Notice \ufffd end")
 
 
 if __name__ == "__main__":
