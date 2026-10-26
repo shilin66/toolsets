@@ -23,6 +23,14 @@ class EmailReplyApiTest(unittest.TestCase):
     def setUp(self):
         self.api_key_patch = patch.object(api_server, "API_KEY", "test-key")
         self.api_key_patch.start()
+        # These route tests mock records and persistence; atomic claims are covered
+        # against a real isolated database in test_mail_deletion_guards.
+        for method, result in (("get_mail_deletion", None),
+                               ("claim_pending_reply", True),
+                               ("release_pending_reply", True)):
+            mock_patch = patch.object(api_server.email_db, method, return_value=result)
+            setattr(self, method, mock_patch.start())
+            self.addCleanup(mock_patch.stop)
 
     def tearDown(self):
         self.api_key_patch.stop()

@@ -25,10 +25,10 @@ class AdminFrontendApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         self.assertIn("NOC 工作台", html)
-        # Vue 3 + Element Plus 架构：挂载点与脚本（含版本号注入）
+        # Vue 3 + Naive UI 架构：挂载点与脚本（含版本号注入）
         self.assertIn('<div id="app"></div>', html)
         self.assertIn('/static/vendor/vue.global.prod.js', html)
-        self.assertIn('/static/vendor/element-plus.js', html)
+        self.assertIn('/static/vendor/naive-ui.js', html)
         self.assertIn('/static/admin-shared.js?v=', html)
         self.assertIn('/static/admin-views.js?v=', html)
         self.assertIn('/static/admin.js?v=', html)
@@ -162,7 +162,7 @@ class AdminFrontendApiTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn(
-            "const scene = row.pending_reply_scene || row.cutover_scene;",
+            "const scene = row.unconfigured_analysis?.scene || row.pending_reply_scene || row.cutover_scene;",
             source,
         )
         self.assertIn("if (isRejectedScene(scene))", source)
@@ -219,7 +219,7 @@ class AdminFrontendApiTest(unittest.TestCase):
 
         self.assertIn('const reportProgressVisible = ref(false)', source)
         self.assertIn('requestJson(`/api/cutover/reports/${reportId}`)', source)
-        self.assertIn('<el-drawer v-model="reportProgressVisible"', source)
+        self.assertIn('<ui-drawer v-model="reportProgressVisible"', source)
         self.assertIn('const payload = await runAction(', source)
         self.assertIn('applyResult(payload, tt("cutover.task.savedFallback"))', source)
 

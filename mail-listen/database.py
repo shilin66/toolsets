@@ -20,10 +20,25 @@ DUPLICATE_EMAIL_EXISTS_SQL = """EXISTS(
     WHERE d.subject_hash = email_records.subject_hash
       AND d.content_hash = email_records.content_hash
       AND d.email_id != email_records.email_id
+      AND d.processing_origin = 'configured'
+      AND email_records.processing_origin = 'configured'
       AND email_records.subject_hash IS NOT NULL
       AND email_records.content_hash IS NOT NULL
       AND (d.create_time < email_records.create_time
            OR (d.create_time = email_records.create_time AND d.id < email_records.id))
+)"""
+
+# 所有邮件回写与抢占均在同一条 SQL 中检查删除标记，避免先查后写的竞态。
+EMAIL_NOT_DELETING_SQL = """NOT EXISTS (
+    SELECT 1 FROM mail_deletions WHERE email_records_id = email_records.id
+)"""
+TASK_EMAIL_ACTIVE_SQL = f"""EXISTS (
+    SELECT 1 FROM email_records WHERE id = cutover_tasks.email_records_id
+    AND {EMAIL_NOT_DELETING_SQL}
+)"""
+REPORT_EMAIL_ACTIVE_SQL = f"""EXISTS (
+    SELECT 1 FROM cutover_tasks WHERE id = cutover_reports.task_id
+    AND {TASK_EMAIL_ACTIVE_SQL}
 )"""
 
 
@@ -72,6 +87,20 @@ class EmailDatabase:
 
                 self._ensure_email_records_columns(cursor)
                 self._migrate_email_records_unique(cursor)
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS mail_deletions (
+                        email_records_id INTEGER PRIMARY KEY,
+                        mailbox_address TEXT NOT NULL,
+                        email_uid INTEGER NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending_cleanup',
+                        cleanup_manifest TEXT NOT NULL DEFAULT '[]',
+                        create_time TEXT,
+                        update_time TEXT,
+                        UNIQUE(mailbox_address, email_uid)
+                    )
+                ''')
+                from unconfigured_mail_repository import initialize_storage
+                initialize_storage(cursor)
 
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS ticket_records (
@@ -236,6 +265,8 @@ class EmailDatabase:
             "api_forward_time": "TEXT NOT NULL DEFAULT ''",
             "line_match_payload": "TEXT NOT NULL DEFAULT ''",
             "is_read": "INTEGER NOT NULL DEFAULT 0",
+            "processing_origin": "TEXT NOT NULL DEFAULT 'configured'",
+            "unconfigured_analysis_json": "TEXT",
         }
 
         for column_name, column_type in required_columns.items():
@@ -374,9 +405,13 @@ class EmailDatabase:
         """
         try:
             with self.get_connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
                 cursor = conn.cursor()
 
                 receiver_text = self._serialize_receiver(receiver)
+                if self._is_email_deleted(conn, email_id, receiver_text):
+                    logger.debug('邮件已删除或正在删除，跳过入库: UID {}', email_id)
+                    return False
                 if receiver_text is not None:
                     cursor.execute(
                         'SELECT id FROM email_records WHERE email_id = ? AND receiver = ?',
@@ -501,7 +536,8 @@ class EmailDatabase:
 
                 values.append(email_id)
 
-                sql = f"UPDATE email_records SET {', '.join(set_clauses)} WHERE email_id = ?"
+                sql = (f"UPDATE email_records SET {', '.join(set_clauses)} WHERE email_id = ? "
+                       f"AND {EMAIL_NOT_DELETING_SQL}")
                 cursor.execute(sql, values)
 
                 if cursor.rowcount > 0:
@@ -568,12 +604,12 @@ class EmailDatabase:
                 cursor = conn.cursor()
                 if scene_remark is None:
                     cursor.execute(
-                        'UPDATE email_records SET cutover_scene = ? WHERE id = ?',
+                        f'UPDATE email_records SET cutover_scene = ? WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}',
                         (scene, record_id),
                     )
                 else:
                     cursor.execute(
-                        'UPDATE email_records SET cutover_scene = ?, cutover_scene_remark = ? WHERE id = ?',
+                        f'UPDATE email_records SET cutover_scene = ?, cutover_scene_remark = ? WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}',
                         (scene, scene_remark, record_id),
                     )
                 conn.commit()
@@ -588,7 +624,7 @@ class EmailDatabase:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "UPDATE email_records SET is_read = ?, update_time = ? WHERE id = ?",
+                    f"UPDATE email_records SET is_read = ?, update_time = ? WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}",
                     (int(is_read), datetime.now(), record_id),
                 )
                 conn.commit()
@@ -609,7 +645,8 @@ class EmailDatabase:
                 cursor = conn.cursor()
                 cursor.execute(
                     'UPDATE email_records SET reply_status = ?, pending_reply_content = ?, '
-                    'pending_reply_scene = ?, reply_time = \'\' WHERE id = ?',
+                    f"pending_reply_scene = ?, reply_time = '' WHERE id = ? "
+                    f"AND reply_status != 'sending' AND {EMAIL_NOT_DELETING_SQL}",
                     ('pending', reply_content or '', cutover_scene or '', record_id),
                 )
                 conn.commit()
@@ -625,7 +662,7 @@ class EmailDatabase:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    'UPDATE email_records SET reply_status = ?, reply_time = ? WHERE id = ?',
+                    f'UPDATE email_records SET reply_status = ?, reply_time = ? WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}',
                     ('sent', reply_time, record_id),
                 )
                 conn.commit()
@@ -635,6 +672,39 @@ class EmailDatabase:
             logger.error(f"标记回复已发送失败: {e}")
             return False
 
+    def claim_unconfigured_reply(self, record_id: int, content: str) -> bool:
+        with self.get_connection() as conn:
+            changed = conn.execute(f'''UPDATE email_records SET reply_status='sending', pending_reply_content=?
+                WHERE id=? AND processing_origin='unconfigured' AND reply_status='pending'
+                AND {EMAIL_NOT_DELETING_SQL}''',
+                (content, record_id))
+            conn.commit()
+            return changed.rowcount == 1
+
+    def claim_pending_reply(self, record_id: int, content: str) -> bool:
+        """发送前原子抢占；删除操作与并发发送均不能穿过同一 pending 状态。"""
+        with self.get_connection() as conn:
+            changed = conn.execute(f'''UPDATE email_records
+                SET reply_status='sending', pending_reply_content=?
+                WHERE id=? AND reply_status='pending' AND {EMAIL_NOT_DELETING_SQL}''',
+                (content, record_id))
+            conn.commit()
+            return changed.rowcount == 1
+
+    def release_pending_reply(self, record_id: int) -> bool:
+        """已配置供应商发送失败后释放抢占，保留原人工重试行为。"""
+        with self.get_connection() as conn:
+            changed = conn.execute(f'''UPDATE email_records SET reply_status='pending'
+                WHERE id=? AND reply_status='sending' AND processing_origin='configured'
+                AND {EMAIL_NOT_DELETING_SQL}''', (record_id,))
+            conn.commit()
+            return changed.rowcount == 1
+
+    def mark_reply_uncertain(self, record_id: int) -> None:
+        with self.get_connection() as conn:
+            conn.execute(f"UPDATE email_records SET reply_status='send_uncertain' WHERE id=? AND reply_status='sending' AND {EMAIL_NOT_DELETING_SQL}", (record_id,))
+            conn.commit()
+
     def cancel_pending_reply(self, record_id: int) -> bool:
         """放弃待确认回复：清空草稿内容与场景。"""
         try:
@@ -642,7 +712,9 @@ class EmailDatabase:
                 cursor = conn.cursor()
                 cursor.execute(
                     'UPDATE email_records SET reply_status = ?, pending_reply_content = \'\', '
-                    'pending_reply_scene = \'\', reply_time = \'\' WHERE id = ?',
+                    'pending_reply_scene = \'\', reply_time = \'\' WHERE id = ? '
+                    "AND (processing_origin='configured' OR reply_status='pending') "
+                    f"AND reply_status != 'sending' AND {EMAIL_NOT_DELETING_SQL}",
                     ('cancelled', record_id),
                 )
                 conn.commit()
@@ -658,7 +730,7 @@ class EmailDatabase:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    'UPDATE email_records SET mail_type = ? WHERE id = ?',
+                    f'UPDATE email_records SET mail_type = ? WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}',
                     (mail_type or '', record_id),
                 )
                 conn.commit()
@@ -674,7 +746,7 @@ class EmailDatabase:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    'UPDATE email_records SET extract_result = ? WHERE id = ?',
+                    f'UPDATE email_records SET extract_result = ? WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}',
                     (extract_result or '', record_id),
                 )
                 conn.commit()
@@ -689,7 +761,7 @@ class EmailDatabase:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    'UPDATE email_records SET line_match_payload = ?, update_time = ? WHERE id = ?',
+                    f'UPDATE email_records SET line_match_payload = ?, update_time = ? WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}',
                     (self._serialize_json(payload) or '', datetime.now(), record_id),
                 )
                 conn.commit()
@@ -711,7 +783,7 @@ class EmailDatabase:
                 cursor.execute(
                     "UPDATE email_records SET api_forward_status = ?, "
                     "api_forward_error = ?, api_forward_time = ?, update_time = ? "
-                    "WHERE id = ?",
+                    f"WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}",
                     (
                         status or "",
                         (error or "")[:2000],
@@ -726,18 +798,52 @@ class EmailDatabase:
             logger.error(f"保存邮件 API 转发状态失败: {e}")
             return False
 
+    def claim_email_api_forward(self, record_id: int) -> bool:
+        """先取得 forwarding 状态，再开始文件生成或外部模型调用。"""
+        with self.get_connection() as conn:
+            changed = conn.execute(f'''UPDATE email_records SET api_forward_status='forwarding',
+                api_forward_error='', api_forward_time=CURRENT_TIMESTAMP, update_time=CURRENT_TIMESTAMP
+                WHERE id=? AND api_forward_status != 'forwarding' AND {EMAIL_NOT_DELETING_SQL}''',
+                (record_id,))
+            conn.commit()
+            return changed.rowcount == 1
+
+    def get_mail_deletion(self, record_id: int) -> Optional[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            row = conn.execute('SELECT * FROM mail_deletions WHERE email_records_id=?',
+                               (record_id,)).fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def _is_email_deleted(conn, email_id: int, receiver: Optional[str] = None) -> bool:
+        if receiver is None:
+            row = conn.execute('SELECT 1 FROM mail_deletions WHERE email_uid=?', (email_id,)).fetchone()
+        else:
+            row = conn.execute('SELECT 1 FROM mail_deletions WHERE email_uid=? AND mailbox_address=?',
+                               (email_id, receiver.strip().casefold())).fetchone()
+        return row is not None
+
+    def is_email_deleted(self, email_id: int, receiver: Optional[str] = None) -> bool:
+        """pending_cleanup 和 deleted 均阻止后续处理；空 receiver 沿用全局 UID 语义。"""
+        with self.get_connection() as conn:
+            return self._is_email_deleted(conn, email_id, receiver)
+
     def email_exists(self, email_id: int, receiver: Optional[str] = None) -> bool:
         """检查邮件是否已处理。传入 receiver 时按 (email_id, receiver) 判重。"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                if receiver:
+                # 同一快照检查原邮件与墓碑，避免物理删除恰好发生在两次 SELECT 之间。
+                if receiver is not None:
                     cursor.execute(
-                        'SELECT 1 FROM email_records WHERE email_id = ? AND receiver = ?',
-                        (email_id, receiver),
+                        'SELECT 1 FROM email_records WHERE email_id = ? AND receiver = ? '
+                        'UNION ALL SELECT 1 FROM mail_deletions WHERE email_uid = ? AND mailbox_address = ? LIMIT 1',
+                        (email_id, receiver, email_id, receiver.strip().casefold()),
                     )
                 else:
-                    cursor.execute('SELECT 1 FROM email_records WHERE email_id = ?', (email_id,))
+                    cursor.execute('SELECT 1 FROM email_records WHERE email_id = ? '
+                                   'UNION ALL SELECT 1 FROM mail_deletions WHERE email_uid = ? LIMIT 1',
+                                   (email_id, email_id))
                 return cursor.fetchone() is not None
         except Exception as e:
             logger.error(f"检查邮件是否存在失败: {e}")
@@ -779,7 +885,7 @@ class EmailDatabase:
             logger.error(f"获取邮件记录列表失败: {e}")
             return []
 
-    def find_duplicate_email_record(self, email_id: int) -> Optional[Dict[str, Any]]:
+    def find_duplicate_email_record(self, email_id: int, record_id: int = None) -> Optional[Dict[str, Any]]:
         """按 subject_hash 和 content_hash 查找不同 UID 的重复邮件。"""
         try:
             with self.get_connection() as conn:
@@ -791,12 +897,14 @@ class EmailDatabase:
                       ON duplicate.subject_hash = current.subject_hash
                      AND duplicate.content_hash = current.content_hash
                      AND duplicate.email_id != current.email_id
-                    WHERE current.email_id = ?
+                    WHERE ((? IS NOT NULL AND current.id = ?) OR (? IS NULL AND current.email_id = ?))
+                      AND duplicate.processing_origin = 'configured'
+                      AND current.processing_origin = 'configured'
                       AND current.subject_hash IS NOT NULL
                       AND current.content_hash IS NOT NULL
                     ORDER BY duplicate.create_time ASC
                     LIMIT 1
-                ''', (email_id,))
+                ''', (record_id, record_id, record_id, email_id))
                 row = cursor.fetchone()
                 return dict(row) if row else None
 
@@ -816,9 +924,10 @@ class EmailDatabase:
         """新增工单记录。"""
         try:
             with self.get_connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
                 cursor = conn.cursor()
 
-                cursor.execute('SELECT id FROM email_records WHERE id = ?', (email_records_id,))
+                cursor.execute(f'SELECT id FROM email_records WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}', (email_records_id,))
                 if not cursor.fetchone():
                     logger.warning(f"未找到邮件记录主键: id={email_records_id}")
                     return None
@@ -1005,9 +1114,10 @@ class EmailDatabase:
         """按邮件记录与线路类型创建或覆盖更新割接任务，状态重置为 draft。"""
         try:
             with self.get_connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
                 cursor = conn.cursor()
 
-                cursor.execute('SELECT id FROM email_records WHERE id = ?', (email_records_id,))
+                cursor.execute(f'SELECT id FROM email_records WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}', (email_records_id,))
                 if not cursor.fetchone():
                     logger.warning(f"未找到邮件记录主键: id={email_records_id}")
                     return None
@@ -1135,7 +1245,7 @@ class EmailDatabase:
                 values.append(datetime.now())
                 values.append(task_id)
                 cursor.execute(
-                    f"UPDATE cutover_tasks SET {', '.join(set_clauses)} WHERE id = ?",
+                    f"UPDATE cutover_tasks SET {', '.join(set_clauses)} WHERE id = ? AND {TASK_EMAIL_ACTIVE_SQL}",
                     values,
                 )
                 if cursor.rowcount > 0:
@@ -1158,9 +1268,10 @@ class EmailDatabase:
         """新增割接上报记录。"""
         try:
             with self.get_connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
                 cursor = conn.cursor()
 
-                cursor.execute('SELECT id FROM cutover_tasks WHERE id = ?', (task_id,))
+                cursor.execute(f'SELECT id FROM cutover_tasks WHERE id = ? AND {TASK_EMAIL_ACTIVE_SQL}', (task_id,))
                 if not cursor.fetchone():
                     logger.warning(f"未找到割接任务: id={task_id}")
                     return None
@@ -1197,7 +1308,7 @@ class EmailDatabase:
                 cursor = conn.cursor()
                 values.append(report_id)
                 cursor.execute(
-                    f"UPDATE cutover_reports SET {', '.join(set_clauses)} WHERE id = ?",
+                    f"UPDATE cutover_reports SET {', '.join(set_clauses)} WHERE id = ? AND {REPORT_EMAIL_ACTIVE_SQL}",
                     values,
                 )
                 if cursor.rowcount > 0:
@@ -1616,6 +1727,20 @@ class EmailDatabase:
         except Exception as e:
             logger.error(f"写入系统配置失败: {e}")
             raise
+
+    def set_system_settings(self, updates: dict, policy_updates: dict) -> None:
+        from unconfigured_mail import read_settings, validate_settings
+
+        with self.get_connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            policy = validate_settings({**read_settings(self, conn), **policy_updates})
+            values = {**updates, **{key: json.dumps(policy[key], ensure_ascii=False)
+                                    for key in policy_updates}}
+            conn.executemany('''INSERT INTO system_settings (key, value, update_time)
+                VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET
+                value=excluded.value, update_time=excluded.update_time''',
+                [(key, value, datetime.now()) for key, value in values.items()])
+            conn.commit()
 
     # ---------- 邮箱账号配置 ----------
 

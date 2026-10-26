@@ -112,7 +112,7 @@ class RecordQueryRepository:
                 f"""
                 SELECT id, email_id, sender, receiver, subject, content,
                        html_content, attachments,
-                       message_id, reply_to, create_time, update_time
+                       message_id, reply_to, create_time, update_time, processing_origin, mail_type, reply_status
                 FROM email_records
                 {where_clause}
                 ORDER BY create_time DESC, id DESC
@@ -123,6 +123,9 @@ class RecordQueryRepository:
             rows = []
             for row in cursor.fetchall():
                 item = dict(row)
+                if item['processing_origin'] == 'unconfigured':
+                    from unconfigured_mail_repository import UnconfiguredMailRepository
+                    item.update(UnconfiguredMailRepository(self.db).projection(item['id'], conn))
                 item["attachments"] = self.db.deserialize_attachments(item.get("attachments"))
                 item["attachment_urls"] = [
                     build_attachment_url(relative_path)
@@ -244,14 +247,17 @@ class RecordQueryRepository:
         keyword: str | None = None,
     ) -> CutoverTaskEmailListResult:
         """按邮件维度列出供应商邮件及其割接任务，每封邮件内嵌其割接任务列表。"""
-        # 列表范围 = 全部已入库的供应商邮件（入库前已做供应商校验）
-        conditions = []
+        conditions = ["(email_records.processing_origin='configured' OR email_records.mail_type='割接通知')"]
         params: list[str | int] = []
         # 任务级条件（同时作用于内嵌任务列表）与邮件级条件（仅过滤邮件）分开维护
         task_conditions = []
         task_params: list[str | int] = []
         if status == "reply_pending":
             conditions.append("email_records.reply_status = 'pending'")
+        elif status == 'analysis_failed':
+            conditions.append("EXISTS (SELECT 1 FROM mail_ai_jobs j WHERE j.email_records_id=email_records.id AND j.status='failed')")
+        elif status == 'needs_review':
+            conditions.append("json_extract(email_records.unconfigured_analysis_json, '$.analysis_status')='needs_review'")
         elif status in {"rule_skipped", "rejected_closed", "duplicate_ignored", "no_task"}:
             conditions.append("cutover_tasks.id IS NULL")
             conditions.append("COALESCE(email_records.reply_status, '') != 'pending'")
@@ -262,11 +268,12 @@ class RecordQueryRepository:
                 if status == "rule_skipped":
                     conditions.append("email_records.cutover_scene = 'rule_skipped'")
                 elif status == "rejected_closed":
+                    conditions.append("email_records.processing_origin='configured'")
                     conditions.append("email_records.cutover_scene IN ('emergency', 'major_event', 'in_window')")
                     conditions.append("email_records.reply_status = 'sent'")
                 else:
                     conditions.append("COALESCE(email_records.cutover_scene, '') != 'rule_skipped'")
-                    conditions.append("NOT (COALESCE(email_records.cutover_scene, '') IN ('emergency', 'major_event', 'in_window') AND COALESCE(email_records.reply_status, '') = 'sent')")
+                    conditions.append("(email_records.processing_origin='unconfigured' OR NOT (COALESCE(email_records.cutover_scene, '') IN ('emergency', 'major_event', 'in_window') AND COALESCE(email_records.reply_status, '') = 'sent'))")
         elif status:
             task_conditions.append("cutover_tasks.status = ?")
             task_params.append(status)
@@ -295,9 +302,9 @@ class RecordQueryRepository:
             else:
                 conditions.append(
                     "(email_records.cutover_scene = ? OR "
-                    "email_records.pending_reply_scene = ?)"
+                    "email_records.pending_reply_scene = ? OR json_extract(email_records.unconfigured_analysis_json, '$.scene') = ?)"
                 )
-                params.extend([tag, tag])
+                params.extend([tag, tag, tag])
         # 邮件类型过滤（邮件级）：按 FastGPT 转发解析出的分类结果精确匹配
         if mail_type:
             conditions.append("email_records.mail_type = ?")
@@ -351,6 +358,7 @@ class RecordQueryRepository:
                        email_records.sender, email_records.receiver, email_records.subject,
                        SUBSTR(email_records.content, 1, 200) as content_summary,
                        email_records.create_time,
+                       email_records.processing_origin,
                        email_records.cutover_scene,
                        email_records.cutover_scene_remark,
                        email_records.pending_reply_scene,
@@ -405,6 +413,9 @@ class RecordQueryRepository:
 
             supplier_name_by_sender = _supplier_name_by_sender(self.db)
             for item in emails:
+                if item['processing_origin'] == 'unconfigured':
+                    from unconfigured_mail_repository import UnconfiguredMailRepository
+                    item.update(UnconfiguredMailRepository(self.db).projection(item['id'], conn))
                 item["tasks"] = tasks_by_email.get(item["id"], [])
                 item["line_match_payload"] = (
                     self.db._deserialize_json(item.get("line_match_payload"))
@@ -441,6 +452,7 @@ class RecordQueryRepository:
             cursor.execute(
                 "SELECT DISTINCT mail_type FROM email_records "
                 "WHERE mail_type IS NOT NULL AND mail_type != '' "
+                "AND (processing_origin='configured' OR mail_type='割接通知') "
                 "ORDER BY mail_type"
             )
             return [row["mail_type"] for row in cursor.fetchall()]
@@ -457,10 +469,11 @@ class RecordQueryRepository:
                        reply_status, pending_reply_content, pending_reply_scene, reply_time,
                        api_forward_status, api_forward_error, api_forward_time,
                        line_match_payload,
+                       processing_origin,
                        reply_to,
                        create_time, update_time
                 FROM email_records
-                WHERE id = ?
+                WHERE id = ? AND (processing_origin='configured' OR mail_type='割接通知')
                 """,
                 (email_records_id,),
             )
@@ -468,6 +481,9 @@ class RecordQueryRepository:
             if not row:
                 return None
             email = dict(row)
+            if email['processing_origin'] == 'unconfigured':
+                from unconfigured_mail_repository import UnconfiguredMailRepository
+                email.update(UnconfiguredMailRepository(self.db).projection(email_records_id, conn))
             email["cutover_scene"] = email.get("cutover_scene") or CUTOVER_SCENE_NORMAL
             email["cutover_scene_label"] = cutover_scene_label(email["cutover_scene"])
             email["cutover_scene_remark"] = email.get("cutover_scene_remark") or ""

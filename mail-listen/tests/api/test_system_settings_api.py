@@ -36,6 +36,28 @@ class SystemSettingsApiTest(unittest.TestCase):
         response = self.client.get('/api/system/settings')
         self.assertEqual(response.status_code, 401)
 
+    def test_discovery_settings_typed_and_atomic(self):
+        response = self.client.get('/api/system/settings', headers=self.headers)
+        self.assertIs(response.get_json()['data']['supplier_auto_discovery_enabled'], False)
+        response = self.client.put('/api/system/settings', headers=self.headers, json={
+            'supplier_auto_discovery_enabled': True,
+            'unconfigured_sender_filter_mode': 'allowlist',
+            'unconfigured_sender_filter_list': ['NOC@example.com'],
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['data']['unconfigured_sender_filter_list'], ['noc@example.com'])
+        before = self.db.get_system_settings()
+        response = self.client.put('/api/system/settings', headers=self.headers, json={
+            'guard_start_time': '2026-10-13 00:00:00',
+            'supplier_auto_discovery_enabled': 'false',
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.db.get_system_settings(), before)
+        response = self.client.put('/api/system/settings', headers=self.headers,
+                                   json={'unconfigured_sender_filter_list': []})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.db.get_system_settings(), before)
+
     def test_settings_default_empty(self):
         response = self.client.get('/api/system/settings', headers=self.headers)
         self.assertEqual(response.status_code, 200)

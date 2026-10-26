@@ -1153,6 +1153,7 @@ class PortalCutoverReportRpa:
         )
         submit.click()
         deadline = monotonic() + self._settings.timeout_ms / 1000
+        unknown_dialog_seen = False
         while monotonic() < deadline:
             if self._first_visible(page, (
                 self._settings.username_selector,
@@ -1183,10 +1184,13 @@ class PortalCutoverReportRpa:
                 '[role="dialog"]:visible',
             ))
             if dialog is not None:
-                raise CutoverReportManualInterventionError(
-                    "骨干线路提交后出现未识别弹窗，已停止自动上报，请转人工处理"
-                )
+                # 弹窗可能在成功文案检查后才出现，或正文尚未渲染；继续等待提交结果。
+                unknown_dialog_seen = True
             page.wait_for_timeout(200)
+        if unknown_dialog_seen:
+            raise CutoverReportManualInterventionError(
+                "骨干线路提交后出现未识别弹窗，已停止自动上报，请转人工处理"
+            )
         raise CutoverReportRpaError("骨干线路提交后未检测到成功结果")
 
     def _backbone_success_text(self, page: Page) -> str | None:

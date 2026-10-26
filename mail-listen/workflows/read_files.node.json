@@ -1,0 +1,60 @@
+{
+  "nodeId": "new_unconfigured_documents",
+  "name": "共享文档解析",
+  "intro": "解析本轮对话上传的文档，并返回对应文档内容",
+  "avatar": "core/workflow/template/readFiles",
+  "flowNodeType": "readFiles",
+  "showStatus": true,
+  "position": {
+    "x": 0,
+    "y": 0
+  },
+  "version": "4.9.2",
+  "inputs": [
+    {
+      "key": "fileUrlList",
+      "renderTypeList": [
+        "reference"
+      ],
+      "valueType": "arrayString",
+      "label": "文档链接",
+      "required": true,
+      "value": [
+        [
+          "new_unconfigured_entry",
+          "documentUrls"
+        ]
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "system_text",
+      "key": "system_text",
+      "label": "文档解析结果",
+      "description": "文档原文，由文件名和文档内容组成，多个文件之间通过横线隔开。",
+      "valueType": "string",
+      "type": "static",
+      "valueDesc": ""
+    },
+    {
+      "id": "system_rawResponse",
+      "key": "system_rawResponse",
+      "label": "原始响应",
+      "description": "工具的原始响应",
+      "valueType": "arrayObject",
+      "type": "static",
+      "valueDesc": ""
+    },
+    {
+      "id": "system_error_text",
+      "key": "system_error_text",
+      "type": "error",
+      "valueType": "string",
+      "label": "错误信息",
+      "valueDesc": "",
+      "description": ""
+    }
+  ],
+  "catchError": true
+}

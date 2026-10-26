@@ -237,9 +237,10 @@ class CutoverReportServiceTest(unittest.TestCase):
                 report_id=19,
             )
             self.assertEqual(
-                Path(result["screenshot_path"]),
-                expected_dir / "report-success.png",
+                result["screenshot_path"],
+                (expected_dir / "report-success.png").relative_to(root).as_posix(),
             )
+            self.assertTrue((root / result["screenshot_path"]).is_file())
             self.assertEqual(
                 result["operation_log"][0]["screenshot_filename"],
                 expected_dir.relative_to(root).as_posix()
@@ -340,6 +341,20 @@ class CutoverReportServiceTest(unittest.TestCase):
                 )
 
             self.assertEqual(result["status"], "success")
+            expected_dir = report_artifact_directory(
+                root,
+                mailbox_address="noc@example.com",
+                email_uid=2519,
+                report_date="2026-09-06",
+                email_record_id=135,
+                task_id=10,
+                report_id=21,
+            )
+            self.assertEqual(
+                result["screenshot_path"],
+                (expected_dir / "report-success.png").relative_to(root).as_posix(),
+            )
+            self.assertTrue((root / result["screenshot_path"]).is_file())
             self.assertEqual(
                 result["uploaded_filenames"],
                 ["方案.pdf", "source-email-2519.eml"],

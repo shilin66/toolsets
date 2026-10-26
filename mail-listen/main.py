@@ -12,6 +12,8 @@ from loguru import logger
 from api_server import app, get_portal_session_service
 from mail_listener import listener_manager
 from config import settings, log_format
+from database import email_db
+from unconfigured_mail_worker import MailAIWorker
 
 
 class MainService:
@@ -20,6 +22,7 @@ class MainService:
     def __init__(self):
         self.api_thread = None
         self.running = False
+        self.mail_ai_worker = MailAIWorker(email_db)
         
         # 配置日志（统一格式：带邮箱标识，见 config.log_format）
         logger.remove()
@@ -100,6 +103,7 @@ class MainService:
         logger.info("=" * 60)
         
         self.running = True
+        self.mail_ai_worker.start()
         
         # 启动 API 服务（在独立线程中）
         self.api_thread = threading.Thread(
@@ -141,6 +145,7 @@ class MainService:
         logger.info("=" * 60)
         
         self.running = False
+        self.mail_ai_worker.stop()
         
         # 停止邮件监听服务
         try:

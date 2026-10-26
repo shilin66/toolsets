@@ -1,4 +1,4 @@
-/* Mail Listen 管理台 · Vue 3 + Element Plus 入口
+/* Mail Listen 管理台 · Vue 3 + Naive UI 入口
  * 轻量路由（history API，语义与旧版 parseRoute 一致）+ 根组件外壳。
  * 依赖加载顺序：vendor → admin-shared.js → admin-views.js → 本文件
  */
@@ -51,8 +51,10 @@ function applyRoute(route) {
 
 function navigateTo(view) {
   const route = VIEW_ROUTES[view];
+  const cutoverListState = view === "cutoverTasks" && routeState.view === "cutoverEmailDetail"
+    ? history.state?.cutoverListState : null;
   if (window.location.pathname !== route || window.location.search) {
-    history.pushState({ view }, "", route);
+    history.pushState({ view, ...(cutoverListState ? { cutoverListState } : {}) }, "", route);
   }
   applyRoute(parseRoute());
 }
@@ -67,10 +69,14 @@ function navigateToSummary(view, params = {}) {
   applyRoute(parseRoute());
 }
 
-function openCutoverEmailDetail(emailRecordId) {
+function openCutoverEmailDetail(emailRecordId, cutoverListState = null) {
   const route = `/admin/cutover-emails/${emailRecordId}`;
   if (window.location.pathname !== route) {
-    history.pushState({ view: "cutoverEmailDetail", emailRecordId }, "", route);
+    // 保存到列表历史项供浏览器后退恢复，同时随详情携带供页面内返回使用。
+    if (cutoverListState) {
+      history.replaceState({ ...history.state, cutoverListState }, "");
+    }
+    history.pushState({ view: "cutoverEmailDetail", emailRecordId, cutoverListState }, "", route);
   }
   applyRoute(parseRoute());
 }
@@ -115,7 +121,6 @@ const AdminApp = defineComponent({
     // 登录守卫：未登录（无 API Key）时只渲染登录页，登录成功后主壳与各视图重新挂载并自动拉取数据
     const loggedIn = computed(() => Boolean(appStore.apiKey));
     const isDetail = computed(() => FULLSCREEN_VIEWS.includes(routeState.view));
-    const isSessionView = computed(() => routeState.view === "dispatchSession");
     const currentComponent = computed(() => VIEW_COMPONENTS[routeState.view]);
     // 状态栏文案：i18n key 标记随语言切换动态翻译
     const statusDisplay = computed(() => renderStatusText(appStore.statusText));
@@ -163,25 +168,20 @@ const AdminApp = defineComponent({
     }
 
     watch(
-      () => routeState.view,
-      (view, previousView) => {
-        if (view !== previousView && !FULLSCREEN_VIEWS.includes(view) && appStore.apiKey) {
+      () => [routeState.view, appStore.apiKey],
+      ([view, apiKey]) => {
+        if (view === 'cutoverTasks' && apiKey) {
           loadOperationsSummary();
         }
       },
+      { immediate: true },
     );
-
-    onMounted(() => {
-      if (appStore.apiKey) {
-        loadOperationsSummary();
-      }
-    });
 
     return {
       appStore, routeState, viewKey,
-      loggedIn, isDetail, isSessionView, currentComponent, activeMenu, viewTitle, statusDisplay,
+      loggedIn, isDetail, currentComponent, activeMenu, viewTitle, statusDisplay,
       portalEnvironmentTone, portalEnvironmentLabel,
-      epLocale,
+      uiLocale,
       loginComponent: ViewLogin,
       detailComponent: ViewCutoverEmailDetail,
       supplierFormComponent: ViewSupplierForm,
@@ -191,94 +191,96 @@ const AdminApp = defineComponent({
     };
   },
   template: `
-    <el-config-provider :locale="epLocale">
+    <ui-config-provider :locale="uiLocale">
     <component v-if="!loggedIn" :is="loginComponent"></component>
-    <el-container v-else class="app-shell">
-      <el-aside :width="appStore.menuCollapsed ? '64px' : '224px'" class="sidebar"
+    <ui-container v-else class="app-shell">
+      <ui-aside :width="appStore.menuCollapsed ? '64px' : '224px'" class="sidebar"
                 :class="{ 'is-collapsed': appStore.menuCollapsed }">
         <div class="brand-block">
           <div class="brand-mark">NOC</div>
           <div v-show="!appStore.menuCollapsed">
-            <h1>{{ $t('common.brandName') }}</h1>
+            <strong class="brand-name">{{ $t('common.brandName') }}</strong>
             <p>{{ $t('common.brandTagline') }}</p>
           </div>
         </div>
-        <el-menu :default-active="activeMenu" class="side-menu" @select="navigateTo"
+        <p v-show="!appStore.menuCollapsed" class="sidebar-section-label">{{ $t('common.workspace') }}</p>
+        <ui-menu :default-active="activeMenu" class="side-menu" @select="navigateTo"
                  :collapse="appStore.menuCollapsed" :collapse-transition="false">
-          <el-menu-item index="suppliers" :title="appStore.menuCollapsed ? $t('nav.suppliers') : null">
-            <el-icon><office-building></office-building></el-icon>
+          <ui-menu-item index="suppliers" :title="appStore.menuCollapsed ? $t('nav.suppliers') : null">
+            <ui-icon><office-building></office-building></ui-icon>
             <span>{{ $t('nav.suppliers') }}</span>
-          </el-menu-item>
+          </ui-menu-item>
           <!-- 邮件记录菜单已隐藏：视图与路由 /admin/emails 保留，仍可经运营指标卡片或直接访问 URL 进入 -->
-          <el-menu-item index="cutoverTasks" :title="appStore.menuCollapsed ? $t('nav.cutoverTasks') : null">
-            <el-icon><DocumentChecked></DocumentChecked></el-icon>
+          <ui-menu-item index="cutoverTasks" :title="appStore.menuCollapsed ? $t('nav.cutoverTasks') : null">
+            <ui-icon><DocumentChecked></DocumentChecked></ui-icon>
             <span>{{ $t('nav.cutoverTasks') }}</span>
-          </el-menu-item>
-          <el-menu-item index="circuits" :title="appStore.menuCollapsed ? $t('nav.circuits') : null">
-            <el-icon><share></share></el-icon>
+          </ui-menu-item>
+          <ui-menu-item index="circuits" :title="appStore.menuCollapsed ? $t('nav.circuits') : null">
+            <ui-icon><share></share></ui-icon>
             <span>{{ $t('nav.circuits') }}</span>
-          </el-menu-item>
-          <el-menu-item index="mailAccounts" :title="appStore.menuCollapsed ? $t('nav.mailAccounts') : null">
-            <el-icon><MessageBox /></el-icon>
+          </ui-menu-item>
+          <ui-menu-item index="mailAccounts" :title="appStore.menuCollapsed ? $t('nav.mailAccounts') : null">
+            <ui-icon><MessageBox /></ui-icon>
             <span>{{ $t('nav.mailAccounts') }}</span>
-          </el-menu-item>
-          <el-menu-item index="dispatchSession" :title="appStore.menuCollapsed ? $t('nav.dispatchSession') : null">
-            <el-icon><Lock /></el-icon>
+          </ui-menu-item>
+          <ui-menu-item index="dispatchSession" :title="appStore.menuCollapsed ? $t('nav.dispatchSession') : null">
+            <ui-icon><Lock /></ui-icon>
             <span>{{ $t('nav.dispatchSession') }}</span>
-          </el-menu-item>
-          <el-menu-item index="settings" :title="appStore.menuCollapsed ? $t('nav.settings') : null">
-            <el-icon><Setting /></el-icon>
+          </ui-menu-item>
+          <ui-menu-item index="settings" :title="appStore.menuCollapsed ? $t('nav.settings') : null">
+            <ui-icon><Setting /></ui-icon>
             <span>{{ $t('nav.settings') }}</span>
-          </el-menu-item>
-        </el-menu>
-        <el-button class="sidebar-toggle" text
+          </ui-menu-item>
+        </ui-menu>
+        <ui-button class="sidebar-toggle" text
                    :aria-label="appStore.menuCollapsed ? $t('common.expandMenu') : $t('common.collapseMenu')"
                    :title="appStore.menuCollapsed ? $t('common.expandMenu') : $t('common.collapseMenu')"
                    @click="toggleMenu">
-          <el-icon aria-hidden="true"><Expand v-if="appStore.menuCollapsed" /><Fold v-else /></el-icon>
+          <ui-icon aria-hidden="true"><Expand v-if="appStore.menuCollapsed" /><Fold v-else /></ui-icon>
           <span v-show="!appStore.menuCollapsed">{{ $t('common.collapseMenu') }}</span>
-        </el-button>
-      </el-aside>
+        </ui-button>
+      </ui-aside>
 
-      <el-container>
-        <el-header class="topbar" height="72px">
-          <div>
-            <p class="eyebrow">Operations Console</p>
-            <h2>{{ viewTitle }}</h2>
-          </div>
+      <ui-container>
+        <ui-header class="topbar" height="56px">
+          <nav class="topbar-breadcrumb" :aria-label="$t('common.pageLocation')">
+            <span>{{ $t('common.brandName') }}</span>
+            <ui-icon aria-hidden="true"><ArrowRight /></ui-icon>
+            <template v-if="isDetail">
+              <ui-button link class="topbar-parent-link" @click="navigateTo(activeMenu)">{{ $t('nav.' + activeMenu) }}</ui-button>
+              <ui-icon aria-hidden="true"><ArrowRight /></ui-icon>
+            </template>
+            <h1 class="topbar-title" aria-current="page">{{ viewTitle }}</h1>
+          </nav>
           <div class="topbar-user">
             <div class="rpa-environment-badge" :class="portalEnvironmentTone"
                  role="status" :aria-label="$t('common.rpaEnvironmentLabel', { environment: portalEnvironmentLabel })">
-              <el-icon aria-hidden="true">
+              <ui-icon aria-hidden="true">
                 <WarningFilled v-if="appStore.portalEnvironment === 'production'" />
                 <InfoFilled v-else />
-              </el-icon>
+              </ui-icon>
               <span class="rpa-environment-badge__copy">
                 <span>RPA</span>
                 <strong>{{ portalEnvironmentLabel }}</strong>
               </span>
             </div>
-            <el-button text class="topbar-logout" @click="handleLogout">
-              <el-icon><SwitchButton /></el-icon>
+            <ui-button text class="topbar-logout" @click="handleLogout">
+              <ui-icon><SwitchButton /></ui-icon>
               {{ $t('common.logout') }}
-            </el-button>
+            </ui-button>
           </div>
-        </el-header>
+        </ui-header>
 
-        <el-main class="workspace">
-          <section v-if="!isDetail && !isSessionView" class="operations-summary" aria-labelledby="operations-summary-title">
+        <ui-main class="workspace">
+          <section v-if="routeState.view === 'cutoverTasks'" class="operations-summary" aria-labelledby="operations-summary-title">
             <div class="operations-summary-intro">
               <div class="operations-summary-heading">
-                <p>{{ $t('operations.title') }}</p>
-                <h3 id="operations-summary-title">{{ $t('operations.subtitle') }}</h3>
+                <h2 id="operations-summary-title">{{ $t('operations.title') }}</h2>
               </div>
-              <el-button text class="operations-summary-refresh"
+              <ui-action class="operations-summary-refresh" icon="RefreshRight"
                          :loading="appStore.operationsSummaryLoading"
-                         :aria-label="$t('operations.refresh')"
-                         @click="loadOperationsSummary">
-                <el-icon><RefreshRight /></el-icon>
-                {{ $t('common.refresh') }}
-              </el-button>
+                         :label="$t('operations.refresh')"
+                         @click="loadOperationsSummary"></ui-action>
               <p class="operations-summary-description">{{ $t('operations.description') }}</p>
               <p v-if="appStore.operationsSummaryError" class="operations-summary-error" role="alert">
                 {{ $t('operations.loadFailed') }}
@@ -293,7 +295,7 @@ const AdminApp = defineComponent({
                 <strong>{{ summaryValue(appStore.operationsSummary.pending_tasks) }}</strong>
                 <span class="operations-metric-foot">
                   {{ $t('operations.pendingHint') }}
-                  <el-icon aria-hidden="true"><ArrowRight /></el-icon>
+                  <ui-icon aria-hidden="true"><ArrowRight /></ui-icon>
                 </span>
               </button>
 
@@ -311,7 +313,7 @@ const AdminApp = defineComponent({
                     : appStore.operationsSummary.failed_tasks > 0
                       ? $t('operations.failedHint')
                       : $t('operations.failedClear') }}
-                  <el-icon aria-hidden="true"><ArrowRight /></el-icon>
+                  <ui-icon aria-hidden="true"><ArrowRight /></ui-icon>
                 </span>
               </button>
 
@@ -321,7 +323,7 @@ const AdminApp = defineComponent({
                 <strong>{{ summaryValue(appStore.operationsSummary.today_emails) }}</strong>
                 <span class="operations-metric-foot">
                   {{ $t('operations.todayHint') }}
-                  <el-icon aria-hidden="true"><ArrowRight /></el-icon>
+                  <ui-icon aria-hidden="true"><ArrowRight /></ui-icon>
                 </span>
               </button>
 
@@ -331,7 +333,7 @@ const AdminApp = defineComponent({
                 <strong>{{ latestEmailTime(appStore.operationsSummary.last_email_at) }}</strong>
                 <span class="operations-metric-foot">
                   {{ latestEmailDate(appStore.operationsSummary.last_email_at) }}
-                  <el-icon aria-hidden="true"><ArrowRight /></el-icon>
+                  <ui-icon aria-hidden="true"><ArrowRight /></ui-icon>
                 </span>
               </button>
             </div>
@@ -345,21 +347,25 @@ const AdminApp = defineComponent({
                      :supplier-id="routeState.supplierId"></component>
           <component v-else :is="currentComponent"
                      :key="viewKey + '-' + routeState.view + routeState.query"></component>
-        </el-main>
-      </el-container>
-    </el-container>
-    </el-config-provider>
+        </ui-main>
+      </ui-container>
+    </ui-container>
+    </ui-config-provider>
   `,
 });
 
 // ==================== 挂载 ====================
 const app = createApp(AdminApp);
-app.use(ElementPlus);
+NocUI.install(app);
 app.use(i18n);
 for (const [name, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(name, component);
 }
 app.component("TaskDetailPanel", TaskDetailPanel);
+app.component('DiscoverySettings', DiscoverySettings);
+app.component('SupplierDraftsTable', SupplierDraftsTable);
+app.component('SupplierDraftEditor', ViewSupplierForm);
+app.component('MailAnalysisPanel', MailAnalysisPanel);
 
 initRouting();
 app.mount("#app");

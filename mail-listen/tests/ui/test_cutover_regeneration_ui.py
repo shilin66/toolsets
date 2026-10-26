@@ -1,6 +1,7 @@
 import json
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from playwright.sync_api import sync_playwright, expect
@@ -51,7 +52,7 @@ class CutoverRegenerationUiTest(unittest.TestCase):
         self.page.goto(f"http://127.0.0.1:{self.server.server_port}/admin/cutover-emails/{self.api.email_records_id}")
         self.page.get_by_role("textbox", name="API Key").fill("test-key")
         self.page.get_by_role("button", name="登录", exact=True).click()
-        self.page.locator(".email-content-collapse .el-collapse-item__header").filter(has_text="提取解析结果").click()
+        self.page.locator(".email-content-collapse .n-collapse-item__header").filter(has_text="提取解析结果").click()
         self.editor = self.page.locator(".extraction-editor textarea")
         expect(self.editor).to_be_visible()
 
@@ -71,21 +72,43 @@ class CutoverRegenerationUiTest(unittest.TestCase):
         expect(self.page.locator(".extraction-toolbar")).to_contain_text("RT")
         self.assertEqual(self.errors, [])
 
+    def test_json_editor_fills_panel_width_at_desktop_sizes(self):
+        original = self.editor.input_value()
+        for width in (1280, 1440, 1920):
+            with self.subTest(width=width):
+                self.page.set_viewport_size({'width': width, 'height': 1000})
+                self.page.wait_for_function("document.getAnimations().every(a => a.playState !== 'running' || a.effect.getTiming().iterations === Infinity)")
+                metrics = self.editor.evaluate('''el => {
+                    const editor = el.closest('.extraction-editor');
+                    return {textWidth:el.getBoundingClientRect().width,
+                        editorWidth:editor.getBoundingClientRect().width,
+                        overflow:editor.scrollWidth-editor.clientWidth};
+                }''')
+                self.assertGreaterEqual(metrics['textWidth'], metrics['editorWidth'] - 50)
+                self.assertLessEqual(metrics['overflow'], 1)
+                self.assertEqual(self.editor.input_value(), original)
+                expect(self.editor).to_have_attribute('aria-label', '提取解析结果')
+                self.page.locator('.extraction-toolbar').scroll_into_view_if_needed()
+                evidence = Path(__file__).resolve().parents[2] / '.qa' / 'extraction-editor'
+                evidence.mkdir(parents=True, exist_ok=True)
+                self.page.screenshot(path=str(evidence / f'editor-{width}.png'))
+        self.assertEqual(self.errors, [])
+
     def test_unsaved_extraction_cannot_regenerate_from_matching_area(self):
         before = self.api.db.get_cutover_task(self.task_id)
         payload = json.loads(self.editor.input_value())
         payload["cutover_reason"] = "尚未保存的原因"
         self.editor.fill(json.dumps(payload, ensure_ascii=False))
         self.page.get_by_role("button", name="重新生成割接任务", exact=True).click()
-        expect(self.page.locator(".el-message").filter(has_text="未保存")).to_be_visible()
+        expect(self.page.locator(".n-message").filter(has_text="未保存")).to_be_visible()
         self.assertEqual(self.requests, [])
         self.assertEqual(self.api.db.get_cutover_task(self.task_id), before)
         self.assertEqual(self.errors, [])
 
     def test_matching_regeneration_keeps_binding_and_config_personnel(self):
         self.page.get_by_role("button", name="重新生成割接任务", exact=True).click()
-        self.page.locator(".el-message-box").get_by_role("button", name="重新生成", exact=True).click()
-        expect(self.page.locator(".el-message").filter(has_text="割接任务已生成")).to_be_visible()
+        self.page.locator(".n-dialog").get_by_role("button", name="重新生成", exact=True).click()
+        expect(self.page.locator(".n-message").filter(has_text="割接任务已生成")).to_be_visible()
         task = self.api.db.get_cutover_task(self.task_id)
         self.assertEqual(fixture.api_server.extraction_lines(task["fill_payload"])[0]["bound_circuit_id"], fixture.BACKBONE_CIRCUIT["circuit_id"])
         self.assertEqual(task["fill_result"]["backbone_circuits"][0]["人员信息"]["操作审核人姓名"], "RT NOC")
@@ -96,8 +119,8 @@ class CutoverRegenerationUiTest(unittest.TestCase):
         before = self.api.db.get_cutover_task(self.task_id)
         self.page.locator('.line-binding-controls input[aria-label="Circuit ID"]').fill("unsaved-circuit")
         self.page.get_by_role("button", name="重新生成割接任务", exact=True).click()
-        expect(self.page.locator(".el-message").filter(has_text="未保存")).to_be_visible()
-        expect(self.page.locator(".el-message-box")).not_to_be_visible()
+        expect(self.page.locator(".n-message").filter(has_text="未保存")).to_be_visible()
+        expect(self.page.locator(".n-dialog")).not_to_be_visible()
         self.assertEqual(self.requests, [])
         self.assertEqual(self.api.db.get_cutover_task(self.task_id), before)
         self.assertEqual(self.errors, [])
@@ -109,8 +132,8 @@ class CutoverRegenerationUiTest(unittest.TestCase):
         self.editor.fill(json.dumps(payload, ensure_ascii=False))
         with patch.object(fixture.api_server, "ensure_source_email_archived"):
             self.page.get_by_role("button", name="生成割接任务", exact=True).click()
-            self.page.locator(".el-message-box").get_by_role("button", name="重新生成", exact=True).click()
-            expect(self.page.locator(".el-message").filter(has_text="割接任务已生成")).to_be_visible()
+            self.page.locator(".n-dialog").get_by_role("button", name="重新生成", exact=True).click()
+            expect(self.page.locator(".n-message").filter(has_text="割接任务已生成")).to_be_visible()
         task = self.api.db.get_cutover_task(self.task_id)
         self.assertEqual(task["fill_payload"]["supplier"], "RT")
         self.assertEqual(task["fill_payload"]["cutover_reason"], "用户修改后的原因")
@@ -125,8 +148,8 @@ class CutoverRegenerationUiTest(unittest.TestCase):
         payload["cutover_reason"] = "取消保存"
         self.editor.fill(json.dumps(payload, ensure_ascii=False))
         self.page.get_by_role("button", name="生成割接任务", exact=True).click()
-        self.page.locator(".el-message-box").get_by_role("button", name="取消", exact=True).click()
-        expect(self.page.locator(".el-message-box")).not_to_be_visible()
+        self.page.locator(".n-dialog").get_by_role("button", name="取消", exact=True).click()
+        expect(self.page.locator(".n-dialog")).not_to_be_visible()
         self.assertEqual(self.api.db.get_cutover_task(self.task_id), before)
         self.assertEqual(self.api.db.get_email_record_by_id(self.api.email_records_id)["line_match_payload"], record["line_match_payload"])
         self.assertEqual(self.requests, [])

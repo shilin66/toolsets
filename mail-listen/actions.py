@@ -12,7 +12,7 @@ from loguru import logger
 from models import EmailMessage, ActionResult, APIRequest
 from config import settings
 from database import email_db
-from email_attachments import build_attachment_url
+from email_attachments import build_attachment_url, is_calendar_attachment
 from html_image import render_email_body_to_image_url
 from supplier_config import SupplierConfigRepository
 
@@ -118,8 +118,17 @@ class APIForwardAction(BaseAction):
     
     def execute(self, email: EmailMessage, params: Dict[str, Any]) -> ActionResult:
         """转发邮件到API"""
-        self._record_forward_result(email, params, "forwarding")
+        claimed = False
         try:
+            record = self._email_record(email, params)
+            if record:
+                if not self.db.claim_email_api_forward(record['id']):
+                    return ActionResult(success=False, message='邮件正在删除或解析中，无法开始解析')
+                claimed = True
+                # 后续读取/回写固定同一邮箱的记录，避免同 UID 多邮箱时误关联。
+                params = {**params, '_email_records_id': record['id']}
+            elif params.get('_email_records_id') is not None or self.db.is_email_deleted(email.uid):
+                return ActionResult(success=False, message='邮件已删除，无法开始解析')
             # 只有确定进行 API 转发的邮件才渲染正文图片（解析阶段不再转图）；
             # 渲染失败返回 None 不阻断转发，转发内容中不携带 image_url 即可
             if not email.image_url:
@@ -190,7 +199,8 @@ class APIForwardAction(BaseAction):
                 success=False,
                 message=f"邮件解析异常: {str(e)}"
             )
-            self._record_forward_result(email, params, "failed", result.message)
+            if claimed:
+                self._record_forward_result(email, params, "failed", result.message)
             return result
 
     def _email_record(self, email: EmailMessage, params: Dict[str, Any]):
@@ -245,6 +255,8 @@ class APIForwardAction(BaseAction):
         category = params.get('category', '')
         email_record = self._email_record(email, params)
         email_records_id = email_record.get('id') if email_record else None
+        # 同时覆盖历史记录的重新分析和未配置供应商队列的独立重试。
+        attachments = [path for path in email.attachments if not is_calendar_attachment(path)]
 
         # 构建邮件内容字典
         content_dict = {
@@ -253,10 +265,10 @@ class APIForwardAction(BaseAction):
             "subject": email.subject,
             "sender": email.sender,
             "content": email.html_content or email.content,
-            "attachments": email.attachments,
+            "attachments": attachments,
             "attachment_urls": [
                 build_attachment_url(relative_path)
-                for relative_path in email.attachments
+                for relative_path in attachments
             ],
             "supplier_name": None,
             "supplier_can_reply_directly": None,

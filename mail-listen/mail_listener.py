@@ -20,6 +20,7 @@ from actions import ActionManager
 from models import EmailMessage, FilterRule
 from database import email_db
 from supplier_config import SupplierConfigRepository
+from unconfigured_mail import normalize_sender
 from mail_accounts import (
     MailAccountConfig,
     list_enabled_account_configs,
@@ -107,6 +108,7 @@ class MailListener:
             logger.error(f"无法连接到邮箱服务器，监听启动失败: {account.email_address}")
             return False
 
+        self._check_incremental_emails()
         use_idle = False
         if settings.imap_idle_support:
             if self.email_client.test_idle_support():
@@ -199,6 +201,7 @@ class MailListener:
     def _check_emails(self):
         """检查新邮件"""
         try:
+            self._check_incremental_emails()
             # 获取未读邮件
             logger.info("📧 正在检查新邮件...")
             emails = self.email_client.get_unread_messages()
@@ -227,6 +230,7 @@ class MailListener:
     def _check_specific_emails(self, mail_uids: List[int]):
         """检查特定UID的邮件"""
         try:
+            self._check_incremental_emails()
             logger.info(f"📧 正在处理特定邮件 UID: {mail_uids}")
             emails = self.email_client.get_emails_by_uids(mail_uids)
             
@@ -251,6 +255,53 @@ class MailListener:
             import traceback
             logger.error(f"详细错误信息: {traceback.format_exc()}")
     
+    def _check_incremental_emails(self):
+        from unconfigured_mail_repository import UnconfiguredMailRepository
+
+        client = self.email_client
+        if not client.connected and not client.connect():
+            return
+        repo = UnconfiguredMailRepository(email_db)
+        try:
+            info = client.client.folder_status('INBOX', ['UIDVALIDITY', 'UIDNEXT'])
+            validity, upper = int(info[b'UIDVALIDITY']), int(info[b'UIDNEXT'])
+            lower = repo.cursor(self.account.email_address, 'INBOX', validity, upper)
+            if lower >= upper:
+                return
+            uids = sorted(client.client.search(['UID', f'{lower}:{upper - 1}']))
+            batch = uids[:settings.max_emails_per_batch]
+            for uid in batch:
+                if not email_db.email_exists(uid, receiver=self.account.email_address):
+                    message = client._parse_email(uid)
+                    if message is None:
+                        raise RuntimeError(f'新邮件 UID {uid} 抓取失败，游标保留')
+                    if self._skip_own_sender(message):
+                        repo.advance_cursor(self.account.email_address, 'INBOX', validity, uid + 1)
+                        continue
+                    flags = client.client.fetch(uid, ['FLAGS']).get(uid, {}).get(b'FLAGS', ())
+                    was_read = b'\\Seen' in flags or '\\Seen' in flags
+                    supplier = self.supplier_config_repository.get_by_email(message.sender)
+                    if supplier:
+                        self._process_email(message)
+                    else:
+                        repo.ingest(message, self.account.email_address, was_read)
+                        if self.on_email_received:
+                            self.on_email_received()
+                    record = email_db.get_email_record(uid, self.account.email_address)
+                    if record is None:
+                        if email_db.is_email_deleted(uid, self.account.email_address):
+                            repo.advance_cursor(self.account.email_address, 'INBOX', validity, uid + 1)
+                            continue
+                        raise RuntimeError(f'新邮件 UID {uid} 未完成入库，游标保留')
+                    if settings.mark_as_read:
+                        client.client.add_flags(uid, ['\\Seen'])
+                        email_db.update_email_read_state(record['id'], True)
+                repo.advance_cursor(self.account.email_address, 'INBOX', validity, uid + 1)
+            if len(batch) == len(uids):
+                repo.advance_cursor(self.account.email_address, 'INBOX', validity, upper)
+        except Exception as exc:
+            logger.error('新邮件增量接入失败；保留持久游标，下一次从失败位置继续：{}', str(exc))
+
     def _process_emails_sequential(self, emails: List[EmailMessage]):
         """顺序处理邮件"""
         logger.info(f"📝 使用顺序处理模式处理 {len(emails)} 封邮件")
@@ -290,11 +341,24 @@ class MailListener:
         
         logger.info(f"🎯 并发处理完成: 成功 {completed_count} 封，失败 {failed_count} 封")
     
+    def _skip_own_sender(self, email: EmailMessage) -> bool:
+        """只跳过发件人与当前收件账号相同的邮件，原因仅记日志。"""
+        sender = normalize_sender(email.sender)
+        if not sender:
+            return False
+        own_sender = sender == normalize_sender(self.account.email_address)
+        if own_sender:
+            logger.info('跳过自身邮箱来信 account={} uid={} sender={} reason_code=own_sender',
+                        self.account.email_address, email.uid, sender)
+        return own_sender
+
     def _process_email(self, email: EmailMessage):
         """处理单封邮件"""
         logger.info(f"处理邮件: {email.subject} (来自: {email.sender}) (时间: {email.received_date})")
         
         try:
+            if self._skip_own_sender(email):
+                return
             # 检查邮件是否已处理（按账号地址隔离，避免多邮箱 UID 碰撞）
             if email_db.email_exists(email.uid, receiver=self.account.email_address):
                 logger.info(f"邮件 UID {email.uid} 已处理过，跳过")
@@ -330,7 +394,11 @@ class MailListener:
                 logger.warning(f"邮件 UID {email.uid} 记录失败（可能已存在）")
                 return
 
-            duplicate_email = email_db.find_duplicate_email_record(email.uid)
+            record = email_db.get_email_record(email.uid, self.account.email_address)
+            if record is None:
+                logger.info(f"邮件 UID {email.uid} 已不在当前邮箱记录中，停止处理")
+                return
+            duplicate_email = email_db.find_duplicate_email_record(email.uid, record_id=record['id'])
             if duplicate_email:
                 logger.info(
                     f"邮件 UID {email.uid} 与已记录邮件 UID "
@@ -348,10 +416,6 @@ class MailListener:
             
             # 执行匹配规则的操作
             matched_rule_names = []
-            email_record = email_db.get_email_record(
-                email.uid,
-                self.account.email_address,
-            )
             
             for rule in matched_rules:
                 logger.info(f"执行操作: {rule.action} (规则: {rule.name})")
@@ -362,9 +426,7 @@ class MailListener:
                     email,
                     {
                         **rule.action_params,
-                        "_email_records_id": (
-                            email_record.get("id") if email_record else None
-                        ),
+                        "_email_records_id": record['id'],
                     },
                 )
                 

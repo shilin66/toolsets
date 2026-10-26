@@ -417,7 +417,7 @@ class SupplierConfigApiTest(unittest.TestCase):
         options = response.get_json()["data"]
         self.assertEqual(
             options,
-            ["割接通知", "割接改期", "割接取消", "割接提醒", "故障邮件"],
+            ["割接通知", "割接改期", "割接取消", "割接提醒"],
         )
 
     def test_email_type_samples_can_be_created_and_updated(self):
@@ -450,6 +450,7 @@ class SupplierConfigApiTest(unittest.TestCase):
 
         classify_prompt = created["supplier_mail_classify_prompt"]
         self.assertIn("邮件分类助手", classify_prompt)
+        self.assertNotIn("故障邮件", classify_prompt)
         # 分类兜底类型始终存在，且不带样本段
         self.assertIn("* 其它：", classify_prompt)
         self.assertNotIn("类型：其它", classify_prompt)
@@ -564,19 +565,72 @@ class SupplierConfigApiTest(unittest.TestCase):
         created = attachment_response.get_json()["data"]
         self.assertTrue(created["email_type_samples"]["割接通知"]["content_in_attachment"])
 
-    def test_email_type_samples_reject_unknown_type(self):
-        unknown_response = self.client.post(
+    def test_custom_email_types_round_trip_and_drive_classification_prompt(self):
+        response = self.client.post(
             "/api/suppliers",
             json={
                 "name": "TT",
                 "email": "noc@tt.example.com",
                 "cutover_extract_prompt": "提取割接字段。",
-                "email_type_samples": {"未知类型": {"subject": "主题", "content": "正文"}},
+                "email_type_samples": {"维护进展": {"subject": "维护进度更新", "content": "维护完成 50%"}},
             },
             headers=self.headers,
         )
-        self.assertEqual(unknown_response.status_code, 400)
-        self.assertIn("参数校验失败", unknown_response.get_json()["message"])
+        self.assertEqual(response.status_code, 201)
+        created = response.get_json()['data']
+        self.assertIn('维护进展', created['email_type_samples'])
+        self.assertIn('* 维护进展：', created['supplier_mail_classify_prompt'])
+        self.assertIn('样本主题：维护进度更新', created['supplier_mail_classify_prompt'])
+        self.assertNotIn('故障邮件', created['supplier_mail_classify_prompt'])
+        url = f"/api/suppliers/{created['id']}"
+        self.assertEqual(self.client.get(url, headers=self.headers).get_json()['data']['email_type_samples'],
+                         created['email_type_samples'])
+        renamed = self.client.patch(url, headers=self.headers,
+            json={'email_type_samples': {'维护完成': {'subject': '完成通知', 'content': '维护已完成'}}})
+        self.assertEqual(renamed.status_code, 200)
+        prompt = renamed.get_json()['data']['supplier_mail_classify_prompt']
+        self.assertIn('* 维护完成：', prompt)
+        self.assertNotIn('维护进展', prompt)
+        cleared = self.client.patch(url, headers=self.headers, json={'email_type_samples': {}})
+        self.assertEqual(cleared.status_code, 200)
+        self.assertNotIn('维护完成', cleared.get_json()['data']['supplier_mail_classify_prompt'])
+
+    def test_invalid_category_names_cannot_replace_existing_samples(self):
+        original = {'维护进展': {'subject': '原主题', 'content': '原正文', 'content_in_attachment': False}}
+        created = self.client.post('/api/suppliers', headers=self.headers, json={
+            'name': 'TT', 'email': 'noc@tt.example.com', 'prompt_mode': 'auto',
+            'email_type_samples': original,
+        })
+        self.assertEqual(created.status_code, 201)
+        url = f"/api/suppliers/{created.get_json()['data']['id']}"
+        for invalid_name in ('', '其它', ' 维护进展 ', '维护\n进展', '维护\x00进展', '维护\x7f进展', '类' * 33):
+            with self.subTest(name=repr(invalid_name)):
+                samples = {**original, invalid_name: {'subject': '替换主题', 'content': '替换正文'}}
+                rejected = self.client.patch(url, headers=self.headers, json={'email_type_samples': samples})
+                self.assertEqual(rejected.status_code, 400)
+                self.assertEqual(self.client.get(url, headers=self.headers).get_json()['data']['email_type_samples'], original)
+        rejected_create = self.client.post('/api/suppliers', headers=self.headers, json={
+            'name': 'Other', 'email': 'other@tt.example.com', 'prompt_mode': 'auto',
+            'email_type_samples': {'割接通知': {'subject': '原主题', 'content': '原正文'},
+                                   ' 割接通知 ': {'subject': '覆盖主题', 'content': '覆盖正文'}},
+        })
+        self.assertEqual(rejected_create.status_code, 400)
+
+    def test_stored_fault_and_custom_samples_remain_available(self):
+        created = self.client.post('/api/suppliers', headers=self.headers, json={
+            'name': 'Old supplier', 'email': 'old@example.com', 'prompt_mode': 'auto',
+        }).get_json()['data']
+        with self.db.get_connection() as connection:
+            connection.execute('UPDATE supplier_configs SET email_type_samples=? WHERE id=?',
+                (json.dumps({'故障邮件': '历史故障正文', '维护进展': {'subject': '历史进度', 'content': '历史进度正文'}}),
+                 created['id']))
+            connection.commit()
+        fetched = self.client.get(f"/api/suppliers/{created['id']}", headers=self.headers).get_json()['data']
+        self.assertEqual(fetched['email_type_samples']['故障邮件']['content'], '历史故障正文')
+        self.assertIn('* 故障邮件：', fetched['supplier_mail_classify_prompt'])
+        self.assertIn('历史故障正文', fetched['supplier_mail_classify_prompt'])
+        self.assertIn('* 维护进展：', fetched['supplier_mail_classify_prompt'])
+        self.assertIn('历史进度正文', fetched['supplier_mail_classify_prompt'])
 
     def test_preview_extract_calls_fastgpt_with_extract_preview_flag(self):
         captured = {}

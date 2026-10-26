@@ -2150,12 +2150,13 @@ class CutoverTaskApiTest(unittest.TestCase):
         )
 
     def test_switch_customer_task_to_backbone_merges_systems_with_same_window(self):
-        task_id = self.first_task_id(self.post_fill(self.fill_payload()))
+        payload = self.mixed_fill_payload()
+        task_id = self.first_task_id(self.post_fill(payload))
         task = self.db.get_cutover_task(task_id)
         fill_result = task["fill_result"]
         second_circuit = dict(fill_result["circuits"][0])
         second_circuit["电路代号"] = "EU202510000942"
-        fill_result["circuits"].append(second_circuit)
+        fill_result["circuits"] = [fill_result["circuits"][0], second_circuit]
         self.db.update_cutover_task(task_id, fill_result=fill_result)
 
         response = self.client.post(
@@ -2171,6 +2172,38 @@ class CutoverTaskApiTest(unittest.TestCase):
             backbone_circuits[0]["割接对象"]["系统名称"],
             ["EU202510000941", "EU202510000942"],
         )
+
+    def test_switch_customer_task_to_backbone_separates_impact_types(self):
+        payload = self.fill_payload()
+        original_line = payload["line_array_info"]["data"][0]
+        payload["line_array_info"]["data"] = [
+            dict(original_line, ImpactType=impact_type, ImpactDuration=duration)
+            for impact_type, duration in (
+                ("protected", "0m"),
+                ("interrupted", "365m"),
+                ("momentary_interrupted", "1m"),
+            )
+        ]
+        task_id = self.first_task_id(self.post_fill(payload))
+        task = self.db.get_cutover_task(task_id)
+        fill_result = task["fill_result"]
+        fill_result["circuits"] = [
+            dict(fill_result["circuits"][0], 电路代号=f"BB-{index}")
+            for index in range(3)
+        ]
+        self.db.update_cutover_task(task_id, fill_result=fill_result)
+
+        response = self.client.post(
+            f"/api/cutover/tasks/{task_id}/switch-type",
+            headers=self.headers, json={"line_type": "backbone"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = self.db.get_cutover_task(task_id)["fill_result"]
+        forms = result["backbone_circuits"]
+        self.assertEqual([form["基本信息"]["中断类型"] for form in forms], ["不中断", "中断", "瞬断"])
+        self.assertEqual([form["割接对象"]["系统名称"] for form in forms], [["BB-0"], ["BB-1"], ["BB-2"]])
+        self.assertEqual(result["backbone_interruption_minutes"], [0, 365, 1])
 
     def test_switch_interrupted_customer_task_adds_backbone_interruption_reason(self):
         # Given

@@ -151,7 +151,9 @@ def _customer_report_outcome(
         "status": "success",
         "final_url": result.final_url,
         "uploaded_filename": result.uploaded_filename,
-        "screenshot_path": str(result.success_screenshot_path),
+        "screenshot_path": result.success_screenshot_path.resolve()
+        .relative_to(artifact_root.resolve())
+        .as_posix(),
         "portal_task_number": result.portal_task_number,
         "operation_log": _serialize_operation_log(
             result.operation_log,
@@ -183,7 +185,9 @@ def _backbone_report_outcome(
         "status": "success",
         "final_url": results[-1].final_url,
         "uploaded_filenames": uploaded_filenames,
-        "screenshot_path": str(results[-1].success_screenshot_path),
+        "screenshot_path": results[-1].success_screenshot_path.resolve()
+        .relative_to(artifact_root.resolve())
+        .as_posix(),
         "portal_task_number": "、".join(task_numbers),
         "portal_task_numbers": task_numbers,
         "operation_log": _serialize_operation_log(

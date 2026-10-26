@@ -1,9 +1,10 @@
 import json
 import sqlite3
+import unicodedata
 from datetime import datetime
 from typing import Any, Literal, TypedDict
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from cutover_prompt import (
     LineCustomField,
@@ -20,7 +21,6 @@ MAIL_TYPE_OPTIONS: tuple[str, ...] = (
     "割接改期",
     "割接取消",
     "割接提醒",
-    "故障邮件",
 )
 
 # 唯一必须提供样本的邮件类型
@@ -34,10 +34,27 @@ MAIL_TYPE_DESCRIPTIONS: dict[str, str] = {
     "割接通知": "供应商告知计划内的割接/维护安排，通常包含割接时间、影响范围与影响线路",
     "割接改期": "供应商通知原定割接的时间发生变更（推迟或提前）",
     "割接取消": "供应商通知原定割接已取消，不再执行",
-    "割接提醒": "供应商对即将执行的割接计划进行提醒或确认",
-    "故障邮件": "供应商通知线路或网络突发故障，与计划内割接无关",
-    "其它": "不属于以上任何类型的邮件，如商务往来、账单、一般性通告等与割接/故障无关的内容",
+    "割接提醒": "供应商明确对已通知的割接计划再次提醒，且未变更或取消原定安排",
+    "其它": "不属于以上任何已配置类型的邮件",
 }
+
+
+def check_email_type_name(name: str) -> None:
+    if not isinstance(name, str) or not name or name != name.strip():
+        raise ValueError("邮件分类名称不能为空或包含首尾空白")
+    if len(name) > 32:
+        raise ValueError("邮件分类名称不能超过 32 个字符")
+    if any(unicodedata.category(char) == 'Cc' for char in name):
+        raise ValueError("邮件分类名称不能包含控制字符")
+    if name == OTHER_MAIL_TYPE:
+        raise ValueError("其它是保留的兜底分类，不能配置样本")
+
+
+def _check_email_type_sample_names(samples: Any) -> Any:
+    if isinstance(samples, dict):
+        for name in samples:
+            check_email_type_name(name)
+    return samples
 
 
 class EmailTypeSample(BaseModel):
@@ -65,6 +82,11 @@ class SupplierConfigCreate(BaseModel):
     email_type_samples: dict[str, EmailTypeSample] = Field(default_factory=dict)
     extra_instructions: str = ""
 
+    @field_validator("email_type_samples", mode="before")
+    @classmethod
+    def _check_sample_names(cls, value):
+        return _check_email_type_sample_names(value)
+
     @model_validator(mode="after")
     def _check_prompt_config(self):
         if self.prompt_mode == "manual" and not self.cutover_extract_prompt:
@@ -90,6 +112,11 @@ class SupplierConfigUpdate(BaseModel):
     custom_fields: list[LineCustomField] | None = None
     email_type_samples: dict[str, EmailTypeSample] | None = None
     extra_instructions: str | None = None
+
+    @field_validator("email_type_samples", mode="before")
+    @classmethod
+    def _check_sample_names(cls, value):
+        return _check_email_type_sample_names(value)
 
 
 class SupplierConfigRecord(TypedDict):
@@ -440,17 +467,22 @@ def build_mail_classify_prompt(
     email_type_samples: dict[str, dict[str, Any]],
 ) -> str:
     """根据供应商配置的邮件类型样本生成邮件分类提示词（few-shot）。"""
+    mail_types = [*MAIL_TYPE_OPTIONS, *(
+        name for name in email_type_samples
+        if name not in MAIL_TYPE_OPTIONS and name != OTHER_MAIL_TYPE
+    )]
     sections = [
         f'你是一个"邮件分类助手"。\n'
         f'请判断供应商「{supplier_name}」发来的邮件属于哪一种类型，并输出结构化 JSON。\n',
         "## 可选类型\n",
     ]
-    for mail_type in MAIL_TYPE_OPTIONS:
-        sections.append(f"* {mail_type}：{MAIL_TYPE_DESCRIPTIONS[mail_type]}")
+    for mail_type in mail_types:
+        description = MAIL_TYPE_DESCRIPTIONS.get(mail_type, "供应商自定义分类，结合分类名称与对应样本判断")
+        sections.append(f"* {mail_type}：{description}")
     sections.append(f"* {OTHER_MAIL_TYPE}：{MAIL_TYPE_DESCRIPTIONS[OTHER_MAIL_TYPE]}")
 
     sample_sections = []
-    for mail_type in MAIL_TYPE_OPTIONS:
+    for mail_type in mail_types:
         sample = email_type_samples.get(mail_type) or {}
         subject, content, content_in_attachment = _sample_fields(sample)
         if not subject and not content:
@@ -470,10 +502,14 @@ def build_mail_classify_prompt(
 
     sections.append("""## 分类规则
 
-* 结合邮件主题、正文与附件内容综合判断。
-* 割接改期、割接取消、割接提醒通常引用了原定割接计划，以此区别于割接通知。
-* 故障邮件描述的是突发故障，与计划内割接无关。
-* 若邮件与割接、故障均无关，分类为「其它」，不得强行归入以上类型。
+* 结合邮件主题、当前正文与附件内容的实际意图判断；区分当前内容、引用历史与签名，不能仅因引用了旧计划就判为改期、取消或提醒。
+* 当前邮件发布具体割接/维护安排，且没有明确改期、取消或再次提醒的证据时，归为「割接通知」。不需要证明这是供应商首次发送，也不能仅凭相同工单号、重复收件或临近执行时间推断为提醒。
+* 「割接提醒」必须有当前邮件对已通知安排再次提醒的明确语义，例如以“再次提醒”“此前已通知，现提醒按原计划执行”“Reminder: scheduled maintenance”表达本次邮件目的；仅出现 reminder 等单词（尤其在引用、签名或否定句中）不算证据。
+* “please be informed”“please note”“has been scheduled”“Scheduled maintenance”是常见通知用语；请求确认收悉或批准割接也不等于再次提醒。不能仅据这些措辞判为「割接提醒」。
+* 当前邮件明确修改原定窗口时归为「割接改期」，明确撤销计划时归为「割接取消」；即使同时带有提醒措辞，也应以实际变更或取消意图为准。
+* 样本用于理解各类型的表达方式，不要依据工单号、日期、地点或线路值是否相同分类；当前意图不明确时，不得臆测此前存在通知。
+* 自定义分类以配置的分类名称和样本为依据，不得忽略这些类型。
+* 若邮件不符合以上任何已配置类型，分类为「其它」，不得强行归入以上类型。
 * 类型只能从可选类型中选择，不得自行创造新类型。
 
 ## 输出要求
@@ -491,14 +527,13 @@ def build_mail_classify_prompt(
 def check_email_type_samples(samples: dict[str, Any]) -> None:
     """校验邮件类型样本。
 
-    - 类型名必须在内置列表中；
+    - 类型名可以是内置或自定义分类，不能使用保留的兜底分类；
     - 割接通知为必填：主题与正文均不能为空；部分供应商会把详细正文放在
       附件中（content_in_attachment），但邮件正文本身仍存在，仍需提供；
     - 其余类型非必填。
     """
     for mail_type, sample in samples.items():
-        if mail_type not in MAIL_TYPE_OPTIONS:
-            raise ValueError(f"邮件类型 {mail_type} 不在支持的类型列表中")
+        check_email_type_name(mail_type)
         subject, content, _ = _sample_fields(sample)
         if mail_type == REQUIRED_MAIL_TYPE:
             if not subject:

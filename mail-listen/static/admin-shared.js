@@ -1,9 +1,10 @@
-/* Mail Listen 管理台 · Vue 3 + Element Plus 共享层
+/* Mail Listen 管理台 · Vue 3 + Naive UI 共享层
  * 提供全局状态（API Key / 摘要统计 / 状态栏）、请求封装与状态文案映射。
- * 依赖加载顺序：vue.global.prod.js → element-plus.js → 本文件 → admin-i18n.js
+ * 依赖加载顺序：vue.global.prod.js → naive-ui.js → admin-naive.js → 本文件 → admin-i18n.js
  * 文案映射函数运行时调用 tt()（定义于 admin-i18n.js），因此可随语言切换响应式更新。
  */
-const { ElMessage, ElMessageBox } = ElementPlus;
+const NocMessage = NocUI.message;
+const NocDialog = NocUI.dialog;
 
 const portalDefaultEnvironment = (
   document.body.dataset.rpaDefaultEnvironment === "production"
@@ -295,7 +296,13 @@ function mailboxLabel(address) {
 
 function cutoverEmailTags(row) {
   const tags = [];
-  const scene = row.pending_reply_scene || row.cutover_scene;
+  const scene = row.unconfigured_analysis?.scene || row.pending_reply_scene || row.cutover_scene;
+  if (row.processing_origin === 'unconfigured') {
+    tags.push({key:'unconfigured', label:tt('discovery.title'), type:'info'});
+    if (row.unconfigured_analysis?.analysis_status === 'needs_review') {
+      tags.push({key:'needs_review', label:tt('discovery.needs_review'), type:'warning'});
+    }
+  }
   if (isRejectedScene(scene)) {
     tags.push({ key: scene, label: sceneText(scene), type: sceneTagType(scene) });
   }
@@ -310,6 +317,17 @@ function cutoverEmailTags(row) {
 
 function cutoverEmailStates(row) {
   const states = [];
+  if (row.processing_origin === 'unconfigured') {
+    const jobs = row.ai_tasks || [];
+    const state = jobs.some(job => job.status === 'failed') ? 'failed'
+      : jobs.some(job => ['pending','running'].includes(job.status)) ? 'running'
+      : row.unconfigured_analysis?.analysis_status === 'needs_review' ? 'needs_review'
+      : row.unconfigured_analysis ? 'succeeded' : null;
+    if (state) states.push({key:state,label:tt('discovery.'+state),type:state === 'failed' ? 'danger' : 'info'});
+    if (row.reply_status === 'pending') states.push({key:'reply_pending',label:tt('cutover.list.replyPending'),type:'warning'});
+    else if (row.reply_status) states.push({key:row.reply_status,label:tt('discovery.'+row.reply_status),type:'info'});
+    return states;
+  }
   if (row.reply_status === 'pending') {
     states.push({ key: 'reply_pending', label: tt('cutover.list.replyPending'), type: 'warning' });
   }

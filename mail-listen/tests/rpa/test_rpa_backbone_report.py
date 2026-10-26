@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from time import monotonic
+from unittest.mock import patch
 
 
 cutover_report_module = importlib.import_module("rpa.cutover_report")
@@ -21,6 +22,11 @@ CutoverReportManualInterventionError = (
 PortalSessionSettings = session_config_module.PortalSessionSettings
 PortalEnvironment = session_models_module.PortalEnvironment
 CutoverReportRpaError = cutover_report_module.CutoverReportRpaError
+
+
+BACKBONE_SUCCESS_PROMPT = (
+    "已提交成功，是否保留表单继续下一个填报？若保留，请修改页面后，再次填报。"
+)
 
 
 BACKBONE_PAGE = """<!doctype html>
@@ -268,6 +274,97 @@ class FakeBackbonePortalHandler(BaseHTTPRequestHandler):
 
 
 class PortalBackboneReportRpaTest(unittest.TestCase):
+    @contextmanager
+    def _submission_page(self):
+        settings = PortalSessionSettings(
+            _env_file=None, timeout_ms=1_500, report_action_delay_ms=0,
+        )
+        with cutover_report_module.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1920, "height": 1080})
+                page.set_default_timeout(settings.timeout_ms)
+                page.set_content('<iframe style="width:100%;height:850px;border:0"></iframe>')
+                frame = page.frames[-1]
+                frame.set_content("""<button id="submit">提交</button>
+                    <section class="el-message-box" role="dialog" hidden>
+                      <h2>提示</h2><p id="message"></p>
+                      <button>不保留</button><button>保留</button>
+                    </section>
+                    <script>
+                      window.submitCount = 0;
+                      document.querySelector('#submit').onclick = () => {
+                        window.submitCount += 1;
+                      };
+                    </script>""")
+                yield PortalCutoverReportRpa(settings), page, frame
+            finally:
+                browser.close()
+
+    def test_accepts_success_prompt_appearing_between_result_checks(self):
+        with self._submission_page() as (rpa, page, frame):
+            read_success = rpa._backbone_success_text
+
+            def show_prompt_after_read(current_page):
+                result = read_success(current_page)
+                frame.evaluate("""message => {
+                    document.querySelector('#message').textContent = message;
+                    document.querySelector('[role="dialog"]').hidden = false;
+                }""", BACKBONE_SUCCESS_PROMPT)
+                return result
+
+            with patch.object(rpa, "_backbone_success_text", side_effect=show_prompt_after_read):
+                self.assertEqual(rpa._submit_backbone_form(page), "")
+
+            self.assertEqual(frame.evaluate("window.submitCount"), 1)
+
+    def test_waits_for_success_prompt_content_to_render(self):
+        with self._submission_page() as (rpa, page, frame):
+            frame.evaluate("""message => {
+                document.querySelector('#submit').addEventListener('click', () => {
+                    document.querySelector('[role="dialog"]').hidden = false;
+                    setTimeout(() => {
+                        document.querySelector('#message').textContent = message;
+                    }, 500);
+                });
+            }""", BACKBONE_SUCCESS_PROMPT)
+
+            self.assertEqual(rpa._submit_backbone_form(page), "")
+            self.assertEqual(frame.evaluate("window.submitCount"), 1)
+
+    def test_unknown_submit_prompt_does_not_count_as_success(self):
+        with self._submission_page() as (rpa, page, frame):
+            frame.evaluate("""() => {
+                document.querySelector('#submit').addEventListener('click', () => {
+                    document.querySelector('#message').textContent = '需要人工确认未知参数';
+                    document.querySelector('[role="dialog"]').hidden = false;
+                });
+            }""")
+
+            with self.assertRaises(CutoverReportManualInterventionError):
+                rpa._submit_backbone_form(page)
+            self.assertEqual(frame.evaluate("window.submitCount"), 1)
+
+    def test_missing_submit_result_does_not_count_as_success(self):
+        with self._submission_page() as (rpa, page, frame):
+            with self.assertRaisesRegex(CutoverReportRpaError, "未检测到成功结果"):
+                rpa._submit_backbone_form(page)
+            self.assertEqual(frame.evaluate("window.submitCount"), 1)
+
+    def test_validation_error_in_submit_prompt_does_not_count_as_success(self):
+        with self._submission_page() as (rpa, page, frame):
+            frame.evaluate("""() => {
+                document.querySelector('#submit').addEventListener('click', () => {
+                    document.querySelector('#message').className = 'el-form-item__error';
+                    document.querySelector('#message').textContent = '必填字段不能为空';
+                    document.querySelector('[role="dialog"]').hidden = false;
+                });
+            }""")
+
+            with self.assertRaisesRegex(CutoverReportRpaError, "必填字段不能为空"):
+                rpa._submit_backbone_form(page)
+            self.assertEqual(frame.evaluate("window.submitCount"), 1)
+
     @contextmanager
     def _system_selection_page(self):
         settings = PortalSessionSettings(
@@ -637,7 +734,19 @@ class PortalBackboneReportRpaTest(unittest.TestCase):
     def test_report_service_preserves_yes_in_backbone_radio_selection(self):
         self._assert_fills_backbone_form("是")
 
-    def _assert_fills_backbone_form(self, overseas_value):
+    def test_success_prompt_without_task_number_finishes_report(self):
+        prompt_page = BACKBONE_PAGE.replace(
+            '<section id="success" hidden>提交成功，任务号：QT2026GJJJ009999</section>'.encode(),
+            (
+                '<section id="success" class="el-message-box" role="dialog" hidden>'
+                f'<h2>提示</h2><p>{BACKBONE_SUCCESS_PROMPT}</p>'
+                '<button>不保留</button><button>保留</button></section>'
+            ).encode(),
+        )
+        with patch.object(FakeBackbonePortalHandler, "page_body", prompt_page):
+            self._assert_fills_backbone_form("否", expected_task_number="")
+
+    def _assert_fills_backbone_form(self, overseas_value, *, expected_task_number="QT2026GJJJ009999"):
         with ThreadingHTTPServer(("127.0.0.1", 0), FakeBackbonePortalHandler) as server:
             server_thread = threading.Thread(target=server.serve_forever)
             server_thread.start()
@@ -707,7 +816,7 @@ class PortalBackboneReportRpaTest(unittest.TestCase):
                     )
 
                     self.assertTrue(result.submitted)
-                    self.assertEqual(result.portal_task_number, "QT2026GJJJ009999")
+                    self.assertEqual(result.portal_task_number, expected_task_number)
                     self.assertEqual(result.uploaded_filenames, ("方案.pdf",))
                     self.assertTrue(result.success_screenshot_path.is_file())
                     self.assertEqual(

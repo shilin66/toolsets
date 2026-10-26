@@ -1,7 +1,7 @@
 /* Mail Listen 管理台 · 国际化（vue-i18n）
  * 支持 zh-CN / en / zh-HK 三种语言。
- * 依赖加载顺序：vue → vue-i18n → element-plus → element-plus 语言包 → admin-shared.js → 本文件 → admin-views.js → admin.js
- * 模板中使用 $t()，JS 逻辑中使用全局 tt()；Element Plus 组件语言通过 epLocale 响应式切换。
+ * 依赖加载顺序：vue → vue-i18n → naive-ui → admin-naive → admin-shared.js → 本文件 → admin-views.js → admin.js
+ * 模板中使用 $t()，JS 逻辑中使用全局 tt()；Naive UI 组件语言通过 uiLocale 响应式切换。
  */
 
 const I18N_LANG_KEY = "mailListenLang";
@@ -11,6 +11,7 @@ const I18N_HTML_LANG = { "zh-CN": "zh-CN", en: "en", "zh-HK": "zh-HK" };
 // ==================== 简体中文 ====================
 const I18N_MESSAGES_ZH_CN = {
   common: {
+    workspace: "工作空间",
     brandName: "NOC 工作台",
     docTitle: "NOC 工作台",
     brandTagline: "割接通知智能处理平台",
@@ -19,6 +20,7 @@ const I18N_MESSAGES_ZH_CN = {
     requestFailed: "请求失败",
     save: "保存",
     cancel: "取消",
+    close: "关闭",
     confirmDelete: "确认删除",
     delete: "删除",
     edit: "编辑",
@@ -78,6 +80,15 @@ const I18N_MESSAGES_ZH_CN = {
     keyExpired: "API Key 已失效，请重新登录",
     success: "登录成功",
     hint: "Key 仅存储在本浏览器，用于每次进入时核验身份",
+  },
+  pageDescriptions: {
+    suppliers: "管理供应商识别规则、邮件样本与配置草稿。",
+    emails: "查看收件记录、邮件原文与处理信息。",
+    cutoverTasks: "核对割接通知、确认处理结果，跟进任务上报。",
+    circuits: "维护运营商线路编号、线路状态与处理备注。",
+    mailAccounts: "管理收发邮箱、连接配置与实时监听状态。",
+    settings: "统一配置邮件处理策略、重保时间与上报信息。",
+    dispatchSession: "管理综调系统登录方式与会话状态。",
   },
   nav: {
     suppliers: "供应商配置",
@@ -195,14 +206,30 @@ const I18N_MESSAGES_ZH_CN = {
     nameLabel: "名称",
     namePlaceholder: "例如 RT",
     emailLabel: "邮箱",
-    emailPlaceholder: "noc@supplier.com",
+    emailPlaceholder: "noc{'@'}supplier.com",
     replyEmailLabel: "回复邮箱地址",
     replyEmailPlaceholder: "默认使用供应商邮箱",
     replyEmailHint: "回复供应商邮件时使用；留空则与供应商邮箱保持一致。",
     mailTypesTitle: "邮件类型样本",
     mailTypesStatsLabel: "邮件类型样本配置统计",
     configuredCount: "已配置 {count} / {total}",
-    mailTypesHint: "为每种邮件类型提供一份典型邮件样本，用于后续 AI 对来信进行分类；除割接通知必填外，其余类型可选。",
+    mailTypesHint: "默认提供四种割接分类，可手动添加其它业务分类并填写样本，供 AI 识别；割接通知的主题和正文必填。",
+    expandSample: "展开编辑",
+    fullSampleTitle: "{name}样本全文",
+    fullSampleHint: "这里显示完整的分类参考样本，支持纯文本或 HTML。修改后需保存配置或草稿才会生效。",
+    loadOriginalSample: "载入原邮件",
+    originalSampleLoaded: "已载入完整原邮件样本，保存草稿后生效",
+    addMailType: "添加分类",
+    removeMailType: "移除分类",
+    addMailTypeTitle: "添加邮件分类",
+    mailTypeName: "分类名称",
+    mailTypeNamePlaceholder: "例如：账单通知、业务公告",
+    mailTypeNameHint: "最多 32 个字符，名称不能重复；添加后填写该分类的邮件样本，并保存配置。",
+    mailTypeNameInvalid: "分类名称须为 1–32 个字符，且不能含控制字符",
+    mailTypeNameReserved: "“其它”是兜底分类，无需手动添加",
+    mailTypeNameDuplicate: "分类名称已存在，请使用其他名称",
+    categorySubjectLabel: "{name}主题样本",
+    categoryContentLabel: "{name}正文样本",
     mailTypesLoadFailed: "邮件类型加载失败，请刷新重试",
     mailTypesListLabel: "邮件类型样本列表",
     subjectPlaceholder: "样本邮件主题",
@@ -286,6 +313,14 @@ const I18N_MESSAGES_ZH_CN = {
     subjectOrSender: "邮件主题/发件人",
   },
   cutover: {
+    delete: {
+      rowAction: "删除此邮件及关联数据",
+      detailAction: "删除邮件及关联数据",
+      title: "删除割接邮件及关联数据",
+      confirm: "确认删除",
+      message: "将永久删除“{subject}”在本系统中的邮件记录，以及关联的全部割接任务、提取与分析结果、回复与上报记录，并清理本地 EML、附件、Excel 和截图。\n\n供应商配置、线路主数据保留；原始邮箱中的邮件和外部综调记录不受影响。已上报的数据仅删除本地记录。\n\n删除后无法恢复。",
+      succeeded: "割接邮件及关联数据已删除",
+    },
     status: {
       draft: "待确认",
       confirmed: "已确认",
@@ -312,6 +347,7 @@ const I18N_MESSAGES_ZH_CN = {
       duplicate: "重复邮件",
     },
     list: {
+      title: "邮件列表",
       synced: "割接任务已同步",
       unmatchedLines: "线路待确认 · {count}",
       unmatchedLinesHint: "存在线路未确定（零匹配、多匹配或缺少 Circuit ID 等），请进入邮件详情核对并确认唯一线路或手动绑定 Circuit ID。",
@@ -454,7 +490,7 @@ const I18N_MESSAGES_ZH_CN = {
       addBackbone: "添加骨干线路",
       backboneHint: "按综调系统填报表单分组展示，保存后任务状态回退为待确认。",
       backboneEmpty: "暂无骨干线路填报字段",
-      backboneNoStructure: "暂无骨干线路结构，无法添加",
+      backboneNoStructure: "骨干线路默认值未加载，请重试；若持续失败，请重启后端服务并刷新页面",
       backboneCard: "骨干线路 #{index}",
       expandAll: "展开全部",
       collapseAll: "收起全部",
@@ -464,6 +500,10 @@ const I18N_MESSAGES_ZH_CN = {
       portalTaskNumber: "综调任务号",
       manualIntervention: "自动上报遇到未识别弹窗，请转人工处理",
       screenshotUnavailable: "截图暂不可用",
+      operationScreenshots: "操作截图",
+      screenshotPreviewHint: "点击查看完整截图，可切换前后步骤",
+      viewScreenshot: "查看截图：{name}",
+      viewFullScreenshot: "查看大图",
       downloadExcel: "下载客户线路 Excel",
       saveEdit: "保存修改",
       manualConfirm: "人工确认",
@@ -492,6 +532,7 @@ const I18N_MESSAGES_ZH_CN = {
     },
   },
   circuits: {
+    listTitle: "线路台账",
     allSuppliers: "全部供应商",
     allTypes: "全部类型",
     allStatuses: "全部状态",
@@ -572,7 +613,7 @@ const I18N_MESSAGES_ZH_CN = {
     name: "名称",
     namePlaceholder: "如：NOC 值班邮箱",
     address: "邮箱地址",
-    addressPlaceholder: "如：noc@example.com",
+    addressPlaceholder: "如：noc{'@'}example.com",
     password: "密码/授权码",
     passwordPlaceholder: "请输入密码或授权码",
     passwordKeep: "留空表示保持原密码不变",
@@ -617,6 +658,7 @@ const I18N_MESSAGES_ZH_CN = {
 // ==================== English ====================
 const I18N_MESSAGES_EN = {
   common: {
+    workspace: "Workspace",
     brandName: "NOC Workbench",
     docTitle: "NOC Workbench",
     brandTagline: "Intelligent Cutover Notification Platform",
@@ -625,6 +667,7 @@ const I18N_MESSAGES_EN = {
     requestFailed: "Request failed",
     save: "Save",
     cancel: "Cancel",
+    close: "Close",
     confirmDelete: "Delete",
     delete: "Delete",
     edit: "Edit",
@@ -684,6 +727,15 @@ const I18N_MESSAGES_EN = {
     keyExpired: "Your API Key is no longer valid. Please sign in again",
     success: "Signed in",
     hint: "The key is stored only in this browser and used to verify your identity",
+  },
+  pageDescriptions: {
+    suppliers: "Manage supplier rules, mail samples and configuration drafts.",
+    emails: "Review received mail, original messages and processing details.",
+    cutoverTasks: "Review maintenance notices, confirm results and track task reports.",
+    circuits: "Maintain circuit identifiers, service status and handling notes.",
+    mailAccounts: "Manage mail accounts, connection settings and listener status.",
+    settings: "Configure mail processing, protection windows and reporting details.",
+    dispatchSession: "Manage dispatch authentication and session status.",
   },
   nav: {
     suppliers: "Suppliers",
@@ -801,14 +853,30 @@ const I18N_MESSAGES_EN = {
     nameLabel: "Name",
     namePlaceholder: "e.g. RT",
     emailLabel: "Email",
-    emailPlaceholder: "noc@supplier.com",
+    emailPlaceholder: "noc{'@'}supplier.com",
     replyEmailLabel: "Reply Email Address",
     replyEmailPlaceholder: "Defaults to the supplier email",
     replyEmailHint: "Used for supplier replies; leave blank to match the supplier email.",
     mailTypesTitle: "Email Type Samples",
     mailTypesStatsLabel: "Email type sample statistics",
     configuredCount: "{count} / {total} configured",
-    mailTypesHint: "Provide a typical sample for each email type so the AI can classify incoming emails. Only the cutover notice is required; the rest are optional.",
+    mailTypesHint: "Four cutover categories are provided. Add other business categories and samples for AI classification. The cutover notice subject and body are required.",
+    expandSample: "Expand editor",
+    fullSampleTitle: "Full {name} sample",
+    fullSampleHint: "The complete classification example is shown here, as plain text or HTML. Save the configuration or draft to apply edits.",
+    loadOriginalSample: "Load original email",
+    originalSampleLoaded: "Complete original sample loaded. Save the draft to apply it.",
+    addMailType: "Add category",
+    removeMailType: "Remove category",
+    addMailTypeTitle: "Add email category",
+    mailTypeName: "Category name",
+    mailTypeNamePlaceholder: "For example: Billing notice, Service update",
+    mailTypeNameHint: "Use a unique name of up to 32 characters. Add a sample after creating the category, then save the configuration.",
+    mailTypeNameInvalid: "Use 1–32 characters without control characters",
+    mailTypeNameReserved: "“其它” is the fallback category and does not need to be added",
+    mailTypeNameDuplicate: "This category already exists. Choose another name.",
+    categorySubjectLabel: "{name} subject sample",
+    categoryContentLabel: "{name} body sample",
     mailTypesLoadFailed: "Failed to load email types. Please refresh.",
     mailTypesListLabel: "Email type sample list",
     subjectPlaceholder: "Sample email subject",
@@ -892,6 +960,14 @@ const I18N_MESSAGES_EN = {
     subjectOrSender: "Subject / Sender",
   },
   cutover: {
+    delete: {
+      rowAction: "Delete this email and related data",
+      detailAction: "Delete email and related data",
+      title: "Delete cutover email and related data",
+      confirm: "Delete",
+      message: "Permanently delete the local record of \"{subject}\" and all associated cutover tasks, extraction and analysis results, replies, and report records. Local EML files, attachments, Excel files, and screenshots will also be removed.\n\nSupplier configurations and circuit master data are retained. The original mailbox and external dispatch records are unaffected. For previously reported data, only local records are deleted.\n\nThis cannot be undone.",
+      succeeded: "Cutover email and related data deleted",
+    },
     status: {
       draft: "Pending",
       confirmed: "Confirmed",
@@ -918,6 +994,7 @@ const I18N_MESSAGES_EN = {
       duplicate: "Duplicate Email",
     },
     list: {
+      title: "Mail list",
       synced: "Cutover tasks synced",
       unmatchedLines: "Lines to confirm · {count}",
       unmatchedLinesHint: "Some lines are unresolved (no match, multiple matches, missing Circuit ID, etc.). Open the email detail to confirm a unique line or bind a Circuit ID manually.",
@@ -1060,7 +1137,7 @@ const I18N_MESSAGES_EN = {
       addBackbone: "Add Backbone Circuit",
       backboneHint: "Grouped as in the integrated dispatch filing form. After saving, the task status falls back to pending.",
       backboneEmpty: "No backbone filing fields",
-      backboneNoStructure: "No backbone structure available. Cannot add.",
+      backboneNoStructure: "Backbone defaults have not loaded. Retry; if this persists, restart the backend and refresh the page.",
       backboneCard: "Backbone Circuit #{index}",
       expandAll: "Expand all",
       collapseAll: "Collapse all",
@@ -1070,6 +1147,10 @@ const I18N_MESSAGES_EN = {
       portalTaskNumber: "Dispatch task number",
       manualIntervention: "An unknown dialog blocked automation. Manual intervention is required.",
       screenshotUnavailable: "Screenshot unavailable",
+      operationScreenshots: "Operation screenshots",
+      screenshotPreviewHint: "Open full-size screenshots and browse steps",
+      viewScreenshot: "View screenshot: {name}",
+      viewFullScreenshot: "View full size",
       downloadExcel: "Download Customer Circuit Excel",
       saveEdit: "Save Changes",
       manualConfirm: "Manual Confirm",
@@ -1098,6 +1179,7 @@ const I18N_MESSAGES_EN = {
     },
   },
   circuits: {
+    listTitle: "Circuit inventory",
     allSuppliers: "All suppliers",
     allTypes: "All types",
     allStatuses: "All statuses",
@@ -1178,7 +1260,7 @@ const I18N_MESSAGES_EN = {
     name: "Name",
     namePlaceholder: "e.g. NOC duty mailbox",
     address: "Email Address",
-    addressPlaceholder: "e.g. noc@example.com",
+    addressPlaceholder: "e.g. noc{'@'}example.com",
     password: "Password / Auth Code",
     passwordPlaceholder: "Enter password or auth code",
     passwordKeep: "Leave blank to keep the current password",
@@ -1223,6 +1305,7 @@ const I18N_MESSAGES_EN = {
 // ==================== 繁體中文（香港） ====================
 const I18N_MESSAGES_ZH_HK = {
   common: {
+    workspace: "工作空間",
     brandName: "NOC 工作台",
     docTitle: "NOC 工作台",
     brandTagline: "割接通知智能處理平台",
@@ -1231,6 +1314,7 @@ const I18N_MESSAGES_ZH_HK = {
     requestFailed: "請求失敗",
     save: "儲存",
     cancel: "取消",
+    close: "關閉",
     confirmDelete: "確認刪除",
     delete: "刪除",
     edit: "編輯",
@@ -1290,6 +1374,15 @@ const I18N_MESSAGES_ZH_HK = {
     keyExpired: "API Key 已失效，請重新登入",
     success: "登入成功",
     hint: "Key 僅儲存於本瀏覽器，用於每次進入時核驗身份",
+  },
+  pageDescriptions: {
+    suppliers: "管理供應商識別規則、郵件樣本與配置草稿。",
+    emails: "查看收件記錄、郵件原文與處理資訊。",
+    cutoverTasks: "核對割接通知、確認處理結果，跟進任務上報。",
+    circuits: "維護營運商線路編號、線路狀態與處理備註。",
+    mailAccounts: "管理收發郵箱、連線配置與即時監聽狀態。",
+    settings: "統一配置郵件處理策略、重保時間與上報資訊。",
+    dispatchSession: "管理綜調系統登入方式與會話狀態。",
   },
   nav: {
     suppliers: "供應商配置",
@@ -1407,14 +1500,30 @@ const I18N_MESSAGES_ZH_HK = {
     nameLabel: "名稱",
     namePlaceholder: "例如 RT",
     emailLabel: "電郵地址",
-    emailPlaceholder: "noc@supplier.com",
+    emailPlaceholder: "noc{'@'}supplier.com",
     replyEmailLabel: "回覆電郵地址",
     replyEmailPlaceholder: "預設使用供應商電郵地址",
     replyEmailHint: "回覆供應商電郵時使用；留空則與供應商電郵地址保持一致。",
     mailTypesTitle: "電郵類型樣本",
     mailTypesStatsLabel: "電郵類型樣本配置統計",
     configuredCount: "已配置 {count} / {total}",
-    mailTypesHint: "為每種電郵類型提供一份典型電郵樣本，用於後續 AI 對來信進行分類；除割接通知必填外，其餘類型可選。",
+    mailTypesHint: "預設提供四種割接分類，可手動新增其他業務分類並填寫樣本，供 AI 識別；割接通知的主題和正文必填。",
+    expandSample: "展開編輯",
+    fullSampleTitle: "{name}樣本全文",
+    fullSampleHint: "這裏顯示完整的分類參考樣本，支援純文字或 HTML。修改後需儲存配置或草稿才會生效。",
+    loadOriginalSample: "載入原郵件",
+    originalSampleLoaded: "已載入完整原郵件樣本，儲存草稿後生效",
+    addMailType: "新增分類",
+    removeMailType: "移除分類",
+    addMailTypeTitle: "新增電郵分類",
+    mailTypeName: "分類名稱",
+    mailTypeNamePlaceholder: "例如：賬單通知、業務公告",
+    mailTypeNameHint: "最多 32 個字元，名稱不能重複；新增後填寫該分類的電郵樣本，並儲存配置。",
+    mailTypeNameInvalid: "分類名稱須為 1–32 個字元，且不能含控制字元",
+    mailTypeNameReserved: "「其它」是兜底分類，毋須手動新增",
+    mailTypeNameDuplicate: "分類名稱已存在，請使用其他名稱",
+    categorySubjectLabel: "{name}主題樣本",
+    categoryContentLabel: "{name}正文樣本",
     mailTypesLoadFailed: "電郵類型載入失敗，請重新整理再試",
     mailTypesListLabel: "電郵類型樣本列表",
     subjectPlaceholder: "樣本電郵主旨",
@@ -1498,6 +1607,14 @@ const I18N_MESSAGES_ZH_HK = {
     subjectOrSender: "電郵主旨／發件人",
   },
   cutover: {
+    delete: {
+      rowAction: "刪除此郵件及關聯資料",
+      detailAction: "刪除郵件及關聯資料",
+      title: "刪除割接郵件及關聯資料",
+      confirm: "確認刪除",
+      message: "將永久刪除「{subject}」在本系統中的郵件記錄，以及關聯的全部割接任務、擷取與分析結果、回覆與上報記錄，並清理本機 EML、附件、Excel 和截圖。\n\n供應商配置、線路主資料保留；原始郵箱中的郵件和外部綜調記錄不受影響。已上報的資料僅刪除本機記錄。\n\n刪除後無法復原。",
+      succeeded: "割接郵件及關聯資料已刪除",
+    },
     status: {
       draft: "待確認",
       confirmed: "已確認",
@@ -1524,6 +1641,7 @@ const I18N_MESSAGES_ZH_HK = {
       duplicate: "重複電郵",
     },
     list: {
+      title: "郵件列表",
       synced: "割接任務已同步",
       unmatchedLines: "線路待確認 · {count}",
       unmatchedLinesHint: "存在線路未確定（零匹配、多匹配或缺少 Circuit ID 等），請進入郵件詳情核對並確認唯一線路或手動綁定 Circuit ID。",
@@ -1666,7 +1784,7 @@ const I18N_MESSAGES_ZH_HK = {
       addBackbone: "新增骨幹線路",
       backboneHint: "按綜調系統填報表單分組展示，儲存後任務狀態回退為待確認。",
       backboneEmpty: "暫無骨幹線路填報欄位",
-      backboneNoStructure: "暫無骨幹線路結構，無法新增",
+      backboneNoStructure: "骨幹線路預設值未載入，請重試；若持續失敗，請重新啟動後端服務並重新整理頁面",
       backboneCard: "骨幹線路 #{index}",
       expandAll: "展開全部",
       collapseAll: "收起全部",
@@ -1676,6 +1794,10 @@ const I18N_MESSAGES_ZH_HK = {
       portalTaskNumber: "綜調任務號",
       manualIntervention: "自動上報遇到未識別彈窗，請轉人工處理",
       screenshotUnavailable: "截圖暫不可用",
+      operationScreenshots: "操作截圖",
+      screenshotPreviewHint: "點擊查看完整截圖，可切換前後步驟",
+      viewScreenshot: "查看截圖：{name}",
+      viewFullScreenshot: "查看大圖",
       downloadExcel: "下載客戶線路 Excel",
       saveEdit: "儲存修改",
       manualConfirm: "人工確認",
@@ -1704,6 +1826,7 @@ const I18N_MESSAGES_ZH_HK = {
     },
   },
   circuits: {
+    listTitle: "線路台帳",
     allSuppliers: "全部供應商",
     allTypes: "全部類型",
     allStatuses: "全部狀態",
@@ -1784,7 +1907,7 @@ const I18N_MESSAGES_ZH_HK = {
     name: "名稱",
     namePlaceholder: "如：NOC 值班電郵",
     address: "電郵地址",
-    addressPlaceholder: "如：noc@example.com",
+    addressPlaceholder: "如：noc{'@'}example.com",
     password: "密碼/授權碼",
     passwordPlaceholder: "請輸入密碼或授權碼",
     passwordKeep: "留空即保持原密碼不變",
@@ -1863,12 +1986,12 @@ const i18n = VueI18n.createI18n({
   fallbackWarn: false,
 });
 
-const EP_LOCALE_MAP = {
-  "zh-CN": ElementPlusLocaleZhCn,
-  en: ElementPlusLocaleEn,
-  "zh-HK": ElementPlusLocaleZhHk,
+const UI_LOCALE_MAP = {
+  "zh-CN": naive.zhCN,
+  en: naive.enUS,
+  "zh-HK": naive.zhTW,
 };
-const epLocale = Vue.ref(EP_LOCALE_MAP[i18n.global.locale.value]);
+const uiLocale = Vue.ref(UI_LOCALE_MAP[i18n.global.locale.value]);
 
 // JS 逻辑中使用的翻译函数（模板中可直接用 $t）
 function tt(key, params) {
@@ -1894,7 +2017,7 @@ function setLocale(lang) {
   }
   i18n.global.locale.value = lang;
   localStorage.setItem(I18N_LANG_KEY, lang);
-  epLocale.value = EP_LOCALE_MAP[lang];
+  uiLocale.value = UI_LOCALE_MAP[lang];
   applyLangSideEffects(lang);
 }
 

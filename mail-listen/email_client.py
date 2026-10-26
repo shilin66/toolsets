@@ -18,7 +18,7 @@ from imapclient.exceptions import IMAPClientError
 from models import EmailMessage
 from config import settings
 from database import email_db
-from email_attachments import save_attachment
+from email_attachments import is_calendar_attachment, save_attachment
 from mail_accounts import MailAccountConfig
 from outbound_email import send_outbound_email
 
@@ -672,6 +672,11 @@ class EmailClient:
                 if "attachment" in content_disposition:
                     filename = part.get_filename()
                     if filename:
+                        filename = self._decode_header(filename)
+                        if is_calendar_attachment(filename, part.get_content_type()):
+                            logger.info("跳过日历附件 account={} uid={} filename={} reason_code=calendar_attachment",
+                                        self.account.email_address, uid, filename)
+                            continue
                         payload = part.get_payload(decode=True)
                         if payload is None:
                             logger.warning(f"附件 {filename} 内容为空，跳过保存")
@@ -679,8 +684,9 @@ class EmailClient:
                         attachments.append(save_attachment(
                             self.account.email_address,
                             uid,
-                            self._decode_header(filename),
+                            filename,
                             payload,
+                            charset=part.get_content_charset(),
                         ))
 
         return attachments
@@ -839,6 +845,8 @@ class EmailClient:
                             logger.warning("IDLE回调函数未设置")
                     else:
                         logger.info("收到IDLE通知但未提取到邮件UID")
+                        if self.idle_callback:
+                            self.idle_callback()
 
                     # 处理完响应后，继续下一轮IDLE循环
                     logger.debug("处理完成，准备重新开始IDLE监听")
@@ -894,6 +902,9 @@ class EmailClient:
                 return
             
             logger.debug(f"检查自 {last_check_time.strftime('%H:%M:%S')} 以来可能遗漏的邮件")
+            if self.idle_callback:
+                self.idle_callback()
+                return
             
             # 搜索未读邮件
             search_criteria = ['UNSEEN']

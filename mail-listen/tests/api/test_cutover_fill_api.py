@@ -536,6 +536,83 @@ class CutoverFillPayloadTest(unittest.TestCase):
             ["Backbone-System-A", "Backbone-System-B"],
         )
 
+    def test_backbone_forms_are_split_by_impact_type_and_window(self):
+        window = "2026-11-07 19:00:00/2026-11-08 03:40:00"
+        rows = [
+            ("1661552", "protected", "0m"),
+            ("1484026", "interrupted", "365m"),
+            ("1484050", "interrupted", "365m"),
+            ("1692110", "protected", "0m"),
+        ]
+        for include_momentary in (False, True):
+            with self.subTest(include_momentary=include_momentary):
+                lines = [
+                    dict(CircuitIDRT=identifier, ImpactType=impact_type,
+                         ImpactDuration=duration, InteruptionsCounts="1",
+                         ImpactDateTime=window)
+                    for identifier, impact_type, duration in rows
+                ]
+                if include_momentary:
+                    lines.extend([
+                        dict(CircuitIDRT="instant-1", ImpactType="momentary_interrupted",
+                             ImpactDuration="1m", InteruptionsCounts="1", ImpactDateTime=window),
+                        dict(CircuitIDRT="instant-2", ImpactType="momentary_interrupted",
+                             ImpactDuration="1m", InteruptionsCounts="1", ImpactDateTime=window),
+                        dict(lines[0], CircuitIDRT="later-protected",
+                             ImpactDateTime="2026-11-08 19:00:00/2026-11-09 03:40:00"),
+                    ])
+                payload = dict(
+                    email_records_id=self.email_records_id, carrier_ticket_no="14/26041414",
+                    cutover_time=window, cutover_timezone="UTC",
+                    cutover_reason="Optic fiber cable maintenance", location="Chelyabinsk Region",
+                    line_query_keywords=["CircuitIDRT"], line_array=lines,
+                )
+
+                def fake_query(supplier, keywords):
+                    return [dict(supplier=supplier, supplier_circuit_id=keywords[0],
+                                 circuit_id=f"BB-{keywords[0]}", line_type="骨干", line_status="正常")]
+
+                with patch.object(api_server, "query_supplier_circuits", side_effect=fake_query):
+                    response = self.client.post(
+                        "/api/cutover/tasks/generate", headers=self.headers, json=payload,
+                    )
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.get_json()["success"])
+                result = response.get_json()["data"]
+                forms = result["backbone_circuits"]
+                expected_types = ["不中断", "中断"]
+                expected_names = [["BB-1661552", "BB-1692110"], ["BB-1484026", "BB-1484050"]]
+                expected_minutes = [0, 365]
+                if include_momentary:
+                    expected_types += ["瞬断", "不中断"]
+                    expected_names += [["BB-instant-1", "BB-instant-2"], ["BB-later-protected"]]
+                    expected_minutes += [1, 0]
+                self.assertEqual([form["基本信息"]["中断类型"] for form in forms], expected_types)
+                self.assertEqual([form["割接对象"]["系统名称"] for form in forms], expected_names)
+                self.assertEqual(result["backbone_interruption_minutes"], expected_minutes)
+                self.assertEqual(forms[1]["基本信息"]["中断时间 (分钟)"], 365)
+                self.assertEqual(forms[0]["割接对象"]["割接开始时间"], "2026-11-08 03:00:00")
+                self.assertEqual(forms[0]["割接对象"]["割接结束时间"], "2026-11-08 11:40:00")
+                for form in forms:
+                    if form["基本信息"]["中断类型"] != "中断":
+                        self.assertNotIn("中断时间 (分钟)", form["基本信息"])
+                tasks = self.db.list_cutover_tasks_by_email(self.email_records_id)
+                self.assertEqual(len(tasks), 1)
+                self.assertEqual(tasks[0]["fill_result"]["backbone_circuits"], forms)
+                self.assertEqual(tasks[0]["fill_result"]["backbone_interruption_minutes"], expected_minutes)
+
+    def test_backbone_explicit_impact_type_takes_precedence_over_duration(self):
+        for impact_type, duration, expected in (
+            ("interrupted", "1m", ("中断", 1)),
+            ("momentary_interrupted", "20m", ("瞬断", None)),
+            (" PROTECTED ", "365m", ("不中断", None)),
+        ):
+            with self.subTest(impact_type=impact_type):
+                self.assertEqual(
+                    api_server.classify_backbone_interruption(impact_type, duration, "1"),
+                    expected,
+                )
+
     def test_cutover_fill_api_generates_customer_excel_metadata(self):
         payload = {
             "email_records_id": self.email_records_id,

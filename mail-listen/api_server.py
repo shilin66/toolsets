@@ -42,6 +42,7 @@ except ModuleNotFoundError:
     load_workbook = None
 
 from database import email_db
+from cutover_deletion import DeletionConflict, DeletionNotFound, delete_cutover_email
 from actions import (
     APIForwardAction,
     build_security_time,
@@ -61,6 +62,7 @@ from mail_listener import listener_manager
 from email_attachments import (
     attachment_path_from_relative,
     build_attachment_url,
+    is_calendar_attachment,
     save_preview_attachment,
 )
 from html_image import image_path_from_filename
@@ -252,7 +254,19 @@ def require_api_key(f):
                 'message': 'API Key 无效'
             }), 401
         
-        return f(*args, **kwargs)
+        from mail_operation_guard import (
+            MailOperationConflict, guard_mail_operation, request_email_record_id,
+        )
+        record_id = request_email_record_id(email_db, request)
+        try:
+            with guard_mail_operation(
+                email_db, record_id,
+                deleting=request.method == 'DELETE' and request.path.startswith('/api/cutover/emails/'),
+                forwarding=request.path.endswith('/forward-attempts'),
+            ):
+                return f(*args, **kwargs)
+        except MailOperationConflict as error:
+            return jsonify(success=False, message=str(error)), 409
     
     return decorated_function
 
@@ -570,6 +584,7 @@ def get_cutover_template_columns():
             'data': {
                 'circuit': columns.get('电路表', []),
                 'reason': columns.get('割接原因表', []),
+                'defaults': build_cutover_form_defaults(),
             }
         }), 200
     except Exception as e:
@@ -803,11 +818,16 @@ def classify_backbone_interruption(
     impact_duration: str | int | float | None,
     interruptions_counts: str | int | float | None,
 ) -> tuple[str, int | None]:
-    is_protected = normalize_excel_value(impact_type).casefold() == 'protected'
-    if is_protected:
+    normalized_type = normalize_excel_value(impact_type).casefold()
+    if normalized_type == 'protected':
         return '不中断', None
+    if normalized_type == 'momentary_interrupted':
+        return '瞬断', None
 
     minutes = calculate_interrupt_minutes(impact_duration, interruptions_counts)
+    if normalized_type == 'interrupted':
+        return '中断', minutes
+    # 兼容旧提取结果中的 Outage 等非标准类型。
     if minutes < MOMENTARY_INTERRUPTION_LIMIT_MINUTES:
         return '瞬断', None
     return '中断', minutes
@@ -896,6 +916,28 @@ def backbone_fixed_sections(
     }
 
 
+def backbone_basic_defaults():
+    """固定选项与空变量字段，供自动生成和手动新增共用。"""
+    return {
+        '标题': '',
+        '割接分类': '线路割接',
+        '割接原因分类': '其它运营商割接',
+        '涉及系统（网络）': '涉及系统（网络）',
+        '操作厂家': '无',
+        '设备名称': '无',
+        '割接省份': '国际',
+        '变更操作内容': '其他单段光缆割接',
+        '变更操作等级': '四级',
+        '调度方式': '不调度',
+        '中断类型': '',
+        '需要配合的省': '',
+        '是否涉及集团维护设备或业务影响超出本省范围': '是',
+        '是否有回退应急预案和舆情应对方案': '不涉及',
+        '割接地点': '',
+        '是否跨专业': '否'
+    }
+
+
 def build_backbone_circuit(
     line,
     circuit_info,
@@ -916,24 +958,8 @@ def build_backbone_circuit(
         line.get('InteruptionsCounts'),
     )
 
-    basic_info = {
-        '标题': title,
-        '割接分类': '线路割接',
-        '割接原因分类': '其它运营商割接',
-        '涉及系统（网络）': '涉及系统（网络）',
-        '操作厂家': '无',
-        '设备名称': '无',
-        '割接省份': '国际',
-        '变更操作内容': '其他单段光缆割接',
-        '变更操作等级': '四级',
-        '调度方式': '不调度',
-        '中断类型': interrupt_type,
-        '需要配合的省': '',
-        '是否涉及集团维护设备或业务影响超出本省范围': '是',
-        '是否有回退应急预案和舆情应对方案': '不涉及',
-        '割接地点': '',
-        '是否跨专业': '否'
-    }
+    basic_info = backbone_basic_defaults()
+    basic_info.update({'标题': title, '中断类型': interrupt_type})
     if interrupt_minutes is not None:
         basic_info['中断原因'] = f'{title}--Location: {location} Reason: {cutover_reason}'
         basic_info['中断时间 (分钟)'] = interrupt_minutes
@@ -959,6 +985,39 @@ def build_backbone_circuit(
     }
 
 
+def build_cutover_form_defaults():
+    """首次新增只填固定值，不推导邮件、线路或供应商相关变量。"""
+    circuit = build_customer_circuit({}, {}, '', '', '')
+    circuit.update({'客户电路在割接段是否有保护': '', '预计影响客户业务时长': ''})
+    reason = build_customer_reason('', '', '', '', '')
+    reason['割接原因'] = ''
+    backbone = {
+        '基本信息': backbone_basic_defaults(),
+        '割接对象': {
+            '割接类型': '正常割接',
+            '割接对象所属机构': '国际',
+            '割接对象类型': '高阶通道',
+            '系统名称': [],
+            '割接开始时间': '',
+            '割接结束时间': '',
+        },
+        **backbone_fixed_sections('', '', '', '', '', get_backbone_personnel_settings()),
+    }
+    backbone['人员信息']['操作审核人姓名'] = ''
+    backbone['其他']['割接原因'] = ''
+    return {'circuit': circuit, 'reason': reason, 'backbone': backbone}
+
+
+def backbone_report_group_key(circuit):
+    """只有割接窗口和影响类型均相同的骨干线路才能合并上报。"""
+    cutover_object = circuit.get('割接对象') or {}
+    return (
+        cutover_object.get('割接开始时间'),
+        cutover_object.get('割接结束时间'),
+        (circuit.get('基本信息') or {}).get('中断类型'),
+    )
+
+
 def merge_backbone_circuits_by_time(backbone_circuits):
     grouped = {}
     for circuit in backbone_circuits:
@@ -975,13 +1034,10 @@ def merge_backbone_circuits_by_time(backbone_circuits):
             if normalize_excel_value(name)
         ]
         cutover_object['系统名称'] = normalized_names
-        window = (
-            cutover_object.get('割接开始时间'),
-            cutover_object.get('割接结束时间'),
-        )
-        existing = grouped.get(window)
+        group_key = backbone_report_group_key(circuit)
+        existing = grouped.get(group_key)
         if existing is None:
-            grouped[window] = circuit
+            grouped[group_key] = circuit
             continue
         existing_names = existing['割接对象']['系统名称']
         for system_name in normalized_names:
@@ -991,24 +1047,14 @@ def merge_backbone_circuits_by_time(backbone_circuits):
 
 
 def merge_backbone_interruption_minutes(backbone_circuits, interruption_minutes):
-    minutes_by_window = {}
+    minutes_by_group = {}
     for circuit, minutes in zip(backbone_circuits, interruption_minutes):
-        cutover_object = circuit.get('割接对象') or {}
-        window = (
-            cutover_object.get('割接开始时间'),
-            cutover_object.get('割接结束时间'),
-        )
-        minutes_by_window.setdefault(window, minutes)
+        minutes_by_group.setdefault(backbone_report_group_key(circuit), minutes)
 
     merged_circuits = merge_backbone_circuits_by_time(backbone_circuits)
     merged_minutes = []
     for circuit in merged_circuits:
-        cutover_object = circuit.get('割接对象') or {}
-        window = (
-            cutover_object.get('割接开始时间'),
-            cutover_object.get('割接结束时间'),
-        )
-        merged_minutes.append(minutes_by_window.get(window))
+        merged_minutes.append(minutes_by_group.get(backbone_report_group_key(circuit)))
     return merged_circuits, merged_minutes
 
 
@@ -1426,6 +1472,8 @@ def reply_cutover_email():
             }), 404
 
         record_id = email_record['id']
+        if email_record.get('processing_origin') == 'unconfigured':
+            return jsonify({'success': False, 'message': '未配置供应商请使用时间分析结果接口登记回复'}), 400
         if not email_db.save_pending_reply(record_id, normalize_excel_value(reply_content), cutover_scene or ''):
             return jsonify({
                 'success': False,
@@ -1550,15 +1598,29 @@ def confirm_cutover_reply():
                 'success': False,
                 'message': '未找到可用的邮箱账号配置，无法回复'
             }), 500
-        success = reply_client.reply_email(
-            original_email,
-            final_content,
-            html_content=email_record.get('html_content') or None,
-            recipients=final_recipients,
-            cc_recipients=cc_recipients,
-        )
+        unconfigured = email_record.get('processing_origin') == 'unconfigured'
+        if not email_db.claim_pending_reply(email_record['id'], final_content):
+            return jsonify({'success': False, 'message': '回复状态已变化，请刷新后核对'}), 409
+        try:
+            success = reply_client.reply_email(
+                original_email,
+                final_content,
+                html_content=email_record.get('html_content') or None,
+                recipients=final_recipients,
+                cc_recipients=cc_recipients,
+            )
+        except Exception:
+            if unconfigured:
+                email_db.mark_reply_uncertain(email_record['id'])
+            else:
+                email_db.release_pending_reply(email_record['id'])
+            raise
 
         if not success:
+            if unconfigured:
+                email_db.mark_reply_uncertain(email_record['id'])
+            else:
+                email_db.release_pending_reply(email_record['id'])
             return jsonify({
                 'success': False,
                 'message': '邮件回复发送失败'
@@ -1732,6 +1794,8 @@ def update_cutover_scene():
                 'message': f'邮件记录不存在：email_records_id={email_records_id}'
             }), 404
 
+        if email_record.get('processing_origin') == 'unconfigured':
+            return jsonify(success=False, message='未配置供应商请使用时间分析结果接口'), 400
         remark_text = normalize_excel_value(scene_remark) or ''
         if not email_db.update_email_record_cutover_scene(
             email_records_id, cutover_scene, remark_text,
@@ -1792,7 +1856,12 @@ def render_admin_page():
         '__RPA_DEFAULT_ENVIRONMENT__',
         default_environment,
     )
-    for name in ('admin.css', 'admin-shared.js', 'admin-i18n.js', 'admin-views.js', 'admin.js'):
+    for name in (
+        'vendor/vue.global.prod.js', 'vendor/naive-ui.js',
+        'admin-naive.js', 'admin-naive-controls.js', 'admin-naive-display.js',
+        'admin.css', 'admin-shared.js', 'admin-i18n.js',
+        'admin-views.js', 'admin-discovery.js', 'admin.js',
+    ):
         path = BASE_DIR / 'static' / name
         version = path.stat().st_mtime_ns
         html = html.replace(f'/static/{name}', f'/static/{name}?v={version}')
@@ -1980,8 +2049,14 @@ def upload_supplier_preview_attachment():
                 'success': False,
                 'message': '未接收到附件文件'
             }), 400
+        if is_calendar_attachment(uploaded_file.filename, uploaded_file.mimetype):
+            return jsonify({
+                'success': False,
+                'message': 'ICS 日历附件不保存，也不参与提取，请上传其它附件'
+            }), 400
         relative_path = save_preview_attachment(
-            uploaded_file.filename, uploaded_file.read()
+            uploaded_file.filename, uploaded_file.read(),
+            charset=uploaded_file.mimetype_params.get('charset'),
         )
         return jsonify({
             'success': True,
@@ -2011,6 +2086,8 @@ def preview_supplier_extract():
         body = request.get_json(silent=True) or {}
         attachments = []
         for relative_path in body.get('attachments') or []:
+            if is_calendar_attachment(relative_path):
+                continue
             if attachment_path_from_relative(relative_path) is None:
                 return jsonify({
                     'success': False,
@@ -2717,6 +2794,8 @@ def update_cutover_line_binding(email_records_id):
     record = email_db.get_email_record_by_id(email_records_id)
     if not record:
         return jsonify(success=False, message='邮件记录不存在'), 404
+    if record.get('processing_origin') == 'unconfigured':
+        return jsonify(success=False, message='未配置供应商邮件不进行线路匹配'), 400
     try:
         binding = request.get_json(silent=True)
         if not isinstance(binding, dict):
@@ -2746,6 +2825,8 @@ def update_cutover_extraction(email_records_id):
     record = email_db.get_email_record_by_id(email_records_id)
     if not record:
         return jsonify(success=False, message='邮件记录不存在'), 404
+    if record.get('processing_origin') == 'unconfigured':
+        return jsonify(success=False, message='未配置供应商邮件不进行线路提取'), 400
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify(success=False, message='提取结果必须是 JSON 对象'), 400
@@ -2798,6 +2879,8 @@ def generate_cutover_tasks():
         email_record = email_db.get_email_record_by_id(email_records_id)
         if not email_record:
             return failure_response(f'邮件记录不存在：email_records_id={email_records_id}', 404)
+        if email_record.get('processing_origin') == 'unconfigured':
+            return failure_response('未配置供应商邮件只分析整体时间，不生成线路任务', 400)
 
         detail_record_id = email_records_id
         payload = prepare_cutover_payload(email_record, payload)
@@ -3125,6 +3208,21 @@ def get_cutover_email_detail(email_records_id):
         }), 500
 
 
+@app.route('/api/cutover/emails/<int:email_records_id>', methods=['DELETE'])
+@require_api_key
+def delete_cutover_email_route(email_records_id):
+    try:
+        data = delete_cutover_email(email_db, DATA_DIR, email_records_id)
+        return jsonify(success=True, data=data, message='割接邮件及关联数据已删除'), 200
+    except DeletionNotFound as error:
+        return jsonify(success=False, message=str(error)), 404
+    except DeletionConflict as error:
+        return jsonify(success=False, message=str(error)), 409
+    except Exception:
+        logger.exception('割接邮件删除未完成: email_records_id={}', email_records_id)
+        return jsonify(success=False, message='删除未完成，请重试；相关数据不会被标记为已清理'), 500
+
+
 @app.route(
     '/api/cutover/emails/<int:email_records_id>/forward-attempts',
     methods=['POST'],
@@ -3138,6 +3236,8 @@ def retry_cutover_email_api_forward(email_records_id):
             'message': f'邮件记录不存在：id={email_records_id}',
         }), 404
 
+    if email_record.get('processing_origin') == 'unconfigured':
+        return jsonify({'success': False, 'message': '未配置供应商只能重试已有的失败分析任务'}), 400
     try:
         email = email_message_from_record(email_record)
         result = APIForwardAction(email_db).execute(
@@ -3857,9 +3957,11 @@ def is_valid_guard_time(value: str) -> bool:
 
 
 def get_system_settings_values() -> dict:
+    from unconfigured_mail import read_settings
     stored = email_db.get_system_settings()
     values = {key: stored.get(key) for key in GUARD_TIME_KEYS}
     values.update(resolve_backbone_personnel_settings(stored))
+    values.update(read_settings(email_db))
     return values
 
 
@@ -3883,8 +3985,11 @@ def get_system_settings():
 @app.route('/api/system/settings', methods=['PUT'])
 @require_api_key
 def update_system_settings():
+    from unconfigured_mail import DEFAULT_SETTINGS
     try:
         payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({'success': False, 'message': '请求必须是 JSON 对象'}), 400
         updates = {}
         for key in GUARD_TIME_KEYS:
             if key not in payload:
@@ -3911,14 +4016,17 @@ def update_system_settings():
                 }), 400
             updates[key] = value.strip()
 
-        if not updates:
+        policy_updates = {key: payload[key] for key in DEFAULT_SETTINGS if key in payload}
+        if not updates and not policy_updates:
             return jsonify({
                 'success': False,
                 'message': '未提供可更新的配置项'
             }), 400
 
-        for key, value in updates.items():
-            email_db.set_system_setting(key, value)
+        try:
+            email_db.set_system_settings(updates, policy_updates)
+        except ValueError as exc:
+            return jsonify({'success': False, 'message': str(exc)}), 400
 
         return jsonify({
             'success': True,
@@ -4224,6 +4332,10 @@ def test_mail_account_api(account_id):
         logger.error(f"测试邮箱连接失败: {e}")
         return jsonify({'success': False, 'message': f'服务器错误: {str(e)}'}), 500
 
+
+
+from supplier_drafts import register_routes as register_supplier_draft_routes
+register_supplier_draft_routes(app, lambda: email_db, require_api_key)
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-/* Mail Listen 管理台 · Vue 3 + Element Plus 视图组件
+/* Mail Listen 管理台 · Vue 3 + Naive UI 视图组件
  * 依赖加载顺序：vendor → admin-shared.js → 本文件 → admin.js
  * 注意：模板为运行时编译的字符串模板，自定义元素无自闭合坑，但仍统一显式闭合。
  */
@@ -34,7 +34,7 @@ const ViewLogin = defineComponent({
       try {
         await checkApiKey(key);
         persistApiKey(key);
-        ElMessage.success(tt("login.success"));
+        NocMessage.success(tt("login.success"));
       } catch (error) {
         errorMessage.value = error.message || tt("login.keyInvalid");
       } finally {
@@ -46,10 +46,10 @@ const ViewLogin = defineComponent({
   },
   template: `
     <div class="login-screen">
-      <el-select class="login-lang" size="small" :model-value="currentLang" @change="changeLang">
-        <el-option v-for="option in langOptions" :key="option.value"
-                   :label="option.label" :value="option.value"></el-option>
-      </el-select>
+      <ui-select class="login-lang" size="small" :model-value="currentLang" @change="changeLang">
+        <ui-option v-for="option in langOptions" :key="option.value"
+                   :label="option.label" :value="option.value"></ui-option>
+      </ui-select>
 
       <div class="login-card">
         <div class="login-brand">
@@ -61,13 +61,13 @@ const ViewLogin = defineComponent({
         </div>
         <h2 class="login-title">{{ $t('login.title') }}</h2>
         <p class="login-subtitle">{{ $t('login.subtitle') }}</p>
-        <el-input v-model="keyInput" type="password" show-password size="large"
+        <ui-input v-model="keyInput" type="password" show-password size="large"
                   :placeholder="$t('login.keyPlaceholder')"
                   aria-label="API Key"
-                  @keyup.enter="submitLogin"></el-input>
+                  @keyup.enter="submitLogin"></ui-input>
         <p v-if="errorMessage" class="login-error" role="alert">{{ errorMessage }}</p>
-        <el-button class="login-submit" type="primary" size="large"
-                   :loading="submitting" @click="submitLogin">{{ $t('login.submit') }}</el-button>
+        <ui-button class="login-submit" type="primary" size="large"
+                   :loading="submitting" @click="submitLogin">{{ $t('login.submit') }}</ui-button>
         <p class="login-hint">{{ $t('login.hint') }}</p>
       </div>
     </div>
@@ -78,6 +78,7 @@ const ViewLogin = defineComponent({
 const ViewSuppliers = defineComponent({
   name: "ViewSuppliers",
   setup() {
+    const activeTab = ref(new URLSearchParams(window.location.search).has('draft') ? 'drafts' : 'formal');
     const suppliers = ref([]);
     const loading = ref(false);
 
@@ -97,7 +98,7 @@ const ViewSuppliers = defineComponent({
 
     async function removeSupplier(supplier) {
       try {
-        await ElMessageBox.confirm(
+        await NocDialog.confirm(
           tt("suppliers.deleteConfirm", { name: supplier.name }),
           tt("suppliers.deleteTitle"),
           { confirmButtonText: tt("common.confirmDelete"), cancelButtonText: tt("common.cancel"), type: "warning" },
@@ -107,10 +108,10 @@ const ViewSuppliers = defineComponent({
       }
       try {
         await requestJson(`/api/suppliers/${supplier.id}`, { method: "DELETE" });
-        ElMessage.success(tt("suppliers.deleted"));
+        NocMessage.success(tt("suppliers.deleted"));
         await loadSuppliers();
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       }
     }
 
@@ -129,43 +130,47 @@ const ViewSuppliers = defineComponent({
     });
 
     return {
-      suppliers, loading, loadSuppliers, removeSupplier, goCreate, goEdit,
+      suppliers, loading, loadSuppliers, removeSupplier, goCreate, goEdit, activeTab,
       icons: ElementPlusIconsVue,
     };
   },
   template: `
-    <div class="view-body">
-      <el-card shadow="never" class="table-card">
+    <div class="view-body supplier-config-view">
+      <ui-tabs v-model="activeTab" class="supplier-config-tabs"><ui-tab-pane :label="$t('discovery.formal')" name="formal"></ui-tab-pane><ui-tab-pane :label="$t('discovery.drafts')" name="drafts"></ui-tab-pane></ui-tabs>
+      <supplier-drafts-table v-if="activeTab === 'drafts'"></supplier-drafts-table>
+      <ui-card v-else shadow="never" class="table-card">
         <template #header>
           <div class="card-header">
-            <span class="card-title">{{ $t('suppliers.listTitle') }}</span>
-            <div>
-              <el-button :icon="icons.Refresh" @click="loadSuppliers">{{ $t('common.refresh') }}</el-button>
-              <el-button type="primary" :icon="icons.Plus" @click="goCreate">{{ $t('suppliers.create') }}</el-button>
+            <h2 class="card-title">{{ $t('suppliers.listTitle') }}</h2>
+            <div class="toolbar-actions">
+              <ui-action icon="Refresh" :label="$t('common.refresh')" :loading="loading" @click="loadSuppliers"></ui-action>
+              <ui-button type="primary" :icon="icons.Plus" @click="goCreate">{{ $t('suppliers.create') }}</ui-button>
             </div>
           </div>
         </template>
-        <el-table v-loading="loading" :data="suppliers" :empty-text="$t('suppliers.empty')" stripe>
-          <el-table-column prop="name" :label="$t('suppliers.name')" min-width="160">
+        <ui-table v-loading="loading" :data="suppliers" :empty-text="$t('suppliers.empty')" stripe>
+          <ui-table-column prop="name" :label="$t('suppliers.name')" min-width="160">
             <template #default="{ row }">
               <span class="cell-main">{{ row.name }}</span>
             </template>
-          </el-table-column>
-          <el-table-column prop="email" :label="$t('common.email')" min-width="220"></el-table-column>
-          <el-table-column prop="reply_email" :label="$t('suppliers.replyEmail')" min-width="220"></el-table-column>
-          <el-table-column prop="update_time" :label="$t('common.updateTime')" width="180">
+          </ui-table-column>
+          <ui-table-column prop="email" :label="$t('common.email')" min-width="220"></ui-table-column>
+          <ui-table-column prop="reply_email" :label="$t('suppliers.replyEmail')" min-width="220"></ui-table-column>
+          <ui-table-column prop="update_time" :label="$t('common.updateTime')" width="180">
             <template #default="{ row }">
-              <span class="mono muted">{{ row.update_time }}</span>
+              <span class="mono muted">{{ (row.update_time || '').slice(0, 19).replace('T', ' ') }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('common.actions')" width="150" align="right" fixed="right">
+          </ui-table-column>
+          <ui-table-column :label="$t('common.actions')" width="112" align="center" fixed="right">
             <template #default="{ row }">
-              <el-button link type="primary" :icon="icons.Edit" @click="goEdit(row)">{{ $t('common.edit') }}</el-button>
-              <el-button link type="danger" :icon="icons.Delete" @click="removeSupplier(row)">{{ $t('common.delete') }}</el-button>
+              <div class="row-actions">
+                <ui-action type="primary" @click="goEdit(row)" icon="Edit" :label="$t('common.edit')"></ui-action>
+                <ui-action type="danger" @click="removeSupplier(row)" icon="Delete" :label="$t('common.delete')"></ui-action>
+              </div>
             </template>
-          </el-table-column>
-        </el-table>
-      </el-card>
+          </ui-table-column>
+        </ui-table>
+      </ui-card>
     </div>
   `,
 });
@@ -296,9 +301,14 @@ const ViewSupplierForm = defineComponent({
   name: "ViewSupplierForm",
   props: {
     supplierId: { type: Number, default: null },
+    draftId: { type: Number, default: null },
   },
-  setup(props) {
+  emits: ['close', 'published'],
+  setup(props, {emit}) {
     const isEdit = computed(() => props.supplierId != null);
+    const isDraft = computed(() => props.draftId != null);
+    const draftRecord = ref(null);
+    const supplierNameInput = ref(null);
     const loading = ref(false);
     const saving = ref(false);
     const loadFailed = ref(false);
@@ -335,6 +345,12 @@ const ViewSupplierForm = defineComponent({
     const sectionActiveNames = ref(["basic", "mailTypes", "fixed", "custom", "topCustom", "prompt"]);
     const mailTypes = ref([]); // [{ name, subject, content, contentInAttachment }]
     const mailTypeOptions = ref([]);
+    const mailTypeDialogVisible = ref(false);
+    const mailTypeName = ref('');
+    const mailTypeNameError = ref('');
+    const mailTypeNameInput = ref(null);
+    const sampleEditor = ref(null);
+    const loadingOriginalSample = ref(false);
     const configuredMailTypeCount = computed(() => mailTypes.value.filter((item) => {
       return item.subject.trim() || item.content.trim();
     }).length);
@@ -346,7 +362,7 @@ const ViewSupplierForm = defineComponent({
     const extractPreviewView = computed(() => buildExtractPreviewView(extractPreview.value));
     const previewing = ref(false);
     const extracting = ref(false);
-    const extractFiles = ref([]); // el-upload 文件列表，提取预览时随请求上传
+    const extractFiles = ref([]); // ui-upload 文件列表，提取预览时随请求上传
     const extractResultVisible = ref(false); // 提取结果弹窗，避免结果藏在页面底部
 
     // 影响线路列宽：按表头与内容长度估算，减少横向滚动
@@ -378,10 +394,12 @@ const ViewSupplierForm = defineComponent({
     async function fillMailTypes(supplier) {
       const options = await ensureMailTypeOptions();
       const samples = (supplier && supplier.email_type_samples) || {};
-      mailTypes.value = options.map((name) => {
+      const names = [...new Set([...options, ...Object.keys(samples)])];
+      mailTypes.value = names.map((name) => {
         const sample = samples[name] || {};
         return {
           name,
+          isCustom: !options.includes(name),
           subject: sample.subject || "",
           content: sample.content || "",
           contentInAttachment: Boolean(sample.content_in_attachment),
@@ -389,8 +407,37 @@ const ViewSupplierForm = defineComponent({
       });
     }
 
+    function openMailTypeDialog() {
+      mailTypeName.value = '';
+      mailTypeNameError.value = '';
+      mailTypeDialogVisible.value = true;
+    }
+
+    function addMailType() {
+      const name = mailTypeName.value.trim();
+      if (!name || Array.from(name).length > 32 || /[\u0000-\u001f\u007f-\u009f]/u.test(name)) {
+        mailTypeNameError.value = tt('supplierForm.mailTypeNameInvalid');
+        return;
+      }
+      if (name === '其它') {
+        mailTypeNameError.value = tt('supplierForm.mailTypeNameReserved');
+        return;
+      }
+      if (mailTypes.value.some(item => item.name === name)) {
+        mailTypeNameError.value = tt('supplierForm.mailTypeNameDuplicate');
+        return;
+      }
+      mailTypes.value.push({name, isCustom:true, subject:'', content:'', contentInAttachment:false});
+      if (!sectionActiveNames.value.includes('mailTypes')) sectionActiveNames.value.push('mailTypes');
+      mailTypeDialogVisible.value = false;
+    }
+
+    function removeMailType(item) {
+      if (item.isCustom) mailTypes.value = mailTypes.value.filter(value => value !== item);
+    }
+
     async function fillFromSupplier(supplier) {
-      form.name = supplier ? supplier.name : "";
+      form.name = supplier ? supplier.name || "" : "";
       form.email = supplier ? supplier.email : "";
       form.reply_email = supplier ? supplier.reply_email || supplier.email : "";
       form.extra_instructions = supplier ? supplier.extra_instructions || "" : "";
@@ -462,7 +509,8 @@ const ViewSupplierForm = defineComponent({
       loading.value = true;
       loadFailed.value = false;
       try {
-        const supplier = isEdit.value
+        draftRecord.value = isDraft.value ? await requestJson(`/api/supplier-drafts/${props.draftId}`) : null;
+        const supplier = isDraft.value ? draftRecord.value.draft.config : isEdit.value
           ? await requestJson(`/api/suppliers/${props.supplierId}`)
           : null;
         await fillFromSupplier(supplier);
@@ -472,6 +520,19 @@ const ViewSupplierForm = defineComponent({
       } finally {
         loading.value = false;
       }
+    }
+
+    async function loadOriginalSample(item) {
+      const sourceId = draftRecord.value?.source_email_records_id;
+      if (!sourceId || loadingOriginalSample.value) return;
+      loadingOriginalSample.value = true;
+      try {
+        const source = await requestJson(`/api/emails/${sourceId}/source`);
+        item.subject = source.subject || '';
+        item.content = source.html_content || source.content || '';
+        NocMessage.success(tt('supplierForm.originalSampleLoaded'));
+      } catch (error) { NocMessage.error(error.message); }
+      finally { loadingOriginalSample.value = false; }
     }
 
     function addLineField() {
@@ -570,9 +631,9 @@ const ViewSupplierForm = defineComponent({
       if (!requiredType.content.trim()) {
         throw new Error(tt("supplierForm.contentSampleRequired"));
       }
-      const emailTypeSamples = {};
+      const emailTypeSamples = Object.create(null);
       for (const item of mailTypes.value) {
-        if (item.name !== "割接通知" && !isMailTypeItemConfigured(item)) {
+        if (!item.isCustom && item.name !== "割接通知" && !isMailTypeItemConfigured(item)) {
           continue;
         }
         emailTypeSamples[item.name] = {
@@ -592,7 +653,7 @@ const ViewSupplierForm = defineComponent({
         email: form.email.trim(),
         reply_email: form.reply_email.trim() || form.email.trim(),
         extra_instructions: form.extra_instructions.trim(),
-        email_type_samples: collectMailTypeSamples(),
+        email_type_samples: isDraft.value ? collectCurrentMailTypeSamples() : collectMailTypeSamples(),
       };
       if (lineCustomFields.length || !legacy) {
         payload.prompt_mode = "auto";
@@ -609,7 +670,7 @@ const ViewSupplierForm = defineComponent({
         payload.custom_fields = [];
         payload.cutover_extract_prompt = legacy;
       }
-      if (!lineCustomFields.length && !legacy) {
+      if (!isDraft.value && !lineCustomFields.length && !legacy) {
         throw new Error(tt("supplierForm.lineFieldRequired"));
       }
       return payload;
@@ -657,7 +718,7 @@ const ViewSupplierForm = defineComponent({
 
     function collectCurrentMailTypeSamples() {
       // 预览用，不做必填校验，空样本由后端提示词生成时自动跳过
-      const samples = {};
+      const samples = Object.create(null);
       for (const item of mailTypes.value) {
         samples[item.name] = {
           subject: item.subject.trim(),
@@ -690,11 +751,11 @@ const ViewSupplierForm = defineComponent({
     async function previewExtract() {
       const sample = mailTypes.value.find((item) => item.name === "割接通知");
       if (!sample) {
-        ElMessage.error(tt("supplierForm.mailTypeNotLoaded"));
+        NocMessage.error(tt("supplierForm.mailTypeNotLoaded"));
         return;
       }
       if (!sample.subject.trim() && !sample.content.trim()) {
-        ElMessage.error(tt("supplierForm.previewNeedsSample"));
+        NocMessage.error(tt("supplierForm.previewNeedsSample"));
         return;
       }
       extracting.value = true;
@@ -721,7 +782,7 @@ const ViewSupplierForm = defineComponent({
         extractPreview.value = "";
         extractResultVisible.value = false;
         setStatus(error.message, "error");
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         extracting.value = false;
       }
@@ -732,24 +793,60 @@ const ViewSupplierForm = defineComponent({
       try {
         payload = buildSupplierPayload();
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
         return;
       }
       saving.value = true;
       try {
+        if (isDraft.value) {
+          draftRecord.value = await requestJson(`/api/supplier-drafts/${props.draftId}`, {
+            method: 'PUT', body: JSON.stringify({revision: draftRecord.value.revision, config: payload}),
+          });
+          NocMessage.success(tt('discovery.draftSaved'));
+          return true;
+        }
         const path = isEdit.value ? `/api/suppliers/${props.supplierId}` : "/api/suppliers";
         await requestJson(path, {
           method: isEdit.value ? "PATCH" : "POST",
           body: JSON.stringify(payload),
         });
-        ElMessage.success(isEdit.value ? tt("supplierForm.saved") : tt("supplierForm.created"));
+        NocMessage.success(isEdit.value ? tt("supplierForm.saved") : tt("supplierForm.created"));
         navigateTo("suppliers");
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
         setStatus(error.message, "error");
       } finally {
         saving.value = false;
       }
+    }
+
+    async function publishDraft() {
+      if (!form.name.trim()) {
+        if (!sectionActiveNames.value.includes('basic')) sectionActiveNames.value.push('basic');
+        NocMessage.error(tt('discovery.nameRequiredForPublish'));
+        await nextTick();
+        supplierNameInput.value?.focus();
+        return;
+      }
+      try {
+        collectMailTypeSamples();
+      } catch (error) {
+        if (!sectionActiveNames.value.includes('mailTypes')) sectionActiveNames.value.push('mailTypes');
+        NocMessage.error(error.message);
+        return;
+      }
+      if (!(await saveSupplier())) return;
+      try {
+        await NocDialog.confirm(tt('discovery.publishConfirm'), tt('discovery.publish'), {type: 'warning', confirmButtonText: tt('discovery.publish'), cancelButtonText: tt('common.cancel')});
+      } catch { return; }
+      saving.value = true;
+      try {
+        await requestJson(`/api/supplier-drafts/${props.draftId}/publish`, {method:'POST', body:JSON.stringify({revision:draftRecord.value.revision})});
+        draftRecord.value.status = 'published';
+        NocMessage.success(tt('discovery.publishedMessage'));
+        emit('published');
+      } catch (error) { NocMessage.error(error.message); }
+      finally { saving.value = false; }
     }
 
     onMounted(() => {
@@ -759,10 +856,13 @@ const ViewSupplierForm = defineComponent({
     });
 
     return {
-      isEdit, loading, saving, loadFailed, form,
+      isEdit, isDraft, draftRecord, supplierNameInput, publishDraft, loading, saving, loadFailed, form,
       fixedFields, selectedFixedField, selectedFixedFieldName,
       customizedFixedFieldCount, defaultFixedFieldCount,
       mailTypes, configuredMailTypeCount,
+      sampleEditor, loadingOriginalSample, loadOriginalSample,
+      mailTypeDialogVisible, mailTypeName, mailTypeNameError, mailTypeNameInput,
+      openMailTypeDialog, addMailType, removeMailType,
       sectionActiveNames, lineFields, topCustomFields, legacyPrompt, promptPreview, previewing,
       extractPreview, extracting, extractFiles, extractPreviewView, extractResultVisible,
       lineColumnWidth,
@@ -774,6 +874,7 @@ const ViewSupplierForm = defineComponent({
   },
   methods: {
     goBack() {
+      if (this.isDraft) { this.$emit('close'); return; }
       navigateTo("suppliers");
     },
   },
@@ -784,52 +885,51 @@ const ViewSupplierForm = defineComponent({
   },
   template: `
     <div class="view-body supplier-form-view" v-loading="loading">
-      <nav class="supplier-context-bar" :aria-label="$t('common.pageLocation')">
-        <el-button link class="supplier-back-link" :icon="icons.ArrowLeft" @click="goBack">{{ $t('suppliers.listTitle') }}</el-button>
-        <span class="supplier-context-separator" aria-hidden="true">/</span>
-        <span class="supplier-context-current">{{ isEdit ? $t('nav.supplierEdit') : $t('nav.supplierCreate') }}</span>
-      </nav>
+      <p v-if="isDraft" class="field-hint">{{ $t('discovery.draftHint') }}</p>
 
       <p v-if="!loading && loadFailed" class="empty-inline">{{ $t('common.loadFailedBack') }}</p>
 
-      <el-collapse v-if="!loadFailed"
+      <ui-collapse v-if="!loadFailed"
                    v-model="sectionActiveNames"
                    class="supplier-form supplier-form-page supplier-section-collapse">
         <!-- 基本信息 -->
-        <el-collapse-item name="basic" class="supplier-section supplier-section--basic">
+        <ui-collapse-item name="basic" class="supplier-section supplier-section--basic">
           <template #title>
             <div class="supplier-section-head">
               <strong>{{ $t('supplierForm.basicInfo') }}</strong>
               <div class="supplier-section-actions">
-                <el-button size="small" @click.stop="goBack">{{ $t('common.cancel') }}</el-button>
-                <el-button size="small" type="primary" :loading="saving" @click.stop="saveSupplier">{{ $t('supplierForm.saveConfig') }}</el-button>
+                <ui-button size="small" @click.stop="goBack">{{ $t('common.cancel') }}</ui-button>
+                <ui-button v-if="!isDraft || draftRecord?.status === 'review'" size="small" type="primary" :loading="saving" @click.stop="saveSupplier">{{ isDraft ? $t('discovery.saveDraft') : $t('supplierForm.saveConfig') }}</ui-button>
+                <ui-button v-if="isDraft && draftRecord?.status === 'review'" size="small" :loading="saving" @click.stop="publishDraft">{{ $t('discovery.publish') }}</ui-button>
+                <ui-tag v-if="isDraft && draftRecord?.status === 'published'" type="success">{{ $t('discovery.published') }}</ui-tag>
               </div>
             </div>
           </template>
           <div class="field-grid-2">
             <div class="form-field">
               <label class="form-label">{{ $t('supplierForm.nameLabel') }} <span class="required-mark">*</span></label>
-              <el-input v-model="form.name" :placeholder="$t('supplierForm.namePlaceholder')"></el-input>
+              <ui-input ref="supplierNameInput" v-model="form.name" :aria-label="$t('supplierForm.nameLabel')" :placeholder="$t('supplierForm.namePlaceholder')"></ui-input>
             </div>
             <div class="form-field">
               <label class="form-label">{{ $t('supplierForm.emailLabel') }} <span class="required-mark">*</span></label>
-              <el-input v-model="form.email" type="email" :placeholder="$t('supplierForm.emailPlaceholder')"></el-input>
+              <ui-input v-model="form.email" type="email" :disabled="isDraft" :placeholder="$t('supplierForm.emailPlaceholder')"></ui-input>
             </div>
             <div class="form-field">
               <label class="form-label">{{ $t('supplierForm.replyEmailLabel') }}</label>
-              <el-input v-model="form.reply_email" type="email" :placeholder="$t('supplierForm.replyEmailPlaceholder')"></el-input>
+              <ui-input v-model="form.reply_email" type="email" :placeholder="$t('supplierForm.replyEmailPlaceholder')"></ui-input>
               <p class="field-hint">{{ $t('supplierForm.replyEmailHint') }}</p>
             </div>
           </div>
-        </el-collapse-item>
+        </ui-collapse-item>
 
         <!-- 邮件类型样本 -->
-        <el-collapse-item name="mailTypes" class="supplier-section supplier-section--mail-types">
+        <ui-collapse-item name="mailTypes" class="supplier-section supplier-section--mail-types">
           <template #title>
             <div class="supplier-section-head">
               <strong>{{ $t('supplierForm.mailTypesTitle') }}</strong>
-              <div class="fixed-field-summary" :aria-label="$t('supplierForm.mailTypesStatsLabel')">
+              <div class="supplier-section-actions" :aria-label="$t('supplierForm.mailTypesStatsLabel')">
                 <span class="is-configured">{{ $t('supplierForm.configuredCount', { count: configuredMailTypeCount, total: mailTypes.length }) }}</span>
+                <ui-button size="small" :icon="icons.Plus" :disabled="!mailTypes.length" @click.stop="openMailTypeDialog">{{ $t('supplierForm.addMailType') }}</ui-button>
               </div>
             </div>
           </template>
@@ -837,22 +937,36 @@ const ViewSupplierForm = defineComponent({
           <div v-if="!mailTypes.length" class="empty-inline">{{ $t('supplierForm.mailTypesLoadFailed') }}</div>
           <div v-else class="mail-type-list" :aria-label="$t('supplierForm.mailTypesListLabel')">
             <div v-for="item in mailTypes" :key="item.name" class="mail-type-item">
-              <label class="form-label mail-type-name">
-                {{ item.name }}
-                <span v-if="item.name === '割接通知'" class="required-mark">*</span>
-              </label>
-              <el-input v-model="item.subject" :placeholder="$t('supplierForm.subjectPlaceholder')"
-                        style="margin-bottom: 8px"></el-input>
-              <el-input v-model="item.content" type="textarea" :rows="4" resize="vertical"
-                        :placeholder="$t('supplierForm.contentPlaceholder', { name: item.name })"></el-input>
-              <el-checkbox v-if="item.name === '割接通知'" v-model="item.contentInAttachment"
-                           class="mail-type-attachment-flag">{{ $t('supplierForm.contentInAttachment') }}</el-checkbox>
+              <div class="mail-type-heading">
+                <span class="form-label mail-type-name">{{ item.name }}<span v-if="item.name === '割接通知'" class="required-mark"> *</span></span>
+                <div class="toolbar-actions">
+                  <ui-button v-if="isDraft && draftRecord?.source_email_records_id && item.name === '割接通知'" size="small" :loading="loadingOriginalSample" @click="loadOriginalSample(item)">{{ $t('supplierForm.loadOriginalSample') }}</ui-button>
+                  <ui-button size="small" @click="sampleEditor=item">{{ $t('supplierForm.expandSample') }}</ui-button>
+                  <ui-action v-if="item.isCustom" type="danger" @click="removeMailType(item)" icon="Delete" :label="$t('supplierForm.removeMailType')"></ui-action>
+                </div>
+              </div>
+              <ui-input v-model="item.subject" :placeholder="$t('supplierForm.subjectPlaceholder')"
+                        :aria-label="$t('supplierForm.categorySubjectLabel', {name:item.name})"
+                        style="margin-bottom: 8px"></ui-input>
+              <ui-input v-model="item.content" type="textarea" :rows="6" resize="vertical"
+                        :aria-label="$t('supplierForm.categoryContentLabel', {name:item.name})"
+                        :placeholder="$t('supplierForm.contentPlaceholder', { name: item.name })"></ui-input>
+              <ui-checkbox v-if="item.name === '割接通知'" v-model="item.contentInAttachment"
+                           class="mail-type-attachment-flag">{{ $t('supplierForm.contentInAttachment') }}</ui-checkbox>
             </div>
           </div>
-        </el-collapse-item>
+          <ui-dialog :model-value="!!sampleEditor" :title="sampleEditor ? $t('supplierForm.fullSampleTitle', {name:sampleEditor.name}) : ''" class="mail-sample-editor-dialog" width="1040px" @close="sampleEditor=null">
+            <template v-if="sampleEditor">
+              <p class="field-hint">{{ $t('supplierForm.fullSampleHint') }}</p>
+              <ui-input v-model="sampleEditor.subject" :aria-label="$t('supplierForm.categorySubjectLabel', {name:sampleEditor.name})" :placeholder="$t('supplierForm.subjectPlaceholder')"></ui-input>
+              <ui-input v-model="sampleEditor.content" type="textarea" :rows="16" :aria-label="$t('supplierForm.categoryContentLabel', {name:sampleEditor.name})" :placeholder="$t('supplierForm.contentPlaceholder', {name:sampleEditor.name})"></ui-input>
+            </template>
+            <template #footer><ui-button @click="sampleEditor=null">{{ $t('common.close') }}</ui-button></template>
+          </ui-dialog>
+        </ui-collapse-item>
 
         <!-- 固定字段提取规则 -->
-        <el-collapse-item name="fixed" class="supplier-section supplier-section--fixed">
+        <ui-collapse-item name="fixed" class="supplier-section supplier-section--fixed">
           <template #title>
             <div class="supplier-section-head">
               <strong>{{ $t('supplierForm.fixedTitle') }}</strong>
@@ -907,42 +1021,42 @@ const ViewSupplierForm = defineComponent({
                 <div>
                   <div class="fixed-field-editor-title">
                     <strong>{{ selectedFixedField.name }}</strong>
-                    <el-tag size="small" effect="plain">
+                    <ui-tag size="small" effect="plain">
                       {{ selectedFixedField.required ? $t('supplierForm.requiredField') : (selectedFixedField.isLineField ? $t('supplierForm.lineField') : $t('supplierForm.optionalField')) }}
-                    </el-tag>
-                    <el-tag
+                    </ui-tag>
+                    <ui-tag
                       size="small"
                       :type="isFixedFieldCustomized(selectedFixedField) ? 'success' : 'info'"
                       effect="plain"
-                    >{{ isFixedFieldCustomized(selectedFixedField) ? $t('supplierForm.customized') : $t('supplierForm.useDefault') }}</el-tag>
+                    >{{ isFixedFieldCustomized(selectedFixedField) ? $t('supplierForm.customized') : $t('supplierForm.useDefault') }}</ui-tag>
                   </div>
                   <p>{{ $t('supplierForm.editorHint') }}</p>
                 </div>
-                <el-button
+                <ui-button
                   size="small"
                   :disabled="!isFixedFieldCustomized(selectedFixedField)"
                   @click="restoreSelectedFixedField"
-                >{{ $t('supplierForm.restoreDefault') }}</el-button>
+                >{{ $t('supplierForm.restoreDefault') }}</ui-button>
               </div>
-              <el-input
+              <ui-input
                 v-model="selectedFixedField.value"
                 type="textarea"
                 :rows="7"
                 resize="vertical"
                 :placeholder="selectedFixedField.description"
-              ></el-input>
+              ></ui-input>
             </section>
           </div>
-        </el-collapse-item>
+        </ui-collapse-item>
 
         <!-- line_array 自定义字段 -->
-        <el-collapse-item name="custom" class="supplier-section supplier-section--custom">
+        <ui-collapse-item name="custom" class="supplier-section supplier-section--custom">
           <template #title>
             <div class="supplier-section-head">
               <strong>{{ $t('supplierForm.customTitle') }}</strong>
               <div class="supplier-section-actions">
                 <span v-if="lineFields.length" class="muted">{{ $t('supplierForm.fieldCount', { count: lineFields.length }) }}</span>
-                <el-button size="small" :icon="icons.Plus" @click.stop="addLineField">{{ $t('supplierForm.addField') }}</el-button>
+                <ui-button size="small" :icon="icons.Plus" @click.stop="addLineField">{{ $t('supplierForm.addField') }}</ui-button>
               </div>
             </div>
           </template>
@@ -951,24 +1065,24 @@ const ViewSupplierForm = defineComponent({
           <div v-else class="custom-field-list" :aria-label="$t('supplierForm.customListLabel')">
             <div v-for="(row, index) in lineFields" :key="index" class="extract-field-row">
               <div class="line-field-top">
-                <el-input v-model="row.name" :placeholder="$t('supplierForm.fieldNamePlaceholder')" style="width: 220px"></el-input>
-                <el-checkbox v-model="row.keyword">{{ $t('supplierForm.asKeyword') }}</el-checkbox>
-                <el-button link type="danger" :icon="icons.Delete" @click="removeLineField(index)">{{ $t('common.delete') }}</el-button>
+                <ui-input v-model="row.name" :placeholder="$t('supplierForm.fieldNamePlaceholder')" style="width: 220px"></ui-input>
+                <ui-checkbox v-model="row.keyword">{{ $t('supplierForm.asKeyword') }}</ui-checkbox>
+                <ui-action type="danger" @click="removeLineField(index)" icon="Delete" :label="$t('common.delete')"></ui-action>
               </div>
-              <el-input v-model="row.description" type="textarea" :rows="2"
-                        :placeholder="$t('supplierForm.fieldDescPlaceholder')"></el-input>
+              <ui-input v-model="row.description" type="textarea" :rows="2"
+                        :placeholder="$t('supplierForm.fieldDescPlaceholder')"></ui-input>
             </div>
           </div>
-        </el-collapse-item>
+        </ui-collapse-item>
 
         <!-- 顶层自定义字段（提取结果顶层输出，供特殊规则判断等） -->
-        <el-collapse-item name="topCustom" class="supplier-section supplier-section--custom">
+        <ui-collapse-item name="topCustom" class="supplier-section supplier-section--custom">
           <template #title>
             <div class="supplier-section-head">
               <strong>{{ $t('supplierForm.topCustomTitle') }}</strong>
               <div class="supplier-section-actions">
                 <span v-if="topCustomFields.length" class="muted">{{ $t('supplierForm.fieldCount', { count: topCustomFields.length }) }}</span>
-                <el-button size="small" :icon="icons.Plus" @click.stop="addTopCustomField">{{ $t('supplierForm.addField') }}</el-button>
+                <ui-button size="small" :icon="icons.Plus" @click.stop="addTopCustomField">{{ $t('supplierForm.addField') }}</ui-button>
               </div>
             </div>
           </template>
@@ -977,61 +1091,61 @@ const ViewSupplierForm = defineComponent({
           <div v-else class="custom-field-list" :aria-label="$t('supplierForm.customListLabel')">
             <div v-for="(row, index) in topCustomFields" :key="index" class="extract-field-row">
               <div class="line-field-top">
-                <el-input v-model="row.name" :placeholder="$t('supplierForm.topCustomFieldNamePlaceholder')" style="width: 220px"></el-input>
-                <el-button link type="danger" :icon="icons.Delete" @click="removeTopCustomField(index)">{{ $t('common.delete') }}</el-button>
+                <ui-input v-model="row.name" :placeholder="$t('supplierForm.topCustomFieldNamePlaceholder')" style="width: 220px"></ui-input>
+                <ui-action type="danger" @click="removeTopCustomField(index)" icon="Delete" :label="$t('common.delete')"></ui-action>
               </div>
-              <el-input v-model="row.description" type="textarea" :rows="2"
-                        :placeholder="$t('supplierForm.topCustomFieldDescPlaceholder')"></el-input>
+              <ui-input v-model="row.description" type="textarea" :rows="2"
+                        :placeholder="$t('supplierForm.topCustomFieldDescPlaceholder')"></ui-input>
             </div>
           </div>
-        </el-collapse-item>
+        </ui-collapse-item>
 
         <!-- 提示词 -->
-        <el-collapse-item name="prompt" class="supplier-section supplier-section--prompt">
+        <ui-collapse-item name="prompt" class="supplier-section supplier-section--prompt">
           <template #title>
             <div class="supplier-section-head">
               <strong>{{ $t('supplierForm.promptTitle') }}</strong>
               <div class="supplier-section-actions">
-                <el-button size="small" :loading="previewing" @click.stop="previewPrompt">{{ $t('supplierForm.previewPrompt') }}</el-button>
-                <el-button size="small" type="primary" :loading="extracting" @click.stop="previewExtract">{{ $t('supplierForm.previewExtract') }}</el-button>
+                <ui-button size="small" :loading="previewing" @click.stop="previewPrompt">{{ $t('supplierForm.previewPrompt') }}</ui-button>
+                <ui-button size="small" type="primary" :loading="extracting" @click.stop="previewExtract">{{ $t('supplierForm.previewExtract') }}</ui-button>
               </div>
             </div>
           </template>
           <p class="field-hint">{{ $t('supplierForm.promptHint') }}</p>
           <div class="form-field">
             <label class="form-label">{{ $t('supplierForm.extraInstructionsLabel') }}</label>
-            <el-input v-model="form.extra_instructions" type="textarea" :rows="2"
-                      :placeholder="$t('supplierForm.extraInstructionsPlaceholder')"></el-input>
+            <ui-input v-model="form.extra_instructions" type="textarea" :rows="2"
+                      :placeholder="$t('supplierForm.extraInstructionsPlaceholder')"></ui-input>
           </div>
           <div class="form-field">
             <label class="form-label">{{ $t('supplierForm.extractFilesLabel') }}</label>
-            <el-upload v-model:file-list="extractFiles" :auto-upload="false" multiple
+            <ui-upload v-model:file-list="extractFiles" :auto-upload="false" multiple
                        class="extract-preview-upload">
-              <el-button size="small" :icon="icons.Paperclip">{{ $t('supplierForm.chooseAttachment') }}</el-button>
-            </el-upload>
+              <ui-button size="small" :icon="icons.Paperclip">{{ $t('supplierForm.chooseAttachment') }}</ui-button>
+            </ui-upload>
             <p class="field-hint extract-preview-upload-hint">{{ $t('supplierForm.extractFilesHint') }}</p>
           </div>
           <div class="form-field">
             <label class="form-label">{{ $t('supplierForm.promptPreviewLabel') }}</label>
-            <el-input v-model="promptPreview" type="textarea" :rows="6" readonly
-                      :placeholder="$t('supplierForm.promptPreviewPlaceholder')"></el-input>
+            <ui-input v-model="promptPreview" type="textarea" :rows="6" readonly
+                      :placeholder="$t('supplierForm.promptPreviewPlaceholder')"></ui-input>
           </div>
           <div class="form-field">
             <label class="form-label">{{ $t('supplierForm.extractPreviewLabel') }}</label>
             <div v-if="!extractPreview" class="extract-preview-empty">
               {{ $t('supplierForm.extractPreviewEmpty') }}
             </div>
-            <el-button v-else link type="primary" @click="extractResultVisible = true">
+            <ui-button v-else link type="primary" @click="extractResultVisible = true">
               {{ $t('supplierForm.viewLastExtract') }}
-            </el-button>
+            </ui-button>
           </div>
-          <el-dialog v-model="extractResultVisible" :title="$t('supplierForm.extractResultTitle')" top="8vh"
+          <ui-dialog v-model="extractResultVisible" :title="$t('supplierForm.extractResultTitle')" top="8vh"
                      class="extract-result-dialog" append-to-body>
             <div class="extract-preview-result">
               <template v-for="(block, blockIndex) in extractPreviewView.blocks" :key="blockIndex">
                 <div v-if="block.kind === 'classify'" class="extract-preview-classify">
                   <span class="extract-preview-block-label">{{ $t('supplierForm.classifyResult') }}</span>
-                  <el-tag type="primary" effect="dark">{{ block.mailType }}</el-tag>
+                  <ui-tag type="primary" effect="dark">{{ block.mailType }}</ui-tag>
                 </div>
                 <div v-else-if="block.kind === 'extract'" class="extract-preview-extract">
                   <div v-for="field in block.fields" :key="field.key" class="extract-preview-field">
@@ -1045,36 +1159,48 @@ const ViewSupplierForm = defineComponent({
                   <div v-if="block.tags.length" class="extract-preview-field">
                     <span class="extract-preview-field-label">{{ $t('supplierForm.lineKeywordsLabel') }}</span>
                     <div class="extract-preview-tags">
-                      <el-tag v-for="tag in block.tags" :key="tag" size="small" effect="plain">{{ tag }}</el-tag>
+                      <ui-tag v-for="tag in block.tags" :key="tag" size="small" effect="plain">{{ tag }}</ui-tag>
                     </div>
                   </div>
                   <div v-if="block.lines.length" class="extract-preview-lines">
                     <div class="extract-preview-block-label">{{ $t('supplierForm.affectedLines', { count: block.lines.length }) }}</div>
-                    <el-table :data="block.lines" size="small" border>
-                      <el-table-column v-for="col in block.lineColumns" :key="col" :prop="col" :label="col" :min-width="lineColumnWidth(col, block.lines)">
+                    <ui-table :data="block.lines" size="small" border>
+                      <ui-table-column v-for="col in block.lineColumns" :key="col" :prop="col" :label="col" :min-width="lineColumnWidth(col, block.lines)">
                         <template #default="{ row }">
                           <span class="mono">{{ row[col] === '' || row[col] == null ? '-' : row[col] }}</span>
                         </template>
-                      </el-table-column>
-                    </el-table>
+                      </ui-table-column>
+                    </ui-table>
                   </div>
                 </div>
                 <pre v-else class="extract-preview-raw">{{ block.text }}</pre>
               </template>
               <pre v-if="extractPreviewView.raw" class="extract-preview-raw">{{ extractPreviewView.raw }}</pre>
             </div>
-          </el-dialog>
-          <el-collapse class="legacy-prompt-collapse">
-            <el-collapse-item name="legacy">
+          </ui-dialog>
+          <ui-collapse class="legacy-prompt-collapse">
+            <ui-collapse-item name="legacy">
               <template #title>
                 <span class="muted">{{ $t('supplierForm.legacyTitle') }}</span>
               </template>
-              <el-input v-model="legacyPrompt" type="textarea" :rows="6"
-                        :placeholder="$t('supplierForm.legacyPlaceholder')"></el-input>
-            </el-collapse-item>
-          </el-collapse>
-        </el-collapse-item>
-      </el-collapse>
+              <ui-input v-model="legacyPrompt" type="textarea" :rows="6"
+                        :placeholder="$t('supplierForm.legacyPlaceholder')"></ui-input>
+            </ui-collapse-item>
+          </ui-collapse>
+        </ui-collapse-item>
+      </ui-collapse>
+
+      <ui-dialog v-model="mailTypeDialogVisible" :title="$t('supplierForm.addMailTypeTitle')" width="440px" @opened="mailTypeNameInput?.focus()">
+        <form @submit.prevent="addMailType">
+          <label class="form-label" for="supplier-mail-type-name">{{ $t('supplierForm.mailTypeName') }}</label>
+          <ui-input id="supplier-mail-type-name" ref="mailTypeNameInput" v-model="mailTypeName" :aria-label="$t('supplierForm.mailTypeName')"
+                    @input="mailTypeNameError=''"
+                    :placeholder="$t('supplierForm.mailTypeNamePlaceholder')" :aria-invalid="!!mailTypeNameError" :aria-describedby="mailTypeNameError ? 'supplier-mail-type-error' : undefined"></ui-input>
+          <p class="field-hint">{{ $t('supplierForm.mailTypeNameHint') }}</p>
+          <p v-if="mailTypeNameError" id="supplier-mail-type-error" class="warn-text" role="alert">{{ mailTypeNameError }}</p>
+        </form>
+        <template #footer><ui-button @click="mailTypeDialogVisible=false">{{ $t('common.cancel') }}</ui-button><ui-button type="primary" @click="addMailType">{{ $t('supplierForm.addMailType') }}</ui-button></template>
+      </ui-dialog>
 
     </div>
   `,
@@ -1123,48 +1249,52 @@ const ViewEmails = defineComponent({
   },
   template: `
     <div class="view-body">
-      <el-card shadow="never" class="table-card">
+      <ui-card shadow="never" class="table-card">
         <template #header>
           <div class="card-header">
             <div class="filter-bar">
-              <el-select v-model="receiverFilter" :placeholder="$t('common.allMailboxes')" clearable filterable style="width: 220px">
-                <el-option v-for="option in mailboxOptions" :key="option.value"
-                           :label="option.label" :value="option.value"></el-option>
-              </el-select>
-              <el-input v-model="senderFilter" :placeholder="$t('emails.senderFilterPlaceholder')" clearable style="width: 260px"
-                        @keyup.enter="loadEmails"></el-input>
-              <el-button type="primary" @click="loadEmails">{{ $t('common.query') }}</el-button>
+              <ui-select v-model="receiverFilter" :placeholder="$t('common.allMailboxes')" clearable filterable style="width: 220px">
+                <ui-option v-for="option in mailboxOptions" :key="option.value"
+                           :label="option.label" :value="option.value"></ui-option>
+              </ui-select>
+              <ui-input v-model="senderFilter" :placeholder="$t('emails.senderFilterPlaceholder')" clearable style="width: 260px"
+                        @keyup.enter="loadEmails"></ui-input>
+              <ui-button type="primary" @click="loadEmails">{{ $t('common.query') }}</ui-button>
             </div>
           </div>
         </template>
-        <el-table v-loading="loading" :data="items" :empty-text="$t('emails.empty')" stripe>
-          <el-table-column prop="email_id" :label="$t('emails.uid')" width="100">
+        <ui-table v-loading="loading" :data="items" :empty-text="$t('emails.empty')" stripe>
+          <ui-table-column type="expand"><template #default="{row}">
+            <mail-analysis-panel :record="row" @changed="loadEmails"></mail-analysis-panel>
+            <pre class="email-content-block">{{ row.content }}</pre>
+          </template></ui-table-column>
+          <ui-table-column prop="email_id" :label="$t('emails.uid')" width="100">
             <template #default="{ row }">
               <span class="mono">{{ row.email_id }}</span>
             </template>
-          </el-table-column>
-          <el-table-column prop="sender" :label="$t('common.sender')" min-width="200"></el-table-column>
-          <el-table-column :label="$t('common.receiverMailbox')" min-width="180">
+          </ui-table-column>
+          <ui-table-column prop="sender" :label="$t('common.sender')" min-width="200"></ui-table-column>
+          <ui-table-column :label="$t('common.receiverMailbox')" min-width="180">
             <template #default="{ row }">
               <span class="muted">{{ mailboxLabel(row.receiver) }}</span>
             </template>
-          </el-table-column>
-          <el-table-column prop="subject" :label="$t('common.subject')" min-width="240">
+          </ui-table-column>
+          <ui-table-column prop="subject" :label="$t('common.subject')" min-width="240">
             <template #default="{ row }">
               <span class="cell-main">{{ row.subject }}</span>
             </template>
-          </el-table-column>
-          <el-table-column prop="create_time" :label="$t('common.receiveTime')" width="170">
+          </ui-table-column>
+          <ui-table-column prop="create_time" :label="$t('common.receiveTime')" width="170">
             <template #default="{ row }">
               <span class="mono muted">{{ row.create_time }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('emails.contentSummary')" min-width="240">
+          </ui-table-column>
+          <ui-table-column :label="$t('emails.contentSummary')" min-width="240">
             <template #default="{ row }">
               <span class="muted">{{ shortText(row.content) }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('emails.attachments')" width="140">
+          </ui-table-column>
+          <ui-table-column :label="$t('emails.attachments')" width="140">
             <template #default="{ row }">
               <div v-if="(row.attachment_urls || []).length" class="attachment-list">
                 <a v-for="(url, index) in row.attachment_urls" :key="url" :href="url"
@@ -1172,9 +1302,9 @@ const ViewEmails = defineComponent({
               </div>
               <span v-else class="muted">-</span>
             </template>
-          </el-table-column>
-        </el-table>
-      </el-card>
+          </ui-table-column>
+        </ui-table>
+      </ui-card>
     </div>
   `,
 });
@@ -1214,64 +1344,87 @@ const ViewTickets = defineComponent({
   },
   template: `
     <div class="view-body">
-      <el-card shadow="never" class="table-card">
+      <ui-card shadow="never" class="table-card">
         <template #header>
           <div class="card-header">
             <div class="filter-bar">
-              <el-input v-model="statusFilter" :placeholder="$t('tickets.statusFilterPlaceholder')" clearable style="width: 260px"
-                        @keyup.enter="loadTickets"></el-input>
-              <el-button type="primary" @click="loadTickets">{{ $t('common.query') }}</el-button>
+              <ui-input v-model="statusFilter" :placeholder="$t('tickets.statusFilterPlaceholder')" clearable style="width: 260px"
+                        @keyup.enter="loadTickets"></ui-input>
+              <ui-button type="primary" @click="loadTickets">{{ $t('common.query') }}</ui-button>
             </div>
           </div>
         </template>
-        <el-table v-loading="loading" :data="items" :empty-text="$t('tickets.empty')" stripe>
-          <el-table-column prop="id" label="ID" width="90">
+        <ui-table v-loading="loading" :data="items" :empty-text="$t('tickets.empty')" stripe>
+          <ui-table-column prop="id" label="ID" width="90">
             <template #default="{ row }">
               <span class="mono">{{ row.id }}</span>
             </template>
-          </el-table-column>
-          <el-table-column prop="carrier_ticket_no" :label="$t('common.carrierTicketNo')" min-width="200">
+          </ui-table-column>
+          <ui-table-column prop="carrier_ticket_no" :label="$t('common.carrierTicketNo')" min-width="200">
             <template #default="{ row }">
               <span class="cell-main">{{ row.carrier_ticket_no }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('common.status')" width="120">
+          </ui-table-column>
+          <ui-table-column :label="$t('common.status')" width="120">
             <template #default="{ row }">
               <span>{{ row.status || $t('common.unset') }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('tickets.cutoverWindow')" min-width="280">
+          </ui-table-column>
+          <ui-table-column :label="$t('tickets.cutoverWindow')" min-width="280">
             <template #default="{ row }">
               <span class="mono muted">{{ $t('common.timeRange', { start: row.cut_start_time || '', end: row.cut_end_time || '' }) }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('tickets.subjectOrSender')" min-width="240">
+          </ui-table-column>
+          <ui-table-column :label="$t('tickets.subjectOrSender')" min-width="240">
             <template #default="{ row }">
               <span class="muted">{{ row.subject || row.sender || '' }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('common.receiverMailbox')" min-width="160">
+          </ui-table-column>
+          <ui-table-column :label="$t('common.receiverMailbox')" min-width="160">
             <template #default="{ row }">
               <span class="muted">{{ mailboxLabel(row.receiver) }}</span>
             </template>
-          </el-table-column>
-        </el-table>
-      </el-card>
+          </ui-table-column>
+        </ui-table>
+      </ui-card>
     </div>
   `,
 });
 
 // ==================== 割接任务列表（邮件维度） ====================
+async function confirmDeleteCutoverEmail(email) {
+  try {
+    await NocDialog.confirm(
+      tt("cutover.delete.message", {subject: email.subject || tt("cutover.detail.emailFallback", {id: email.id})}),
+      tt("cutover.delete.title"),
+      {
+        confirmButtonText: tt("cutover.delete.confirm"),
+        cancelButtonText: tt("common.cancel"),
+        confirmButtonClass: "noc-danger",
+        customClass: "cutover-delete-confirm",
+        type: "warning",
+      },
+    );
+  } catch (error) {
+    if (error === "cancel" || error === "close") return false;
+    throw error;
+  }
+  await requestJson(`/api/cutover/emails/${email.id}`, {method: "DELETE"});
+  return true;
+}
+
 const ViewCutoverTasks = defineComponent({
   name: "ViewCutoverTasks",
   setup() {
+    const savedState = history.state?.cutoverListState;
     const items = ref([]);
     const total = ref(0);
     const loading = ref(false);
     const readStateBusyIds = ref([]);
-    const page = ref(1);
-    const pageSize = ref(20);
-    const showAdvanced = ref(false);
+    const deleteBusyIds = ref([]);
+    const page = ref(savedState?.page ?? 1);
+    const pageSize = ref(savedState?.pageSize ?? 20);
+    const showAdvanced = ref(savedState?.showAdvanced ?? false);
     let latestRequest = 0;
     const initialQuery = new URLSearchParams(window.location.search);
     const filters = reactive({
@@ -1284,8 +1437,9 @@ const ViewCutoverTasks = defineComponent({
       sender: "",
       start: "",
       end: "",
+      ...savedState?.filters,
     });
-    const appliedFilters = ref({ ...filters });
+    const appliedFilters = ref({ ...(savedState?.appliedFilters ?? filters) });
     const advancedFilterCount = computed(() =>
       ["read_status", "tag", "receiver", "sender", "start", "end"].filter(key => filters[key]).length
     );
@@ -1293,6 +1447,7 @@ const ViewCutoverTasks = defineComponent({
       ...row, displayTags: cutoverEmailTags(row), displayStates: cutoverEmailStates(row),
     })));
     const statusOptions = computed(() => cutoverStatusOptions().concat(
+      [{value:'analysis_failed', label:tt('discovery.failed')}, {value:'needs_review', label:tt('discovery.needs_review')}],
       ["unmatched_lines", "reply_pending", "rule_skipped", "rejected_closed", "duplicate_ignored", "no_task"].map(value => ({
         value, label: tt(`cutover.list.emailStatus.${value}`),
       }))
@@ -1363,7 +1518,7 @@ const ViewCutoverTasks = defineComponent({
     }
 
     async function toggleReadState(row) {
-      if (readStateBusyIds.value.includes(row.id)) {
+      if (readStateBusyIds.value.includes(row.id) || deleteBusyIds.value.includes(row.id)) {
         return;
       }
       readStateBusyIds.value = [...readStateBusyIds.value, row.id];
@@ -1374,14 +1529,28 @@ const ViewCutoverTasks = defineComponent({
         });
         const source = items.value.find(item => item.id === row.id);
         if (source) source.is_read = Boolean(data.is_read);
-        ElMessage.success(tt("common.readStateUpdated"));
+        NocMessage.success(tt("common.readStateUpdated"));
         if (appliedFilters.value.read_status) {
           await loadTasks();
         }
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         readStateBusyIds.value = readStateBusyIds.value.filter((id) => id !== row.id);
+      }
+    }
+
+    async function deleteEmail(row) {
+      if (deleteBusyIds.value.includes(row.id) || readStateBusyIds.value.includes(row.id)) return;
+      deleteBusyIds.value = [...deleteBusyIds.value, row.id];
+      try {
+        if (!await confirmDeleteCutoverEmail(row)) return;
+        NocMessage.success(tt("cutover.delete.succeeded"));
+        await Promise.all([loadTasks(), loadOperationsSummary()]);
+      } catch (error) {
+        NocMessage.error(error.message);
+      } finally {
+        deleteBusyIds.value = deleteBusyIds.value.filter(id => id !== row.id);
       }
     }
 
@@ -1410,7 +1579,14 @@ const ViewCutoverTasks = defineComponent({
     }
 
     function openDetail(row) {
-      openCutoverEmailDetail(row.id);
+      if (deleteBusyIds.value.includes(row.id)) return;
+      openCutoverEmailDetail(row.id, {
+        filters: { ...filters },
+        appliedFilters: { ...appliedFilters.value },
+        page: page.value,
+        pageSize: pageSize.value,
+        showAdvanced: showAdvanced.value,
+      });
     }
 
     onMounted(async () => {
@@ -1423,109 +1599,106 @@ const ViewCutoverTasks = defineComponent({
     });
 
     return {
-      items: displayItems, total, loading, readStateBusyIds, filters, statusOptions, tagOptions, supplierOptions, mailboxOptions,
+      items: displayItems, total, loading, readStateBusyIds, deleteBusyIds, filters, statusOptions, tagOptions, supplierOptions, mailboxOptions,
       page, pageSize, showAdvanced, advancedFilterCount, searchTasks, changePageSize,
-      loadTasks, resetFilters, openDetail, toggleReadState, shortText,
+      loadTasks, resetFilters, openDetail, toggleReadState, deleteEmail, shortText,
       sceneText, sceneTagType, isRejectedScene, mailboxLabel,
     };
   },
   template: `
     <div class="view-body cutover-list-view">
-      <el-card shadow="never" class="table-card cutover-list-card">
+      <ui-card shadow="never" class="table-card cutover-list-card">
         <template #header>
+          <div class="list-heading"><h2>{{ $t('cutover.list.title') }}</h2><span class="list-total">{{ $t('cutover.list.totalEmails', { total }) }}</span></div>
           <form @submit.prevent="searchTasks">
             <div class="cutover-main-filters">
-              <el-input v-model="filters.keyword" :placeholder="$t('cutover.list.keywordSearch')" :aria-label="$t('cutover.list.keywordSearch')" clearable></el-input>
-              <el-select v-model="filters.status" :placeholder="$t('cutover.list.allStatus')" :aria-label="$t('cutover.list.processingStatus')" clearable>
-                <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
-              </el-select>
-              <el-select v-model="filters.supplier" :placeholder="$t('cutover.list.allSupplier')" :aria-label="$t('common.supplier')" clearable filterable>
-                <el-option v-for="name in supplierOptions" :key="name" :label="name" :value="name"></el-option>
-              </el-select>
-              <el-button type="primary" native-type="submit" :loading="loading">{{ $t('common.query') }}</el-button>
-              <el-button @click="resetFilters">{{ $t('common.reset') }}</el-button>
-              <el-button text @click="showAdvanced = !showAdvanced" :aria-expanded="showAdvanced" aria-controls="cutover-advanced-filters">
+              <ui-input v-model="filters.keyword" :placeholder="$t('cutover.list.keywordSearch')" :aria-label="$t('cutover.list.keywordSearch')" clearable></ui-input>
+              <ui-select v-model="filters.status" :placeholder="$t('cutover.list.allStatus')" :aria-label="$t('cutover.list.processingStatus')" clearable>
+                <ui-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value"></ui-option>
+              </ui-select>
+              <ui-select v-model="filters.supplier" :placeholder="$t('cutover.list.allSupplier')" :aria-label="$t('common.supplier')" clearable filterable>
+                <ui-option v-for="name in supplierOptions" :key="name" :label="name" :value="name"></ui-option>
+              </ui-select>
+              <ui-button type="primary" native-type="submit" :loading="loading">{{ $t('common.query') }}</ui-button>
+              <ui-button @click="resetFilters">{{ $t('common.reset') }}</ui-button>
+              <ui-button text @click="showAdvanced = !showAdvanced" :aria-expanded="showAdvanced" aria-controls="cutover-advanced-filters">
                 {{ $t('cutover.list.moreFilters') }}{{ advancedFilterCount ? ' (' + advancedFilterCount + ')' : '' }} {{ showAdvanced ? '−' : '+' }}
-              </el-button>
+              </ui-button>
             </div>
             <div v-if="showAdvanced" id="cutover-advanced-filters" class="cutover-advanced-filters">
-              <el-select v-model="filters.read_status" :placeholder="$t('common.allReadStates')" :aria-label="$t('common.readState')" clearable>
-                <el-option :label="$t('common.unread')" value="unread"></el-option><el-option :label="$t('common.read')" value="read"></el-option>
-              </el-select>
-              <el-select v-model="filters.tag" :placeholder="$t('cutover.list.allTag')" :aria-label="$t('cutover.list.tags')" clearable>
-                <el-option v-for="item in tagOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
-              </el-select>
-              <el-select v-model="filters.receiver" :placeholder="$t('common.allMailboxes')" :aria-label="$t('common.receiverMailbox')" clearable filterable>
-                <el-option v-for="option in mailboxOptions" :key="option.value" :label="option.label" :value="option.value"></el-option>
-              </el-select>
-              <el-input v-model="filters.sender" :placeholder="$t('common.sender')" :aria-label="$t('common.sender')" clearable></el-input>
-              <el-date-picker v-model="filters.start" type="date" :placeholder="$t('cutover.list.receiveStart')" value-format="YYYY-MM-DD"></el-date-picker>
-              <el-date-picker v-model="filters.end" type="date" :placeholder="$t('cutover.list.receiveEnd')" value-format="YYYY-MM-DD"></el-date-picker>
+              <ui-select v-model="filters.read_status" :placeholder="$t('common.allReadStates')" :aria-label="$t('common.readState')" clearable>
+                <ui-option :label="$t('common.unread')" value="unread"></ui-option><ui-option :label="$t('common.read')" value="read"></ui-option>
+              </ui-select>
+              <ui-select v-model="filters.tag" :placeholder="$t('cutover.list.allTag')" :aria-label="$t('cutover.list.tags')" clearable>
+                <ui-option v-for="item in tagOptions" :key="item.value" :label="item.label" :value="item.value"></ui-option>
+              </ui-select>
+              <ui-select v-model="filters.receiver" :placeholder="$t('common.allMailboxes')" :aria-label="$t('common.receiverMailbox')" clearable filterable>
+                <ui-option v-for="option in mailboxOptions" :key="option.value" :label="option.label" :value="option.value"></ui-option>
+              </ui-select>
+              <ui-input v-model="filters.sender" :placeholder="$t('common.sender')" :aria-label="$t('common.sender')" clearable></ui-input>
+              <ui-date-picker v-model="filters.start" type="date" :placeholder="$t('cutover.list.receiveStart')" value-format="YYYY-MM-DD"></ui-date-picker>
+              <ui-date-picker v-model="filters.end" type="date" :placeholder="$t('cutover.list.receiveEnd')" value-format="YYYY-MM-DD"></ui-date-picker>
             </div>
           </form>
         </template>
-        <div class="cutover-list-meta"><span>{{ $t('cutover.list.totalEmails', { total }) }}</span></div>
-        <el-table v-loading="loading" :data="items" :empty-text="$t('cutover.list.empty')" height="100%" row-key="id" @row-click="openDetail" class="clickable-table cutover-six-table">
-          <el-table-column :label="$t('cutover.list.mailContent')" min-width="320">
+        <ui-table v-loading="loading" :data="items" :empty-text="$t('cutover.list.empty')" height="100%" row-key="id" @row-click="openDetail" class="clickable-table cutover-six-table">
+          <ui-table-column :label="$t('cutover.list.mailContent')" min-width="280">
             <template #default="{ row }">
               <div class="cutover-mail" :class="{ 'is-unread': !row.is_read }" :aria-busy="readStateBusyIds.includes(row.id)">
                 <div class="cutover-mail-heading"><span class="cutover-unread-dot" :class="{ 'is-read': row.is_read }" :title="row.is_read ? $t('common.read') : $t('common.unread')" :aria-label="row.is_read ? $t('common.read') : $t('common.unread')" role="img"></span>
-                  <el-tooltip :trigger="['hover', 'focus']" effect="light" placement="bottom-start" :show-after="300" popper-class="cutover-text-tooltip">
+                  <ui-tooltip :trigger="['hover', 'focus']" effect="light" placement="bottom-start" :show-after="300" popper-class="cutover-text-tooltip">
                     <template #content><div class="cutover-tooltip-heading">{{ row.subject || '-' }}</div><div class="cutover-tooltip-meta">UID {{ row.email_id }}</div></template>
                     <button class="cutover-subject" @click.stop="openDetail(row)">{{ row.subject || '-' }}</button>
-                  </el-tooltip>
+                  </ui-tooltip>
                 </div>
-                <div class="cutover-mail-tags">
-                  <el-tag v-for="tag in row.displayTags.slice(0, 3)" :key="tag.key" :type="tag.type" size="small" effect="plain">{{ tag.label }}</el-tag>
-                  <el-popover v-if="row.displayTags.length > 3" trigger="hover" :width="280" popper-class="cutover-text-tooltip">
+                <div v-if="row.displayTags.length" class="cutover-mail-tags">
+                  <ui-tag v-for="tag in row.displayTags.slice(0, 3)" :key="tag.key" :type="tag.type" size="small" effect="plain">{{ tag.label }}</ui-tag>
+                  <ui-popover v-if="row.displayTags.length > 3" trigger="hover" :width="280" popper-class="cutover-text-tooltip">
                     <template #reference><button class="cutover-extra-tags" @click.stop :aria-label="$t('cutover.list.allTags')">+{{ row.displayTags.length - 3 }}</button></template>
-                    <div class="cutover-all-tags"><el-tag v-for="tag in row.displayTags" :key="tag.key" :type="tag.type" size="small" effect="plain">{{ tag.label }}</el-tag></div>
-                  </el-popover>
+                    <div class="cutover-all-tags"><ui-tag v-for="tag in row.displayTags" :key="tag.key" :type="tag.type" size="small" effect="plain">{{ tag.label }}</ui-tag></div>
+                  </ui-popover>
                 </div>
-                <el-tooltip :trigger="['hover', 'focus']" effect="light" placement="bottom-start" :show-after="300" :disabled="!row.content_summary" popper-class="cutover-text-tooltip">
+                <ui-tooltip :trigger="['hover', 'focus']" effect="light" placement="bottom-start" :show-after="300" :disabled="!row.content_summary" popper-class="cutover-text-tooltip">
                   <template #content><div class="cutover-tooltip-meta">{{ $t('cutover.list.contentSummary') }}</div><div class="cutover-tooltip-body">{{ row.content_summary }}</div></template>
                   <div class="cutover-snippet" tabindex="0">{{ row.content_summary || '-' }}</div>
-                </el-tooltip>
+                </ui-tooltip>
               </div>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('common.supplier')" width="85"><template #default="{ row }"><span class="cutover-supplier" :title="row.suppliers || ''">{{ row.suppliers || '-' }}</span></template></el-table-column>
-          <el-table-column :label="$t('cutover.list.mailAddresses')" width="240">
-            <template #default="{ row }"><div class="cutover-address"><span>{{ $t('cutover.list.from') }}</span><el-tooltip :trigger="['hover', 'focus']" :content="row.sender || '-'" effect="light" placement="bottom-start" :show-after="300" popper-class="cutover-text-tooltip"><span tabindex="0">{{ row.sender || '-' }}</span></el-tooltip></div><div class="cutover-address"><span>{{ $t('cutover.list.to') }}</span><el-tooltip :trigger="['hover', 'focus']" :content="mailboxLabel(row.receiver)" effect="light" placement="bottom-start" :show-after="300" popper-class="cutover-text-tooltip"><span tabindex="0">{{ mailboxLabel(row.receiver) }}</span></el-tooltip></div></template>
-          </el-table-column>
-          <el-table-column :label="$t('cutover.list.processingStatus')" width="155">
+          </ui-table-column>
+          <ui-table-column :label="$t('common.supplier')" width="85"><template #default="{ row }"><span class="cutover-supplier" :title="row.suppliers || ''">{{ row.suppliers || '-' }}</span></template></ui-table-column>
+          <ui-table-column :label="$t('cutover.list.mailAddresses')" width="210">
+            <template #default="{ row }"><div class="cutover-address"><span>{{ $t('cutover.list.from') }}</span><ui-tooltip :trigger="['hover', 'focus']" :content="row.sender || '-'" effect="light" placement="bottom-start" :show-after="300" popper-class="cutover-text-tooltip"><span tabindex="0">{{ row.sender || '-' }}</span></ui-tooltip></div><div class="cutover-address"><span>{{ $t('cutover.list.to') }}</span><ui-tooltip :trigger="['hover', 'focus']" :content="mailboxLabel(row.receiver)" effect="light" placement="bottom-start" :show-after="300" popper-class="cutover-text-tooltip"><span tabindex="0">{{ mailboxLabel(row.receiver) }}</span></ui-tooltip></div></template>
+          </ui-table-column>
+          <ui-table-column :label="$t('cutover.list.processingStatus')" width="155">
             <template #default="{ row }">
               <div class="cutover-processing">
-                <el-tag v-if="row.unmatched_line_count" class="cutover-line-warning" type="warning" size="small" effect="light" :title="$t('cutover.list.unmatchedLinesHint')">
+                <ui-tag v-if="row.unmatched_line_count" class="cutover-line-warning" type="warning" size="small" effect="light" :title="$t('cutover.list.unmatchedLinesHint')">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 10 18H2Z"/><path d="M12 9v4m0 4h.01"/></svg>
                   <span>{{ $t('cutover.list.unmatchedLines', { count: row.unmatched_line_count }) }}</span>
-                </el-tag>
+                </ui-tag>
                 <div v-for="state in row.displayStates" :key="state.key" class="cutover-state" :class="'is-' + state.type"><span>{{ state.label }}</span><span v-if="state.count" class="cutover-state-count">{{ state.count }}</span></div>
                 <span v-if="row.task_count || row.displayStates[0].key !== 'no_task'" class="cutover-task-count">{{ row.task_count ? $t('cutover.list.taskCount', { count: row.task_count }) : $t('cutover.list.noTask') }}</span>
               </div>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('common.receiveTime')" width="115"><template #default="{ row }"><time class="cutover-receive-time" :datetime="(row.create_time || '').slice(0, 19).replace(' ', 'T')">{{ (row.create_time || '').slice(0, 10) }}<span>{{ (row.create_time || '').slice(11, 19) }}</span></time></template></el-table-column>
-          <el-table-column :label="$t('common.readState')" width="80" align="center" fixed="right">
+          </ui-table-column>
+          <ui-table-column :label="$t('common.receiveTime')" width="115"><template #default="{ row }"><time class="cutover-receive-time" :datetime="(row.create_time || '').slice(0, 19).replace(' ', 'T')">{{ (row.create_time || '').slice(0, 10) }}<span>{{ (row.create_time || '').slice(11, 19) }}</span></time></template></ui-table-column>
+          <ui-table-column :label="$t('common.actions')" width="112" align="center" fixed="right">
             <template #default="{ row }">
               <div class="cutover-row-actions" @click.stop>
-                <el-tooltip :trigger="['hover', 'focus']" :content="row.is_read ? $t('common.markAsUnread') : $t('common.markAsRead')" effect="light" popper-class="cutover-text-tooltip" :show-after="200">
-                  <el-button text class="cutover-read-action" :class="{ 'is-read': row.is_read }" :type="row.is_read ? 'info' : 'primary'"
-                             :aria-label="row.is_read ? $t('common.markAsUnread') : $t('common.markAsRead')"
-                             :loading="readStateBusyIds.includes(row.id)" :disabled="readStateBusyIds.includes(row.id)"
-                             @click.stop="toggleReadState(row)">
-                    <svg v-if="!readStateBusyIds.includes(row.id)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <template v-if="row.is_read"><path d="m3 9 9-6 9 6v11H3Z"/><path d="m3 9 9 6 9-6M3 20l6-7m12 7-6-7"/></template>
-                      <template v-else><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/></template>
-                    </svg>
-                  </el-button>
-                </el-tooltip>
+                <ui-action class="cutover-read-action" :class="{ 'is-read': row.is_read }"
+                           :icon="row.is_read ? 'MessageBox' : 'Message'" :type="row.is_read ? 'default' : 'primary'"
+                           :label="row.is_read ? $t('common.markAsUnread') : $t('common.markAsRead')"
+                           :loading="readStateBusyIds.includes(row.id)" :disabled="readStateBusyIds.includes(row.id) || deleteBusyIds.includes(row.id)"
+                           @click.stop="toggleReadState(row)"></ui-action>
+                <ui-action icon="Delete" type="danger" class="cutover-delete-action" :label="$t('cutover.delete.rowAction')"
+                           :loading="deleteBusyIds.includes(row.id)" :disabled="deleteBusyIds.includes(row.id) || readStateBusyIds.includes(row.id)"
+                           @click.stop="deleteEmail(row)"></ui-action>
               </div>
             </template>
-          </el-table-column>
-        </el-table>
-        <div class="cutover-pagination"><span>{{ $t('cutover.list.pageRange', { start: total ? (page - 1) * pageSize + 1 : 0, end: Math.min(page * pageSize, total), total }) }}</span><el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[20, 50, 100]" :total="total" :pager-count="5" layout="sizes, prev, pager, next" :disabled="loading" @current-change="loadTasks" @size-change="changePageSize"></el-pagination></div>
-      </el-card>
+          </ui-table-column>
+        </ui-table>
+        <div class="cutover-pagination"><span>{{ $t('cutover.list.pageRange', { start: total ? (page - 1) * pageSize + 1 : 0, end: Math.min(page * pageSize, total), total }) }}</span><ui-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[20, 50, 100]" :total="total" :pager-count="5" layout="sizes, prev, pager, next" :disabled="loading" @current-change="loadTasks" @size-change="changePageSize"></ui-pagination></div>
+      </ui-card>
     </div>
   `,
 });
@@ -1534,11 +1707,12 @@ const ViewCutoverTasks = defineComponent({
 let cutoverTemplateColumns = null;
 
 async function ensureCutoverTemplateColumns() {
-  if (cutoverTemplateColumns === null) {
+  // 旧后端可能只返回列名；不把缺少默认结构的响应或请求失败永久缓存。
+  if (!cutoverTemplateColumns?.defaults?.backbone) {
     try {
       cutoverTemplateColumns = await requestJson("/api/cutover/template-columns");
     } catch (error) {
-      cutoverTemplateColumns = {};
+      return cutoverTemplateColumns || {};
     }
   }
   return cutoverTemplateColumns;
@@ -1618,9 +1792,73 @@ function orderedBackboneFields(sectionName, fields) {
   ].filter((name) => name !== "中断时间 (分钟)");
 }
 
+// Report screenshots share a bounded thumbnail layout and a full-resolution viewer.
+const ReportScreenshotGallery = defineComponent({
+  name: "ReportScreenshotGallery",
+  components: { NImageGroup: naive.NImageGroup },
+  props: { reportId: [String, Number], steps: { type: Array, default: () => [] },
+    imageUrls: Object, loadingKeys: Object },
+  setup(props) {
+    const previewVisible = ref(false);
+    const previewIndex = ref(0);
+    const brokenUrls = reactive({});
+    let trigger = null;
+    const entries = computed(() => props.steps.map((step, index) => {
+      const key = `${props.reportId}-${index}`;
+      const url = props.imageUrls[key] || '';
+      return { ...step, key, index, url, failed: !!brokenUrls[url], loading: props.loadingKeys.has(key) };
+    }));
+    const available = computed(() => entries.value.filter(item => item.url && !item.failed));
+    function openPreview(entry, event) {
+      previewIndex.value = available.value.findIndex(item => item.key === entry.key);
+      if (previewIndex.value < 0) return;
+      trigger = event.currentTarget;
+      previewVisible.value = true;
+    }
+    function updatePreview(show) {
+      previewVisible.value = show;
+      if (!show) nextTick(() => { if (trigger?.isConnected) trigger.focus(); });
+    }
+    return { entries, available, previewVisible, previewIndex, brokenUrls, openPreview, updatePreview,
+      icons: ElementPlusIconsVue };
+  },
+  template: `
+    <section class="report-gallery" :aria-label="$t('cutover.task.operationScreenshots')">
+      <header class="report-gallery-heading">
+        <strong>{{ $t('cutover.task.operationScreenshots') }} <span>{{ steps.length }}</span></strong>
+        <span>{{ $t('cutover.task.screenshotPreviewHint') }}</span>
+      </header>
+      <div class="report-operation-grid">
+        <article v-for="entry in entries" :key="entry.key" class="report-operation-card">
+          <button v-if="entry.url && !entry.failed" type="button" class="report-thumbnail"
+                  :aria-label="$t('cutover.task.viewScreenshot', { name: entry.label || entry.step || entry.index + 1 })"
+                  @click="openPreview(entry, $event)">
+            <img :src="entry.url" :alt="entry.label || entry.step || ''" @error="brokenUrls[entry.url] = true">
+            <span class="report-thumbnail-action"><ui-icon><component :is="icons.ZoomIn"/></ui-icon>{{ $t('cutover.task.viewFullScreenshot') }}</span>
+          </button>
+          <div v-else class="report-image-missing" role="status" :aria-busy="entry.loading">
+            <ui-icon><component :is="entry.loading ? icons.Loading : icons.Picture"/></ui-icon>
+            <span>{{ $t(entry.loading ? 'cutover.task.screenshotLoading' : 'cutover.task.screenshotUnavailable') }}</span>
+          </div>
+          <div class="report-operation-caption">
+            <span class="report-step-number">{{ String(entry.index + 1).padStart(2, '0') }}</span>
+            <div><strong>{{ entry.label || entry.step || $t('cutover.task.operationScreenshots') }}</strong>
+              <time v-if="entry.captured_at" :datetime="entry.captured_at">{{ entry.captured_at.replace('T', ' ').slice(0, 19) }}</time>
+            </div>
+          </div>
+        </article>
+      </div>
+      <n-image-group :src-list="available.map(item => item.url)" :show="previewVisible"
+                     v-model:current="previewIndex" show-toolbar show-toolbar-tooltip
+                     @update:show="updatePreview"/>
+    </section>
+  `,
+});
+
 // ==================== 割接任务详情面板 ====================
 const TaskDetailPanel = defineComponent({
   name: "TaskDetailPanel",
+  components: { ReportScreenshotGallery },
   props: {
     task: { type: Object, required: true },
   },
@@ -1632,7 +1870,8 @@ const TaskDetailPanel = defineComponent({
     const reportProgressVisible = ref(false);
     const activeReport = ref(null);
     const reportProgressError = ref("");
-    const reportImageLoadingKeys = new Set();
+    const reportImageLoadingKeys = reactive(new Set());
+    let reportImageVersion = 0;
     const notifiedReportIds = new Set();
     let reportPollTimer = null;
     let disposed = false;
@@ -1688,14 +1927,13 @@ const TaskDetailPanel = defineComponent({
     function addSheetRow(kind) {
       const columns = kind === "circuit" ? circuitColumns.value : reasonColumns.value;
       if (!columns.length) {
-        ElMessage.error(tt("cutover.task.noEditableColumn"));
+        NocMessage.error(tt("cutover.task.noEditableColumn"));
         return;
       }
-      const row = {};
-      for (const column of columns) {
-        row[column] = "";
-      }
-      (kind === "circuit" ? circuitRows : reasonRows).value.push(row);
+      const rows = kind === "circuit" ? circuitRows.value : reasonRows.value;
+      const defaults = (cutoverTemplateColumns || {}).defaults || {};
+      const source = rows.length ? rows[rows.length - 1] : (defaults[kind] || {});
+      rows.push(normalizeRow(source, columns));
     }
 
     function removeSheetRow(kind, index) {
@@ -1805,20 +2043,21 @@ const TaskDetailPanel = defineComponent({
         || controlKind(cardIndex, sectionName, fieldName) === "textarea";
     }
 
-    function addBackboneCard() {
-      if (!backboneCards.value.length) {
-        ElMessage.error(tt("cutover.task.backboneNoStructure"));
+    async function addBackboneCard() {
+      let source = backboneCards.value[backboneCards.value.length - 1];
+      if (!source) {
+        const template = await ensureCutoverTemplateColumns();
+        source = (template.defaults || {}).backbone;
+      }
+      if (!source) {
+        NocMessage.error(tt("cutover.task.backboneNoStructure"));
         return;
       }
-      const template = JSON.parse(JSON.stringify(backboneCards.value[0]));
-      for (const fields of Object.values(template)) {
-        for (const key of Object.keys(fields)) {
-          fields[key] = null;
-        }
-      }
-      template["割接对象"]["系统名称"] = [];
+      const template = JSON.parse(JSON.stringify(source));
+      const sourceIndex = backboneCards.value.length - 1;
+      const minutes = sourceIndex >= 0 ? backboneInterruptionMinutes.value[sourceIndex] : null;
       backboneCards.value.push(template);
-      backboneInterruptionMinutes.value.push(null);
+      backboneInterruptionMinutes.value.push(minutes ?? null);
       backboneActive.value.push((orderedBackboneSections(template) || [])[0] ? [orderedBackboneSections(template)[0]] : []);
       rebuildBackboneKinds();
     }
@@ -1908,12 +2147,12 @@ const TaskDetailPanel = defineComponent({
         }
       } else {
         backboneInterruptionMinutes.value = [];
-        await ensureCutoverTemplateColumns();
+        const template = await ensureCutoverTemplateColumns();
         const circuits = currentFill.circuits || [];
-        circuitColumns.value = orderSheetColumns("circuit", circuits.length ? Object.keys(circuits[0]) : []);
+        circuitColumns.value = orderSheetColumns("circuit", circuits.length ? Object.keys(circuits[0]) : (template.circuit || []));
         circuitRows.value = circuits.map((row) => normalizeRow(row, circuitColumns.value));
         const reasons = currentFill.reasons || [];
-        reasonColumns.value = orderSheetColumns("reason", reasons.length ? Object.keys(reasons[0]) : []);
+        reasonColumns.value = orderSheetColumns("reason", reasons.length ? Object.keys(reasons[0]) : (template.reason || []));
         reasonRows.value = reasons.map((row) => normalizeRow(row, reasonColumns.value));
       }
       resumeReportProgress(task);
@@ -1931,7 +2170,7 @@ const TaskDetailPanel = defineComponent({
       try {
         return await action();
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
         setStatus(error.message, "error");
         return null;
       } finally {
@@ -1949,7 +2188,7 @@ const TaskDetailPanel = defineComponent({
       localTask.value = nextTask;
       initFromTask(nextTask).catch((error) => setStatus(error.message, "error"));
       emit("changed", nextTask);
-      ElMessage.success(payload.message || fallbackMessage);
+      NocMessage.success(payload.message || fallbackMessage);
       setStatus(payload.message || fallbackMessage);
     }
 
@@ -2041,11 +2280,11 @@ const TaskDetailPanel = defineComponent({
       if (!notifiedReportIds.has(report.id)) {
         notifiedReportIds.add(report.id);
         if (report.status === "success") {
-          ElMessage.success(tt("cutover.task.reportFinished"));
+          NocMessage.success(tt("cutover.task.reportFinished"));
           setStatus(tt("cutover.task.reportFinished"));
         } else {
           const message = (report.result && report.result.error) || tt("cutover.task.reportFailed");
-          ElMessage.error(message);
+          NocMessage.error(message);
           setStatus(message, "error");
         }
       }
@@ -2057,7 +2296,7 @@ const TaskDetailPanel = defineComponent({
         reportProgressError.value = error.message || tt("cutover.task.reportPollingError");
       }
       if (report.result && report.result.error_code === "RPA_SESSION_REQUIRED") {
-        ElMessage.warning(report.result.error || tt("dispatchSession.reportBlocked"));
+        NocMessage.warning(report.result.error || tt("dispatchSession.reportBlocked"));
         navigateTo("dispatchSession");
       }
     }
@@ -2118,7 +2357,7 @@ const TaskDetailPanel = defineComponent({
         }
       });
       if (sessionError) {
-        ElMessage.warning(sessionError.message || tt("dispatchSession.reportBlocked"));
+        NocMessage.warning(sessionError.message || tt("dispatchSession.reportBlocked"));
         setStatus(sessionError.message || tt("dispatchSession.reportBlocked"), "error");
         navigateTo("dispatchSession");
         return;
@@ -2141,7 +2380,7 @@ const TaskDetailPanel = defineComponent({
       reportProgressError.value = "";
       reportProgressVisible.value = true;
       emit("changed", localTask.value);
-      ElMessage.success(payload.message || tt("cutover.task.reportSubmitted"));
+      NocMessage.success(payload.message || tt("cutover.task.reportSubmitted"));
       setStatus(payload.message || tt("cutover.task.reportSubmitted"));
       startReportPolling(report.id);
     }
@@ -2159,6 +2398,8 @@ const TaskDetailPanel = defineComponent({
     });
     const excelDisabled = computed(() => !localTask.value.customer_excel_filename);
     function clearReportImageUrls() {
+      reportImageVersion += 1;
+      reportImageLoadingKeys.clear();
       Object.values(reportImageUrls).forEach((url) => URL.revokeObjectURL(url));
       Object.keys(reportImageUrls).forEach((key) => delete reportImageUrls[key]);
     }
@@ -2173,6 +2414,7 @@ const TaskDetailPanel = defineComponent({
     }
 
     async function loadReportStepImages(report) {
+      const version = reportImageVersion;
       const steps = (report.result && report.result.operation_log) || [];
       await Promise.all(steps.map(async (step, index) => {
         if (!step.screenshot_filename) return;
@@ -2184,17 +2426,15 @@ const TaskDetailPanel = defineComponent({
           .join("/");
         reportImageLoadingKeys.add(key);
         try {
-          reportImageUrls[key] = await requestBlobUrl(`/api/rpa/report-artifacts/${artifactPath}`);
+          const url = await requestBlobUrl(`/api/rpa/report-artifacts/${artifactPath}`);
+          if (disposed || version !== reportImageVersion) URL.revokeObjectURL(url);
+          else reportImageUrls[key] = url;
         } catch {
           return;
         } finally {
-          reportImageLoadingKeys.delete(key);
+          if (version === reportImageVersion) reportImageLoadingKeys.delete(key);
         }
       }));
-    }
-
-    function reportImageUrl(reportId, index) {
-      return reportImageUrls[operationImageKey(reportId, index)] || "";
     }
 
     onUnmounted(() => {
@@ -2216,7 +2456,7 @@ const TaskDetailPanel = defineComponent({
       handleBackboneEnumChange,
       saveEdit, switchType, confirmTask, reportTask, downloadExcel,
       saveDisabled, confirmDisabled, reportDisabled, excelDisabled,
-      reportImageUrl, reportProgressVisible, activeReport, activeReportSteps,
+      reportImageUrls, reportImageLoadingKeys, reportProgressVisible, activeReport, activeReportSteps,
       activeReportInProgress, reportProgressError, reportStatusType, reportStatusText,
       statusTagType, statusText, lineTypeText, taskLineCount,
       icons: ElementPlusIconsVue,
@@ -2230,14 +2470,14 @@ const TaskDetailPanel = defineComponent({
           <h3>{{ $t('cutover.task.heading', { id: localTask.id }) }}<span v-if="localTask.title"> - {{ localTask.title }}</span></h3>
         </div>
         <div class="panel-heading-tools">
-          <el-tag v-if="localTask.cutover_scene === 'emergency'" type="danger" effect="dark" size="small">
+          <ui-tag v-if="localTask.cutover_scene === 'emergency'" type="danger" effect="dark" size="small">
             {{ $t('cutover.task.emergencyRejected') }}
-          </el-tag>
-          <el-button size="small" :icon="icons.ArrowUp" @click="$emit('collapse')">{{ $t('cutover.task.collapse') }}</el-button>
+          </ui-tag>
+          <ui-button size="small" plain class="task-toolbar-button" :icon="icons.ArrowUp" @click="$emit('collapse')">{{ $t('cutover.task.collapse') }}</ui-button>
         </div>
       </div>
 
-      <el-drawer v-model="reportProgressVisible"
+      <ui-drawer v-model="reportProgressVisible"
                  :title="$t('cutover.task.reportProgressTitle')"
                  size="520px" direction="rtl" append-to-body
                  :modal="false" modal-penetrable :lock-scroll="false"
@@ -2245,15 +2485,15 @@ const TaskDetailPanel = defineComponent({
         <div v-if="activeReport" class="report-progress-content">
           <section class="report-progress-summary">
             <div class="report-progress-status-row">
-              <el-tag :type="reportStatusType(activeReport.status)" effect="dark">
+              <ui-tag :type="reportStatusType(activeReport.status)" effect="dark">
                 {{ reportStatusText(activeReport.status) }}
-              </el-tag>
+              </ui-tag>
               <span class="mono muted">#{{ activeReport.id }}</span>
             </div>
             <div class="report-progress-current">
-              <el-icon v-if="activeReportInProgress" class="is-loading"><component :is="icons.Loading"></component></el-icon>
-              <el-icon v-else-if="activeReport.status === 'success'" class="report-progress-success"><component :is="icons.CircleCheck"></component></el-icon>
-              <el-icon v-else class="report-progress-danger"><component :is="icons.CircleClose"></component></el-icon>
+              <ui-icon v-if="activeReportInProgress" class="is-loading"><component :is="icons.Loading"></component></ui-icon>
+              <ui-icon v-else-if="activeReport.status === 'success'" class="report-progress-success"><component :is="icons.CircleCheck"></component></ui-icon>
+              <ui-icon v-else class="report-progress-danger"><component :is="icons.CircleClose"></component></ui-icon>
               <div>
                 <span>{{ $t('cutover.task.reportCurrentStep') }}</span>
                 <strong>
@@ -2264,41 +2504,27 @@ const TaskDetailPanel = defineComponent({
             <p>{{ $t('cutover.task.reportStepCount', { count: activeReportSteps.length }) }}</p>
           </section>
 
-          <el-alert v-if="reportProgressError" type="warning" :closable="false" show-icon
-                    :title="reportProgressError"></el-alert>
+          <ui-alert v-if="reportProgressError" type="warning" :closable="false" show-icon
+                    :title="reportProgressError"></ui-alert>
 
           <div v-if="!activeReportSteps.length" class="report-progress-empty">
-            <el-icon class="is-loading"><component :is="icons.Loading"></component></el-icon>
+            <ui-icon class="is-loading"><component :is="icons.Loading"></component></ui-icon>
             <span>{{ $t('cutover.task.reportWaitingForStep') }}</span>
           </div>
-          <el-timeline v-else class="report-progress-timeline">
-            <el-timeline-item v-for="(step, index) in activeReportSteps"
-                              :key="activeReport.id + '-' + index"
-                              :timestamp="step.captured_at || ''" placement="top"
-                              type="primary">
-              <article class="report-progress-step">
-                <strong>{{ step.label || step.step }}</strong>
-                <el-image v-if="reportImageUrl(activeReport.id, index)"
-                          :src="reportImageUrl(activeReport.id, index)"
-                          :preview-src-list="[reportImageUrl(activeReport.id, index)]"
-                          fit="cover" preview-teleported></el-image>
-                <div v-else class="report-progress-image-loading">
-                  {{ $t('cutover.task.screenshotLoading') }}
-                </div>
-              </article>
-            </el-timeline-item>
-          </el-timeline>
+          <report-screenshot-gallery v-else :report-id="activeReport.id" :steps="activeReportSteps"
+                                     :image-urls="reportImageUrls" :loading-keys="reportImageLoadingKeys"/>
+
 
           <p class="report-progress-hint">{{ $t('cutover.task.reportProgressHint') }}</p>
         </div>
-      </el-drawer>
+      </ui-drawer>
 
       <div class="task-meta-grid">
         <div class="task-meta-item">
           <span>{{ $t('common.status') }}</span>
-          <el-tag :type="statusTagType(localTask.status)" effect="dark">
+          <ui-tag :type="statusTagType(localTask.status)" effect="dark">
             {{ statusText(localTask.status, localTask.status_label) }}
-          </el-tag>
+          </ui-tag>
         </div>
         <div class="task-meta-item">
           <span>{{ $t('cutover.task.lineTypeLabel') }}</span>
@@ -2322,25 +2548,26 @@ const TaskDetailPanel = defineComponent({
         </div>
         <div class="task-meta-item">
           <span>{{ $t('common.confirmTime') }}</span>
-          <strong>{{ localTask.confirmed_at || '-' }}</strong>
+          <strong>{{ String(localTask.confirmed_at || '-').replace('T', ' ').slice(0, 19) }}</strong>
         </div>
         <div class="task-meta-item">
           <span>{{ $t('common.createTime') }}</span>
-          <strong>{{ localTask.create_time || '-' }}</strong>
+          <strong>{{ String(localTask.create_time || '-').replace('T', ' ').slice(0, 19) }}</strong>
         </div>
         <div class="task-meta-item">
           <span>{{ $t('common.updateTime') }}</span>
-          <strong>{{ localTask.update_time || '-' }}</strong>
+          <strong>{{ String(localTask.update_time || '-').replace('T', ' ').slice(0, 19) }}</strong>
         </div>
       </div>
 
       <div class="task-type-switch">
         <span class="muted">{{ $t('cutover.task.fillTypeLabel') }}</span>
-        <el-radio-group :model-value="localTask.line_type" :disabled="localTask.status === 'reporting'"
+        <ui-radio-group class="task-type-options" role="radiogroup" :name="'cutover-line-type-' + localTask.id"
+                        :aria-label="$t('cutover.task.fillTypeLabel')" :model-value="localTask.line_type" :disabled="localTask.status === 'reporting'"
                         @change="switchType">
-          <el-radio-button value="customer">{{ $t('cutover.task.fillCustomer') }}</el-radio-button>
-          <el-radio-button value="backbone">{{ $t('cutover.task.fillBackbone') }}</el-radio-button>
-        </el-radio-group>
+          <ui-radio-button value="customer"><span class="task-type-label"><ui-icon aria-hidden="true"><component :is="icons.Check"></component></ui-icon>{{ $t('cutover.task.fillCustomer') }}</span></ui-radio-button>
+          <ui-radio-button value="backbone"><span class="task-type-label"><ui-icon aria-hidden="true"><component :is="icons.Check"></component></ui-icon>{{ $t('cutover.task.fillBackbone') }}</span></ui-radio-button>
+        </ui-radio-group>
       </div>
 
       <div v-if="validationMessages.length" class="task-warnings">
@@ -2357,7 +2584,7 @@ const TaskDetailPanel = defineComponent({
         <div class="block-section">
           <div class="block-head">
             <span>{{ $t('cutover.task.circuitSheet') }}</span>
-            <el-button size="small" @click="addSheetRow('circuit')">{{ $t('cutover.task.addRow') }}</el-button>
+            <ui-button size="small" type="primary" plain class="task-toolbar-button" :icon="icons.Plus" @click="addSheetRow('circuit')">{{ $t('cutover.task.addRow') }}</ui-button>
           </div>
           <p class="field-hint">{{ $t('cutover.task.sheetHint') }}</p>
           <div class="sheet-table-wrap">
@@ -2376,17 +2603,17 @@ const TaskDetailPanel = defineComponent({
                 </tr>
                 <tr v-for="(row, rowIndex) in circuitRows" :key="rowIndex">
                   <td v-for="column in circuitColumns" :key="column" :class="customerColumnClass(column)">
-                    <el-select v-if="customerEnumOptions(column, row)"
+                    <ui-select v-if="customerEnumOptions(column, row)"
                                v-model="row[column]" size="small" :aria-label="column" style="width: 100%"
                                :filterable="column === '预计影响客户业务时长'"
                                :allow-create="column === '预计影响客户业务时长'" default-first-option>
-                      <el-option v-for="option in customerEnumOptions(column, row)" :key="option"
-                                 :label="option" :value="option"></el-option>
-                    </el-select>
-                    <el-input v-else v-model="row[column]" size="small" :aria-label="column"></el-input>
+                      <ui-option v-for="option in customerEnumOptions(column, row)" :key="option"
+                                 :label="option" :value="option"></ui-option>
+                    </ui-select>
+                    <ui-input v-else v-model="row[column]" size="small" :aria-label="column"></ui-input>
                   </td>
                   <td>
-                    <el-button link type="danger" size="small" @click="removeSheetRow('circuit', rowIndex)">{{ $t('common.delete') }}</el-button>
+                    <ui-action type="danger" @click="removeSheetRow('circuit', rowIndex)" icon="Delete" :label="$t('common.delete')"></ui-action>
                   </td>
                 </tr>
               </tbody>
@@ -2397,7 +2624,7 @@ const TaskDetailPanel = defineComponent({
         <div class="block-section">
           <div class="block-head">
             <span>{{ $t('cutover.task.reasonSheet') }}</span>
-            <el-button size="small" @click="addSheetRow('reason')">{{ $t('cutover.task.addRow') }}</el-button>
+            <ui-button size="small" type="primary" plain class="task-toolbar-button" :icon="icons.Plus" @click="addSheetRow('reason')">{{ $t('cutover.task.addRow') }}</ui-button>
           </div>
           <div class="sheet-table-wrap">
             <table class="sheet-table">
@@ -2413,10 +2640,10 @@ const TaskDetailPanel = defineComponent({
                 </tr>
                 <tr v-for="(row, rowIndex) in reasonRows" :key="rowIndex">
                   <td v-for="column in reasonColumns" :key="column">
-                    <el-input v-model="row[column]" size="small"></el-input>
+                    <ui-input v-model="row[column]" size="small"></ui-input>
                   </td>
                   <td>
-                    <el-button link type="danger" size="small" @click="removeSheetRow('reason', rowIndex)">{{ $t('common.delete') }}</el-button>
+                    <ui-action type="danger" @click="removeSheetRow('reason', rowIndex)" icon="Delete" :label="$t('common.delete')"></ui-action>
                   </td>
                 </tr>
               </tbody>
@@ -2429,7 +2656,7 @@ const TaskDetailPanel = defineComponent({
       <div v-else class="block-section">
         <div class="block-head">
           <span>{{ $t('cutover.task.backboneForm') }}</span>
-          <el-button size="small" @click="addBackboneCard">{{ $t('cutover.task.addBackbone') }}</el-button>
+          <ui-button size="small" type="primary" plain class="task-toolbar-button" :icon="icons.Plus" @click="addBackboneCard">{{ $t('cutover.task.addBackbone') }}</ui-button>
         </div>
         <p class="field-hint">{{ $t('cutover.task.backboneHint') }}</p>
         <p v-if="!backboneCards.length" class="empty-inline">{{ $t('cutover.task.backboneEmpty') }}</p>
@@ -2438,16 +2665,18 @@ const TaskDetailPanel = defineComponent({
             <div class="backbone-card-head">
               <strong>{{ $t('cutover.task.backboneCard', { index: cardIndex + 1 }) }}</strong>
               <div class="backbone-card-tools">
-                <el-button link size="small" @click="expandAllBackboneSections">{{ $t('cutover.task.expandAll') }}</el-button>
-                <el-button link size="small" @click="collapseAllBackboneSections">{{ $t('cutover.task.collapseAll') }}</el-button>
-                <el-button size="small" @click="removeBackboneCard(cardIndex)">{{ $t('common.delete') }}</el-button>
+                <div class="backbone-disclosure-tools">
+                  <ui-button quaternary size="small" class="task-toolbar-button" :icon="icons.ArrowDown" @click="expandAllBackboneSections">{{ $t('cutover.task.expandAll') }}</ui-button>
+                  <ui-button quaternary size="small" class="task-toolbar-button" :icon="icons.ArrowUp" @click="collapseAllBackboneSections">{{ $t('cutover.task.collapseAll') }}</ui-button>
+                </div>
+                <ui-button size="small" type="danger" plain class="task-toolbar-button" :icon="icons.Delete" @click="removeBackboneCard(cardIndex)">{{ $t('common.delete') }}</ui-button>
               </div>
             </div>
-            <el-collapse class="backbone-collapse"
+            <ui-collapse class="backbone-collapse"
                          :model-value="backboneActive[cardIndex] || []"
                          @update:model-value="(value) => (backboneActive[cardIndex] = value)">
               <template v-for="sectionName in orderedBackboneSections(card)" :key="sectionName">
-                <el-collapse-item v-if="card[sectionName] && !Array.isArray(card[sectionName])"
+                <ui-collapse-item v-if="card[sectionName] && !Array.isArray(card[sectionName])"
                                   :title="sectionName" :name="sectionName">
                 <div class="backbone-field-grid">
                   <label v-for="fieldName in orderedBackboneFields(sectionName, card[sectionName])"
@@ -2456,12 +2685,12 @@ const TaskDetailPanel = defineComponent({
                     <span>{{ fieldName }}</span>
                     <div v-if="sectionName === '基本信息' && fieldName === '中断类型'"
                          class="backbone-interruption-control">
-                      <el-select v-model="card[sectionName][fieldName]" class="backbone-enum-select"
+                      <ui-select v-model="card[sectionName][fieldName]" class="backbone-enum-select"
                                  :aria-label="fieldName"
                                  @change="(value) => handleBackboneEnumChange(card, cardIndex, sectionName, fieldName, value)">
-                        <el-option v-for="option in backboneEnumOptions(fieldName)"
-                                   :key="option" :label="option" :value="option"></el-option>
-                      </el-select>
+                        <ui-option v-for="option in backboneEnumOptions(fieldName)"
+                                   :key="option" :label="option" :value="option"></ui-option>
+                      </ui-select>
                       <div v-if="card[sectionName]['中断类型'] === '中断'"
                            class="backbone-interruption-duration">
                         <input v-model="card[sectionName]['中断时间 (分钟)']"
@@ -2470,33 +2699,33 @@ const TaskDetailPanel = defineComponent({
                         <span class="backbone-interruption-unit" aria-hidden="true">分钟</span>
                       </div>
                     </div>
-                    <el-select v-else-if="isBackboneSystemField(sectionName, fieldName)"
+                    <ui-select v-else-if="isBackboneSystemField(sectionName, fieldName)"
                                v-model="card[sectionName][fieldName]" multiple filterable allow-create
                                default-first-option class="backbone-system-select"
                                placeholder="输入系统名称后回车">
-                      <el-option v-for="systemName in card[sectionName][fieldName]"
-                                 :key="systemName" :label="systemName" :value="systemName"></el-option>
-                    </el-select>
-                    <el-checkbox v-else-if="isBackboneConfirmationField(fieldName)"
+                      <ui-option v-for="systemName in card[sectionName][fieldName]"
+                                 :key="systemName" :label="systemName" :value="systemName"></ui-option>
+                    </ui-select>
+                    <ui-checkbox v-else-if="isBackboneConfirmationField(fieldName)"
                                  v-model="card[sectionName][fieldName]"
                                  true-label="是" false-label="否" class="backbone-confirmation-checkbox">
-                      已选中
-                    </el-checkbox>
-                    <el-select v-else-if="backboneEnumOptions(fieldName)"
+                      {{ card[sectionName][fieldName] === '是' ? '已选中' : '未选中' }}
+                    </ui-checkbox>
+                    <ui-select v-else-if="backboneEnumOptions(fieldName)"
                                v-model="card[sectionName][fieldName]" class="backbone-enum-select"
                                :aria-label="fieldName"
                                @change="(value) => handleBackboneEnumChange(card, cardIndex, sectionName, fieldName, value)">
-                      <el-option v-for="option in backboneEnumOptions(fieldName)"
-                                 :key="option" :label="option" :value="option"></el-option>
-                    </el-select>
+                      <ui-option v-for="option in backboneEnumOptions(fieldName)"
+                                 :key="option" :label="option" :value="option"></ui-option>
+                    </ui-select>
                     <textarea v-else-if="controlKind(cardIndex, sectionName, fieldName) === 'textarea'"
                               v-model="card[sectionName][fieldName]" :rows="2" class="backbone-input"></textarea>
                     <input v-else v-model="card[sectionName][fieldName]" class="backbone-input">
                   </label>
                 </div>
-                </el-collapse-item>
+                </ui-collapse-item>
               </template>
-            </el-collapse>
+            </ui-collapse>
           </article>
         </div>
       </div>
@@ -2505,76 +2734,67 @@ const TaskDetailPanel = defineComponent({
       <div class="block-section">
         <div class="block-head">
           <span>{{ $t('cutover.task.reports') }}</span>
-          <el-button v-if="activeReport" size="small" :type="activeReportInProgress ? 'primary' : 'default'"
+          <ui-button v-if="activeReport" size="small" :type="activeReportInProgress ? 'primary' : 'default'"
                      @click="reportProgressVisible = true">
             {{ $t('cutover.task.reportViewProgress') }}
-          </el-button>
+          </ui-button>
         </div>
-        <el-table :data="localTask.reports || []" size="small" :empty-text="$t('cutover.task.reportsEmpty')">
-          <el-table-column type="expand" width="48">
+        <ui-table :data="localTask.reports || []" size="small" :empty-text="$t('cutover.task.reportsEmpty')">
+          <ui-table-column type="expand" width="48">
             <template #default="{ row }">
               <div class="report-operation-detail">
-                <el-alert v-if="row.result && row.result.manual_intervention_required"
+                <ui-alert v-if="row.result && row.result.manual_intervention_required"
                           type="error" :closable="false" show-icon
-                          :title="$t('cutover.task.manualIntervention')"></el-alert>
+                          :title="$t('cutover.task.manualIntervention')"></ui-alert>
                 <div v-if="row.result && row.result.portal_task_number" class="report-task-number">
                   <span>{{ $t('cutover.task.portalTaskNumber') }}</span>
                   <strong class="mono">{{ row.result.portal_task_number }}</strong>
                 </div>
                 <p v-if="row.result && row.result.error" class="report-error">{{ row.result.error }}</p>
-                <div v-if="row.result && row.result.operation_log && row.result.operation_log.length"
-                     class="report-operation-grid">
-                  <article v-for="(step, index) in row.result.operation_log"
-                           :key="row.id + '-' + index" class="report-operation-card">
-                    <el-image v-if="reportImageUrl(row.id, index)"
-                              :src="reportImageUrl(row.id, index)"
-                              :preview-src-list="[reportImageUrl(row.id, index)]"
-                              fit="cover" preview-teleported></el-image>
-                    <div v-else class="report-image-missing">{{ $t('cutover.task.screenshotUnavailable') }}</div>
-                    <strong>{{ step.label || step.step }}</strong>
-                    <span class="mono muted">{{ step.captured_at || '' }}</span>
-                  </article>
-                </div>
+                <report-screenshot-gallery v-if="row.result && row.result.operation_log && row.result.operation_log.length"
+                                           :report-id="row.id" :steps="row.result.operation_log"
+                                           :image-urls="reportImageUrls" :loading-keys="reportImageLoadingKeys"/>
+
               </div>
             </template>
-          </el-table-column>
-          <el-table-column prop="id" label="ID" width="80">
+          </ui-table-column>
+          <ui-table-column prop="id" label="ID" width="80">
             <template #default="{ row }">
               <span class="mono">{{ row.id }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('common.type')" width="100">
+          </ui-table-column>
+          <ui-table-column :label="$t('common.type')" width="100">
             <template #default="{ row }">
               <span>{{ row.report_type || 'all' }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('common.status')" width="120">
+          </ui-table-column>
+          <ui-table-column :label="$t('common.status')" width="120">
             <template #default="{ row }">
-              <el-tag :type="reportStatusType(row.status)" size="small">
+              <ui-tag :type="reportStatusType(row.status)" size="small">
                 {{ reportStatusText(row.status) }}
-              </el-tag>
+              </ui-tag>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('cutover.task.reportNote')" min-width="260">
+          </ui-table-column>
+          <ui-table-column :label="$t('cutover.task.reportNote')" min-width="260">
             <template #default="{ row }">
               <span class="muted">
                 {{ (row.result && (row.result.note || row.result.error || row.result.portal_task_number)) || '-' }}
               </span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('common.time')" width="170">
+          </ui-table-column>
+          <ui-table-column :label="$t('common.time')" width="170">
             <template #default="{ row }">
               <span class="mono muted">{{ row.create_time || '' }}</span>
             </template>
-          </el-table-column>
-        </el-table>
+          </ui-table-column>
+        </ui-table>
       </div>
 
       <div class="panel-actions">
-        <el-button v-if="!isBackbone" :disabled="excelDisabled" @click="downloadExcel">{{ $t('cutover.task.downloadExcel') }}</el-button>
-        <el-button :disabled="saveDisabled" @click="saveEdit">{{ $t('cutover.task.saveEdit') }}</el-button>
-        <el-button :disabled="confirmDisabled" @click="confirmTask">{{ $t('cutover.task.manualConfirm') }}</el-button>
-        <el-button type="primary" :disabled="reportDisabled" @click="reportTask">{{ $t('cutover.task.reportSubmit') }}</el-button>
+        <ui-button v-if="!isBackbone" :disabled="excelDisabled" @click="downloadExcel">{{ $t('cutover.task.downloadExcel') }}</ui-button>
+        <ui-button :disabled="saveDisabled" @click="saveEdit">{{ $t('cutover.task.saveEdit') }}</ui-button>
+        <ui-button :disabled="confirmDisabled" @click="confirmTask">{{ $t('cutover.task.manualConfirm') }}</ui-button>
+        <ui-button type="primary" :disabled="reportDisabled" @click="reportTask">{{ $t('cutover.task.reportSubmit') }}</ui-button>
       </div>
     </div>
   `,
@@ -2600,6 +2820,7 @@ const ViewCutoverEmailDetail = defineComponent({
     const replyBusy = ref(false);
     const apiForwardBusy = ref(false);
     const readStateBusy = ref(false);
+    const deleteBusy = ref(false);
     const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
     const extractionDraft = ref("");
@@ -2665,7 +2886,7 @@ const ViewCutoverEmailDetail = defineComponent({
     async function confirmTaskRegeneration() {
       if (!email.value?.tasks?.length) return true;
       try {
-        await ElMessageBox.confirm(
+        await NocDialog.confirm(
           tt("cutover.detail.regenerateConfirmMessage"), tt("cutover.detail.regenerateTasks"),
           {confirmButtonText: tt("cutover.detail.regenerateConfirm"), cancelButtonText: tt("common.cancel"), type: "warning"},
         );
@@ -2703,9 +2924,9 @@ const ViewCutoverEmailDetail = defineComponent({
             throw new Error((result.validation_messages || []).map((item) => item.message).join("；") || result.msg);
           }
         }
-        ElMessage.success(tt(generate ? "cutover.detail.tasksGenerated" : "cutover.detail.extractionSaved"));
+        NocMessage.success(tt(generate ? "cutover.detail.tasksGenerated" : "cutover.detail.extractionSaved"));
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         extractionBusy.value = false;
       }
@@ -2734,9 +2955,9 @@ const ViewCutoverEmailDetail = defineComponent({
         });
         email.value.line_table = saved.line_table;
         email.value.fill_payload = saved.fill_payload;
-        ElMessage.success(tt("cutover.detail.bindingSaved"));
+        NocMessage.success(tt("cutover.detail.bindingSaved"));
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         extractionBusy.value = false;
       }
@@ -2745,7 +2966,7 @@ const ViewCutoverEmailDetail = defineComponent({
     async function regenerateTasks() {
       if (extractionBusy.value) return;
       if (extractionDirty.value || unsavedLineBindings.value) {
-        ElMessage.warning(tt("cutover.detail.unsavedGenerationInputs"));
+        NocMessage.warning(tt("cutover.detail.unsavedGenerationInputs"));
         return;
       }
       extractionBusy.value = true;
@@ -2758,9 +2979,9 @@ const ViewCutoverEmailDetail = defineComponent({
         if (!result.tasks?.length) {
           throw new Error((result.validation_messages || []).map((item) => item.message).join("；") || result.msg);
         }
-        ElMessage.success(tt("cutover.detail.tasksGenerated"));
+        NocMessage.success(tt("cutover.detail.tasksGenerated"));
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         extractionBusy.value = false;
       }
@@ -2792,6 +3013,7 @@ const ViewCutoverEmailDetail = defineComponent({
       detailTask.value = null;
       try {
         email.value = await requestJson(`/api/cutover/emails/${props.emailRecordId}`);
+        if (email.value.processing_origin === 'unconfigured') contentCollapsed.value = ['content'];
         const extracted = Object.assign({}, ...extractJsonObjects(email.value.extract_result || ""));
         const saved = email.value.fill_payload || {};
         const payload = Object.keys(saved).length ? saved : extracted;
@@ -2821,27 +3043,27 @@ const ViewCutoverEmailDetail = defineComponent({
     // 人工确认发送待确认回复（发送前二次确认，内容与收件人可在页面上修改）
     async function confirmReply() {
       if (!replyDraft.value.trim()) {
-        ElMessage.error(tt("cutover.detail.replyContentRequired"));
+        NocMessage.error(tt("cutover.detail.replyContentRequired"));
         return;
       }
       const recipients = replyRecipients.value.map((address) => String(address).trim()).filter(Boolean);
       if (!recipients.length) {
-        ElMessage.error(tt("cutover.detail.replyRecipientsRequired"));
+        NocMessage.error(tt("cutover.detail.replyRecipientsRequired"));
         return;
       }
       const invalid = recipients.find((address) => !EMAIL_PATTERN.test(address));
       if (invalid) {
-        ElMessage.error(tt("cutover.detail.replyRecipientsInvalid", { address: invalid }));
+        NocMessage.error(tt("cutover.detail.replyRecipientsInvalid", { address: invalid }));
         return;
       }
       const ccRecipients = replyCcRecipients.value.map((address) => String(address).trim()).filter(Boolean);
       const invalidCc = ccRecipients.find((address) => !EMAIL_PATTERN.test(address));
       if (invalidCc) {
-        ElMessage.error(tt("cutover.detail.replyCcInvalid", { address: invalidCc }));
+        NocMessage.error(tt("cutover.detail.replyCcInvalid", { address: invalidCc }));
         return;
       }
       try {
-        await ElMessageBox.confirm(
+        await NocDialog.confirm(
           ccRecipients.length
             ? tt("cutover.detail.replyConfirmMessageWithCc", {
                 recipients: recipients.join("、"),
@@ -2869,10 +3091,10 @@ const ViewCutoverEmailDetail = defineComponent({
             cc_recipients: ccRecipients,
           }),
         });
-        ElMessage.success(tt("cutover.detail.replySent"));
+        NocMessage.success(tt("cutover.detail.replySent"));
         await loadDetail();
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         replyBusy.value = false;
       }
@@ -2881,7 +3103,7 @@ const ViewCutoverEmailDetail = defineComponent({
     // 放弃待确认回复（不发送，不写入割接场景）
     async function cancelReply() {
       try {
-        await ElMessageBox.confirm(
+        await NocDialog.confirm(
           tt("cutover.detail.replyCancelMessage"),
           tt("cutover.detail.replyCancelTitle"),
           {
@@ -2899,10 +3121,10 @@ const ViewCutoverEmailDetail = defineComponent({
           method: "POST",
           body: JSON.stringify({ email_records_id: props.emailRecordId }),
         });
-        ElMessage.success(tt("cutover.detail.replyCancelled"));
+        NocMessage.success(tt("cutover.detail.replyCancelled"));
         await loadDetail();
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         replyBusy.value = false;
       }
@@ -2918,20 +3140,20 @@ const ViewCutoverEmailDetail = defineComponent({
         if (email.value && data && data.api_forward) {
           email.value.api_forward = data.api_forward;
         }
-        ElMessage.success(tt("cutover.detail.apiForwardRetrySucceeded"));
+        NocMessage.success(tt("cutover.detail.apiForwardRetrySucceeded"));
         await loadDetail();
       } catch (error) {
         if (email.value && error.data && error.data.api_forward) {
           email.value.api_forward = error.data.api_forward;
         }
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         apiForwardBusy.value = false;
       }
     }
 
     async function toggleReadState() {
-      if (!email.value) {
+      if (!email.value || deleteBusy.value) {
         return;
       }
       readStateBusy.value = true;
@@ -2941,11 +3163,30 @@ const ViewCutoverEmailDetail = defineComponent({
           body: JSON.stringify({ is_read: !email.value.is_read }),
         });
         email.value.is_read = Boolean(data.is_read);
-        ElMessage.success(tt("common.readStateUpdated"));
+        NocMessage.success(tt("common.readStateUpdated"));
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         readStateBusy.value = false;
+      }
+    }
+
+    async function deleteEmail() {
+      if (!email.value || deleteBusy.value || replyBusy.value || extractionBusy.value || apiForwardBusy.value || readStateBusy.value) return;
+      deleteBusy.value = true;
+      try {
+        if (!await confirmDeleteCutoverEmail(email.value)) return;
+        NocMessage.success(tt("cutover.delete.succeeded"));
+        // Replace the deleted detail in history; the destination reloads the list and summary.
+        history.replaceState({
+          view: "cutoverTasks",
+          cutoverListState: history.state?.cutoverListState,
+        }, "", VIEW_ROUTES.cutoverTasks);
+        applyRoute(parseRoute());
+      } catch (error) {
+        NocMessage.error(error.message);
+      } finally {
+        deleteBusy.value = false;
       }
     }
 
@@ -3033,20 +3274,20 @@ const ViewCutoverEmailDetail = defineComponent({
       email, loading, contentCollapsed, contentFrame, expandedKeys, detailTask,
       replyDraft, replyRecipients, replyBusy, recipientOptions, replyCcRecipients, confirmReply, cancelReply,
       apiForwardBusy, retryApiForward,
-      readStateBusy, toggleReadState,
+      readStateBusy, toggleReadState, deleteBusy, deleteEmail,
       extractResultBlocks, extractionDraft, extractionBusy, manualBindings, manualBindingTypes, editingLineBindings, isAutomaticLineMatch, toggleLineBindingEditor, selectCircuitCandidate, hasSavedManualBinding, matchedTypeCounts, saveExtraction, bindLine, regenerateTasks,
       loadDetail, onIframeLoad, toggleTask, closeTask, onExpandChange, onTaskChanged,
       statusTagType, statusText, mailboxLabel,
     };
   },
   template: `
-    <div class="view-body" v-loading="loading">
-      <nav class="supplier-context-bar" :aria-label="$t('common.pageLocation')">
-        <el-button link class="supplier-back-link" :icon="icons.ArrowLeft" @click="goBack">{{ $t('cutover.detail.breadcrumbList') }}</el-button>
-        <span class="supplier-context-separator" aria-hidden="true">/</span>
-        <span class="supplier-context-current">{{ $t('cutover.detail.breadcrumbTitle') }}</span>
+    <div class="view-body" :class="{'unconfigured-detail-grid':email?.processing_origin === 'unconfigured'}" v-loading="loading">
+      <header class="supplier-context-bar">
         <span v-if="email" class="supplier-context-detail">{{ email.subject || $t('cutover.detail.emailFallback', { id: email.email_id || email.id }) }}</span>
-      </nav>
+        <ui-button v-if="email" type="danger" plain class="cutover-email-delete-action"
+                   :loading="deleteBusy" :disabled="deleteBusy || loading || replyBusy || extractionBusy || apiForwardBusy || readStateBusy"
+                   @click="deleteEmail">{{ $t('cutover.delete.detailAction') }}</ui-button>
+      </header>
 
       <p v-if="!loading && !email" class="empty-inline">{{ $t('common.loadFailedBack') }}</p>
 
@@ -3067,7 +3308,7 @@ const ViewCutoverEmailDetail = defineComponent({
           </div>
           <div class="task-meta-item task-meta-item--timestamp">
             <span>{{ $t('common.receiveTime') }}</span>
-            <strong class="mono">{{ email.create_time || '-' }}</strong>
+            <strong class="mono" :title="email.create_time">{{ String(email.create_time || '—').replace('T', ' ').slice(0, 19) }}</strong>
           </div>
           <div class="task-meta-item">
             <span>{{ $t('common.readState') }}</span>
@@ -3077,25 +3318,26 @@ const ViewCutoverEmailDetail = defineComponent({
                 <span class="read-state-dot" aria-hidden="true"></span>
                 <span class="read-state-text">{{ email.is_read ? $t('common.read') : $t('common.unread') }}</span>
               </span>
-              <el-button class="read-state-toggle" link :loading="readStateBusy"
-                         :disabled="readStateBusy"
+              <ui-button class="read-state-toggle" link :loading="readStateBusy"
+                         :disabled="readStateBusy || deleteBusy"
                          @click="toggleReadState">
                 {{ email.is_read ? $t('common.markAsUnread') : $t('common.markAsRead') }}
-              </el-button>
+              </ui-button>
             </div>
           </div>
         </div>
 
-        <div class="api-forward-card"
+        <mail-analysis-panel :record="email" @changed="loadDetail"></mail-analysis-panel>
+        <div v-if="email.processing_origin !== 'unconfigured'" class="api-forward-card"
              :class="'api-forward-' + (apiForwardBusy ? 'forwarding' : (email.api_forward.status || 'not_recorded'))"
              role="status" aria-live="polite" :aria-busy="apiForwardBusy">
           <div class="api-forward-main">
             <div class="api-forward-head">
               <strong>{{ $t('cutover.detail.apiForwardTitle') }}</strong>
-              <el-tag :type="apiForwardBusy ? 'warning' : (email.api_forward.status === 'succeeded' ? 'success' : (email.api_forward.status === 'failed' ? 'danger' : (email.api_forward.status === 'forwarding' ? 'warning' : 'info')))"
+              <ui-tag :type="apiForwardBusy ? 'warning' : (email.api_forward.status === 'succeeded' ? 'success' : (email.api_forward.status === 'failed' ? 'danger' : (email.api_forward.status === 'forwarding' ? 'warning' : 'info')))"
                       size="small" effect="plain">
                 {{ $t('cutover.detail.apiForwardStatus.' + (apiForwardBusy ? 'forwarding' : (email.api_forward.status || 'not_recorded'))) }}
-              </el-tag>
+              </ui-tag>
               <span v-if="email.api_forward.updated_at" class="mono muted">
                 {{ $t('cutover.detail.apiForwardTime', { time: email.api_forward.updated_at }) }}
               </span>
@@ -3105,56 +3347,56 @@ const ViewCutoverEmailDetail = defineComponent({
               {{ email.api_forward.error }}
             </p>
           </div>
-          <el-button v-if="email.api_forward.status === 'failed'" type="primary"
+          <ui-button v-if="email.api_forward.status === 'failed'" type="primary"
                      :loading="apiForwardBusy" :disabled="apiForwardBusy"
                      @click="retryApiForward">
             {{ $t('cutover.detail.apiForwardRetry') }}
-          </el-button>
+          </ui-button>
         </div>
 
         <!-- 待确认回复（FastGPT 登记草稿，人工确认后才发送） -->
         <div v-if="email.reply_status === 'pending'" class="reply-pending-card">
           <div class="reply-pending-head">
-            <el-tag type="warning" effect="dark" size="small">{{ $t('cutover.detail.replyPendingTitle') }}</el-tag>
-            <el-tag v-if="isRejectedScene(email.pending_reply_scene)"
+            <ui-tag type="warning" effect="dark" size="small">{{ $t('cutover.detail.replyPendingTitle') }}</ui-tag>
+            <ui-tag v-if="isRejectedScene(email.pending_reply_scene)"
                     :type="sceneTagType(email.pending_reply_scene)" effect="plain" size="small">
               {{ sceneText(email.pending_reply_scene, email.pending_reply_scene_label) }}
-            </el-tag>
+            </ui-tag>
             <span class="muted">{{ $t('cutover.detail.replyPendingHint') }}</span>
           </div>
           <div class="reply-recipients">
             <span class="reply-recipients-label">
-              <el-icon class="reply-recipients-icon"><Promotion /></el-icon>
+              <ui-icon class="reply-recipients-icon"><Promotion /></ui-icon>
               {{ $t('cutover.detail.replyRecipient') }}
             </span>
-            <el-select v-model="replyRecipients" multiple filterable allow-create default-first-option
+            <ui-select v-model="replyRecipients" multiple filterable allow-create default-first-option
                        :placeholder="$t('cutover.detail.replyRecipientPlaceholder')" class="reply-recipients-select">
-              <el-option v-for="addr in recipientOptions" :key="addr" :label="addr" :value="addr"></el-option>
-            </el-select>
+              <ui-option v-for="addr in recipientOptions" :key="addr" :label="addr" :value="addr"></ui-option>
+            </ui-select>
           </div>
           <div class="reply-recipients">
             <span class="reply-recipients-label">{{ $t('cutover.detail.replyCc') }}</span>
-            <el-select v-model="replyCcRecipients" multiple filterable allow-create clearable default-first-option
+            <ui-select v-model="replyCcRecipients" multiple filterable allow-create clearable default-first-option
                        :placeholder="$t('cutover.detail.replyCcPlaceholder')" class="reply-recipients-select">
-              <el-option v-for="addr in replyCcRecipients" :key="addr" :label="addr" :value="addr"></el-option>
-            </el-select>
+              <ui-option v-for="addr in replyCcRecipients" :key="addr" :label="addr" :value="addr"></ui-option>
+            </ui-select>
           </div>
-          <el-input v-model="replyDraft" type="textarea" :rows="4"
-                    :placeholder="$t('cutover.detail.replyContentLabel')"></el-input>
+          <ui-input v-model="replyDraft" type="textarea" :rows="4"
+                    :placeholder="$t('cutover.detail.replyContentLabel')"></ui-input>
           <div class="reply-pending-actions">
-            <el-button :disabled="replyBusy" @click="cancelReply">{{ $t('cutover.detail.replyCancel') }}</el-button>
-            <el-button type="primary" :loading="replyBusy" :disabled="!replyDraft.trim()" @click="confirmReply">
+            <ui-button :disabled="replyBusy" @click="cancelReply">{{ $t('cutover.detail.replyCancel') }}</ui-button>
+            <ui-button type="primary" :loading="replyBusy" :disabled="!replyDraft.trim()" @click="confirmReply">
               {{ $t('cutover.detail.replyConfirmSend') }}
-            </el-button>
+            </ui-button>
           </div>
         </div>
 
         <!-- 割接场景提示（已回复拒绝割接时展示） -->
-        <div v-if="isRejectedScene(email.cutover_scene)"
+        <div v-if="email.processing_origin !== 'unconfigured' && isRejectedScene(email.cutover_scene)"
              class="scene-notice" :class="'scene-' + email.cutover_scene">
-          <el-tag :type="sceneTagType(email.cutover_scene)" effect="dark" size="small">
+          <ui-tag :type="sceneTagType(email.cutover_scene)" effect="dark" size="small">
             {{ sceneText(email.cutover_scene, email.cutover_scene_label) }}
-          </el-tag>
+          </ui-tag>
           <span v-if="email.cutover_scene === 'emergency'">{{ $t('cutover.detail.sceneNoticeEmergency') }}</span>
           <span v-else-if="email.cutover_scene === 'major_event'">{{ $t('cutover.detail.sceneNoticeMajorEvent') }}</span>
           <span v-else-if="email.cutover_scene === 'in_window'">{{ $t('cutover.detail.sceneNoticeInWindow') }}</span>
@@ -3164,7 +3406,7 @@ const ViewCutoverEmailDetail = defineComponent({
 
         <!-- 重复邮件提示 -->
         <div v-if="email.is_duplicate" class="scene-notice scene-duplicate">
-          <el-tag type="info" effect="plain" size="small">{{ $t('cutover.tag.duplicate') }}</el-tag>
+          <ui-tag type="info" effect="plain" size="small">{{ $t('cutover.tag.duplicate') }}</ui-tag>
           <span>{{ $t('cutover.detail.duplicateNotice') }}</span>
         </div>
 
@@ -3175,36 +3417,36 @@ const ViewCutoverEmailDetail = defineComponent({
         </div>
 
         <!-- 邮件内容（默认收起） -->
-        <el-collapse v-model="contentCollapsed" class="email-content-collapse">
-          <el-collapse-item :title="$t('cutover.detail.emailContent')" name="content">
+        <ui-collapse v-model="contentCollapsed" class="email-content-collapse">
+          <ui-collapse-item :title="$t('cutover.detail.emailContent')" name="content">
             <div class="email-content-body">
               <iframe v-if="email.html_content" ref="contentFrame" class="email-html-frame" sandbox="allow-same-origin"
                       :srcdoc="email.html_content" @load="onIframeLoad"></iframe>
               <pre v-else class="email-content-block">{{ email.content || $t('cutover.detail.noContent') }}</pre>
             </div>
-          </el-collapse-item>
-          <el-collapse-item :title="$t('cutover.detail.extractResult')" name="extract">
+          </ui-collapse-item>
+          <ui-collapse-item v-if="email.processing_origin !== 'unconfigured'" :title="$t('cutover.detail.extractResult')" name="extract">
             <div class="extraction-panel">
               <div class="extraction-toolbar">
                 <span class="extraction-format-label">JSON</span>
                 <span>{{ $t('cutover.detail.extractionEditorHint') }}</span>
                 <span v-if="email.supplier_name" class="muted">{{ $t('common.supplier') }}：{{ email.supplier_name }}</span>
               </div>
-              <el-input v-model="extractionDraft" type="textarea" :rows="16" :disabled="extractionBusy"
-                        :aria-label="$t('cutover.detail.extractResult')" class="extraction-editor" spellcheck="false"></el-input>
+              <ui-input v-model="extractionDraft" type="textarea" :rows="16" :disabled="extractionBusy"
+                        :aria-label="$t('cutover.detail.extractResult')" class="extraction-editor" spellcheck="false"></ui-input>
               <div class="extraction-footer">
                 <p class="extraction-footer-note">{{ $t('cutover.detail.extractionSaveHint') }}</p>
                 <div class="extraction-actions">
-                  <el-button :loading="extractionBusy" @click="saveExtraction()">{{ $t('cutover.detail.saveRematch') }}</el-button>
-                  <el-button type="primary" :loading="extractionBusy" @click="saveExtraction(true)">{{ $t('cutover.detail.generateTasks') }}</el-button>
+                  <ui-button :loading="extractionBusy" @click="saveExtraction()">{{ $t('cutover.detail.saveRematch') }}</ui-button>
+                  <ui-button type="primary" :loading="extractionBusy" @click="saveExtraction(true)">{{ $t('cutover.detail.generateTasks') }}</ui-button>
                 </div>
               </div>
             </div>
-          </el-collapse-item>
-        </el-collapse>
+          </ui-collapse-item>
+        </ui-collapse>
 
         <!-- 线路表匹配结果 -->
-        <div class="block-section">
+        <div v-if="email.processing_origin !== 'unconfigured'" class="block-section">
           <div class="block-head">
             <span>{{ $t('cutover.detail.lineTableTitle') }}</span>
             <span v-if="email.line_table && email.line_table.supplier" class="muted">
@@ -3219,32 +3461,32 @@ const ViewCutoverEmailDetail = defineComponent({
             <div v-for="(line, lineIndex) in email.line_table.lines" :key="lineIndex" class="line-match-block">
               <div class="line-match-heading">
                 <p class="cell-main">{{ $t('cutover.detail.lineEntry', { index: lineIndex + 1, keywords: (line.keywords || []).join('、') || '-' }) }}</p>
-                <el-tooltip v-if="isAutomaticLineMatch(line)" :content="$t(editingLineBindings[lineIndex] ? 'cutover.detail.cancelMatchEdit' : 'cutover.detail.editMatch')" :trigger="['hover', 'focus']" placement="top">
-                  <el-button text circle :icon="editingLineBindings[lineIndex] ? icons.Close : icons.Edit"
+                <ui-tooltip v-if="isAutomaticLineMatch(line)" :content="$t(editingLineBindings[lineIndex] ? 'cutover.detail.cancelMatchEdit' : 'cutover.detail.editMatch')" :trigger="['hover', 'focus']" placement="top">
+                  <ui-button text circle :icon="editingLineBindings[lineIndex] ? icons.Close : icons.Edit"
                              :disabled="extractionBusy" :aria-expanded="!!editingLineBindings[lineIndex]"
                              :aria-label="$t(editingLineBindings[lineIndex] ? 'cutover.detail.cancelMatchEdit' : 'cutover.detail.editMatch')"
-                             @click="toggleLineBindingEditor(line, lineIndex)"></el-button>
-                </el-tooltip>
+                             @click="toggleLineBindingEditor(line, lineIndex)"></ui-button>
+                </ui-tooltip>
               </div>
               <div v-if="!isAutomaticLineMatch(line) || editingLineBindings[lineIndex]" class="line-binding-controls">
-                <el-select v-if="line.circuits && line.circuits.length > 1" v-model="manualBindings[lineIndex]"
+                <ui-select v-if="line.circuits && line.circuits.length > 1" v-model="manualBindings[lineIndex]"
                            class="line-binding-circuit-select" :disabled="extractionBusy" filterable allow-create clearable default-first-option
                            :placeholder="$t('cutover.detail.selectOrEnterCircuit')" aria-label="Circuit ID"
                            @change="selectCircuitCandidate(line, lineIndex, $event)">
-                  <el-option v-for="(circuit, candidateIndex) in line.circuits" :key="candidateIndex"
+                  <ui-option v-for="(circuit, candidateIndex) in line.circuits" :key="candidateIndex"
                              :label="circuit.circuit_id || '-'" :value="circuit.circuit_id || ''" :disabled="!circuit.circuit_id">
                     <span class="line-candidate-id">{{ circuit.circuit_id || '-' }}</span>
                     <span class="line-candidate-type">{{ circuit.line_type || '-' }} · {{ circuit.line_status || '-' }}</span>
-                  </el-option>
-                </el-select>
-                <el-input v-else v-model="manualBindings[lineIndex]" :disabled="extractionBusy"
-                          :placeholder="$t('cutover.detail.bindCircuitPlaceholder')" aria-label="Circuit ID" clearable></el-input>
-                <el-select v-model="manualBindingTypes[lineIndex]" :disabled="extractionBusy" class="line-binding-type"
+                  </ui-option>
+                </ui-select>
+                <ui-input v-else v-model="manualBindings[lineIndex]" :disabled="extractionBusy"
+                          :placeholder="$t('cutover.detail.bindCircuitPlaceholder')" aria-label="Circuit ID" clearable></ui-input>
+                <ui-select v-model="manualBindingTypes[lineIndex]" :disabled="extractionBusy" class="line-binding-type"
                            :aria-label="$t('cutover.detail.bindingType')">
-                  <el-option :label="$t('cutover.detail.bindCustomer')" value="客户"></el-option>
-                  <el-option :label="$t('cutover.detail.bindBackbone')" value="骨干"></el-option>
-                </el-select>
-                <el-button :loading="extractionBusy" @click="bindLine(lineIndex)">{{ $t('cutover.detail.bindCircuit') }}</el-button>
+                  <ui-option :label="$t('cutover.detail.bindCustomer')" value="客户"></ui-option>
+                  <ui-option :label="$t('cutover.detail.bindBackbone')" value="骨干"></ui-option>
+                </ui-select>
+                <ui-button :loading="extractionBusy" @click="bindLine(lineIndex)">{{ $t('cutover.detail.bindCircuit') }}</ui-button>
                 <span class="muted">{{ $t('cutover.detail.bindCircuitHint') }}</span>
               </div>
               <p v-if="line.manual_unlisted" class="warn-text" role="status">{{ $t('cutover.detail.unlistedBinding') }}</p>
@@ -3255,38 +3497,38 @@ const ViewCutoverEmailDetail = defineComponent({
               <p v-if="line.task_generation_blocked" class="warn-text" role="alert">
                 {{ $t('cutover.detail.lineStatusBlocked', { statuses: (line.blocked_statuses || []).join('、') || '-' }) }}
               </p>
-              <el-table v-if="(line.circuits || []).length" :data="line.circuits" stripe>
-                <el-table-column prop="supplier" label="Supplier" min-width="120">
+              <ui-table v-if="(line.circuits || []).length" :data="line.circuits" stripe>
+                <ui-table-column prop="supplier" label="Supplier" min-width="120">
                   <template #default="{ row }">
                     <span class="cell-main">{{ row.supplier || '-' }}</span>
                   </template>
-                </el-table-column>
-                <el-table-column label="Supplier Circuit ID" min-width="220">
+                </ui-table-column>
+                <ui-table-column label="Supplier Circuit ID" min-width="220">
                   <template #default="{ row }">
                     <span class="mono pre-wrap">{{ row.supplier_circuit_id || '-' }}</span>
                   </template>
-                </el-table-column>
-                <el-table-column label="Circuit ID" min-width="220">
+                </ui-table-column>
+                <ui-table-column label="Circuit ID" min-width="220">
                   <template #default="{ row }">
                     <span class="mono pre-wrap">{{ row.circuit_id || '-' }}</span>
                   </template>
-                </el-table-column>
-                <el-table-column :label="$t('circuits.lineType')" width="110">
+                </ui-table-column>
+                <ui-table-column :label="$t('circuits.lineType')" width="110">
                   <template #default="{ row }">
                     <span>{{ row.line_type || '-' }}</span>
                   </template>
-                </el-table-column>
-                <el-table-column :label="$t('circuits.lineStatus')" width="110">
+                </ui-table-column>
+                <ui-table-column :label="$t('circuits.lineStatus')" width="110">
                   <template #default="{ row }">
                     <span>{{ row.line_status || '-' }}</span>
                   </template>
-                </el-table-column>
-                <el-table-column :label="$t('common.remark')" min-width="160">
+                </ui-table-column>
+                <ui-table-column :label="$t('common.remark')" min-width="160">
                   <template #default="{ row }">
                     <span class="muted pre-wrap">{{ row.remark || '-' }}</span>
                   </template>
-                </el-table-column>
-              </el-table>
+                </ui-table-column>
+              </ui-table>
             </div>
           </template>
           <div v-if="hasSavedManualBinding" class="cutover-regenerate-footer">
@@ -3294,14 +3536,14 @@ const ViewCutoverEmailDetail = defineComponent({
               <span class="cell-main">{{ $t('cutover.detail.regenerateSummary', matchedTypeCounts) }}</span>
               <span class="muted">{{ $t('cutover.detail.regenerateHint') }}</span>
             </div>
-            <el-button plain :loading="extractionBusy" @click="regenerateTasks">
+            <ui-button plain :loading="extractionBusy" @click="regenerateTasks">
               {{ $t('cutover.detail.regenerateTasks') }}
-            </el-button>
+            </ui-button>
           </div>
         </div>
 
         <!-- 任务列表 -->
-        <div class="block-section">
+        <div v-if="email.processing_origin !== 'unconfigured'" class="block-section">
           <div class="block-head">
             <span>{{ $t('cutover.detail.taskTitle', { count: (email.tasks || []).length }) }}</span>
           </div>
@@ -3317,68 +3559,63 @@ const ViewCutoverEmailDetail = defineComponent({
                class="scene-notice scene-duplicate">
             <span>{{ $t('cutover.detail.taskDuplicateIgnored') }}</span>
           </div>
-          <el-table v-else :data="email.tasks || []" :empty-text="$t('cutover.detail.taskEmpty')"
-                    row-key="id" :expand-row-keys="expandedKeys" @expand-change="onExpandChange">
-            <el-table-column type="expand">
+          <ui-table v-else :data="email.tasks || []" :empty-text="$t('cutover.detail.taskEmpty')"
+                    class="cutover-task-table" table-layout="fixed" row-key="id" :expand-row-keys="expandedKeys" @expand-change="onExpandChange">
+            <ui-table-column type="expand">
               <template #default="{ row }">
                 <task-detail-panel v-if="detailTask && detailTask.id === row.id"
                                    :task="detailTask" @changed="onTaskChanged"
                                    @collapse="closeTask"></task-detail-panel>
               </template>
-            </el-table-column>
-            <el-table-column prop="id" :label="$t('cutover.detail.taskId')" width="90">
+            </ui-table-column>
+            <ui-table-column prop="id" :label="$t('cutover.detail.taskId')" width="64">
               <template #default="{ row }">
                 <span class="mono">{{ row.id }}</span>
               </template>
-            </el-table-column>
-            <el-table-column :label="$t('common.type')" min-width="160">
+            </ui-table-column>
+            <ui-table-column :label="$t('common.type')" min-width="140">
               <template #default="{ row }">
                 <span class="cell-main">{{ lineTypeText(row) }} · {{ $t('cutover.task.lineCount', { count: taskLineCount(row) }) }}</span>
               </template>
-            </el-table-column>
-            <el-table-column :label="$t('common.supplier')" width="120">
+            </ui-table-column>
+            <ui-table-column :label="$t('common.supplier')" width="80">
               <template #default="{ row }">
                 <span>{{ row.supplier || '-' }}</span>
               </template>
-            </el-table-column>
-            <el-table-column :label="$t('common.carrierTicketNo')" min-width="150">
+            </ui-table-column>
+            <ui-table-column :label="$t('common.carrierTicketNo')" min-width="120">
               <template #default="{ row }">
                 <span>{{ row.carrier_ticket_no || '-' }}</span>
               </template>
-            </el-table-column>
-            <el-table-column :label="$t('common.status')" width="110" align="center">
+            </ui-table-column>
+            <ui-table-column :label="$t('common.status')" width="88" align="center">
               <template #default="{ row }">
-                <el-tag :type="statusTagType(row.status)" size="small">
+                <ui-tag :type="statusTagType(row.status)" size="small">
                   {{ statusText(row.status, row.status_label) }}
-                </el-tag>
+                </ui-tag>
               </template>
-            </el-table-column>
-            <el-table-column :label="$t('cutover.detail.validationColumn')" width="110">
+            </ui-table-column>
+            <ui-table-column :label="$t('cutover.detail.validationColumn')" width="88">
               <template #default="{ row }">
                 <span v-if="row.validation_count" class="warn-text">{{ $t('cutover.detail.validationCount', { count: row.validation_count }) }}</span>
                 <span v-else class="muted">-</span>
               </template>
-            </el-table-column>
-            <el-table-column :label="$t('common.updateTime')" width="170">
+            </ui-table-column>
+            <ui-table-column :label="$t('common.updateTime')" width="136">
               <template #default="{ row }">
-                <span class="mono muted">{{ row.update_time || '' }}</span>
+                <span class="mono muted">{{ String(row.update_time || '').replace('T', ' ').slice(0, 19) }}</span>
               </template>
-            </el-table-column>
-            <el-table-column :label="$t('common.actions')" width="110" align="right">
+            </ui-table-column>
+            <ui-table-column :label="$t('common.actions')" width="88" align="right">
               <template #default="{ row }">
-                <el-button link type="primary" @click="toggleTask(row)">{{ $t('cutover.detail.taskDetail') }}</el-button>
+                <ui-action type="primary" @click="toggleTask(row)" icon="View" :label="$t('cutover.detail.taskDetail')"></ui-action>
               </template>
-            </el-table-column>
-          </el-table>
+            </ui-table-column>
+          </ui-table>
         </div>
       </template>
     </div>
   `,
-  methods: {
-    goBack() {
-      navigateTo("cutoverTasks");
-    },
-  },
   computed: {
     icons() {
       return ElementPlusIconsVue;
@@ -3518,13 +3755,13 @@ const ViewCircuits = defineComponent({
             method: "PATCH",
             body: JSON.stringify(payload),
           });
-          ElMessage.success(tt("circuits.updated"));
+          NocMessage.success(tt("circuits.updated"));
         } else {
           await requestJson("/api/circuits", {
             method: "POST",
             body: JSON.stringify(payload),
           });
-          ElMessage.success(tt("circuits.added"));
+          NocMessage.success(tt("circuits.added"));
           if (!filtersActive()) {
             // 新记录按 id 追加在末尾，无筛选时跳到最后一页使其可见
             const probe = await requestJson(`/api/circuits?page=1&page_size=${CIRCUIT_PAGE_SIZE}`);
@@ -3534,7 +3771,7 @@ const ViewCircuits = defineComponent({
         dialogVisible.value = false;
         await loadCircuits();
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
         setStatus(error.message, "error");
       } finally {
         saving.value = false;
@@ -3544,7 +3781,7 @@ const ViewCircuits = defineComponent({
     async function deleteCircuit(circuit) {
       const label = circuit.supplier_circuit_id || circuit.circuit_id || circuit.id;
       try {
-        await ElMessageBox.confirm(
+        await NocDialog.confirm(
           tt("circuits.deleteConfirm", { label }),
           tt("circuits.deleteTitle"),
           { confirmButtonText: tt("common.confirmDelete"), cancelButtonText: tt("common.cancel"), type: "warning" },
@@ -3554,14 +3791,14 @@ const ViewCircuits = defineComponent({
       }
       try {
         await requestJson(`/api/circuits/${circuit.id}`, { method: "DELETE" });
-        ElMessage.success(tt("circuits.deleted"));
+        NocMessage.success(tt("circuits.deleted"));
         await loadCircuits();
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       }
     }
 
-    // 建议列表（el-autocomplete）
+    // 建议列表（ui-autocomplete）
     function makeSuggest(source) {
       return (query, callback) => {
         const values = source().filter((value) => !query || value.toLowerCase().includes(query.toLowerCase()));
@@ -3595,7 +3832,7 @@ const ViewCircuits = defineComponent({
 
     function onImportFileChange(uploadFile) {
       if (!uploadFile.name.toLowerCase().endsWith(".xlsx")) {
-        ElMessage.warning(tt("circuits.fileInvalid"));
+        NocMessage.warning(tt("circuits.fileInvalid"));
         resetImportFile();
         return;
       }
@@ -3613,9 +3850,9 @@ const ViewCircuits = defineComponent({
       if (!file) {
         return;
       }
-      importFile.value = file;
-      importFileList.value = [{ uid: Date.now(), name: file.name }];
-      importPreview.value = null;
+      const uploadFile = { uid: Date.now(), name: file.name, raw: file };
+      onImportFileChange(uploadFile);
+      if (importFile.value) importFileList.value = [uploadFile];
     }
 
     async function uploadImport(confirm) {
@@ -3646,10 +3883,10 @@ const ViewCircuits = defineComponent({
       parsing.value = true;
       try {
         importPreview.value = await uploadImport(false);
-        ElMessage.success(tt("circuits.parsedSuccess", { total: importPreview.value.total }));
+        NocMessage.success(tt("circuits.parsedSuccess", { total: importPreview.value.total }));
       } catch (error) {
         importPreview.value = null;
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         parsing.value = false;
       }
@@ -3660,7 +3897,7 @@ const ViewCircuits = defineComponent({
         return;
       }
       try {
-        await ElMessageBox.confirm(
+        await NocDialog.confirm(
           tt("circuits.importConfirmMessage", { total: importPreview.value.total }),
           tt("circuits.importConfirmTitle"),
           {
@@ -3678,9 +3915,9 @@ const ViewCircuits = defineComponent({
         importDialogVisible.value = false;
         page.value = 1;
         await loadCircuits();
-        ElMessage.success(tt("circuits.importSuccess", { total: result.total }));
+        NocMessage.success(tt("circuits.importSuccess", { total: result.total }));
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         importing.value = false;
       }
@@ -3708,140 +3945,152 @@ const ViewCircuits = defineComponent({
     };
   },
   template: `
-    <div class="view-body">
-      <el-card shadow="never" class="table-card">
+    <div class="view-body circuits-list-view">
+      <ui-card shadow="never" class="table-card circuits-list-card">
         <template #header>
-          <div class="card-header">
-            <div class="filter-bar">
-              <el-select v-model="filters.supplier" :placeholder="$t('circuits.allSuppliers')" clearable filterable style="width: 160px">
-                <el-option v-for="value in options.suppliers" :key="value" :label="value" :value="value"></el-option>
-              </el-select>
-              <el-select v-model="filters.lineType" :placeholder="$t('circuits.allTypes')" clearable filterable style="width: 140px">
-                <el-option v-for="value in options.line_types" :key="value" :label="value" :value="value"></el-option>
-              </el-select>
-              <el-select v-model="filters.lineStatus" :placeholder="$t('circuits.allStatuses')" clearable filterable style="width: 140px">
-                <el-option v-for="value in options.line_statuses" :key="value" :label="value" :value="value"></el-option>
-              </el-select>
-              <el-input v-model="filters.keyword" :placeholder="$t('circuits.keywordPlaceholder')"
-                        clearable style="width: 240px" @keyup.enter="queryCircuits"></el-input>
-              <el-button type="primary" @click="queryCircuits">{{ $t('common.query') }}</el-button>
-              <el-button @click="resetFilters">{{ $t('common.reset') }}</el-button>
-            </div>
-            <div>
-              <el-button :icon="icons.Upload" @click="openImportDialog">{{ $t('common.import') }}</el-button>
-              <el-button :icon="icons.Download" @click="exportCircuits">{{ $t('common.export') }}</el-button>
-              <el-button type="primary" :icon="icons.Plus" @click="openDialog()">{{ $t('circuits.add') }}</el-button>
+          <div class="list-heading">
+            <h2>{{ $t('circuits.listTitle') }}</h2>
+            <span class="list-total">{{ $t('common.totalItems', { total }) }}</span>
+            <div class="toolbar-actions list-actions">
+              <ui-button :icon="icons.Upload" @click="openImportDialog">{{ $t('common.import') }}</ui-button>
+              <ui-button :icon="icons.Download" @click="exportCircuits">{{ $t('common.export') }}</ui-button>
+              <ui-button type="primary" :icon="icons.Plus" @click="openDialog()">{{ $t('circuits.add') }}</ui-button>
             </div>
           </div>
+          <form class="filter-bar circuits-filters" @submit.prevent="queryCircuits">
+            <ui-input v-model="filters.keyword" :placeholder="$t('circuits.keywordPlaceholder')" :aria-label="$t('circuits.keywordPlaceholder')" clearable></ui-input>
+            <ui-select v-model="filters.supplier" :placeholder="$t('circuits.allSuppliers')" :aria-label="$t('common.supplier')" clearable filterable>
+              <ui-option v-for="value in options.suppliers" :key="value" :label="value" :value="value"></ui-option>
+            </ui-select>
+            <ui-select v-model="filters.lineType" :placeholder="$t('circuits.allTypes')" :aria-label="$t('circuits.lineType')" clearable filterable>
+              <ui-option v-for="value in options.line_types" :key="value" :label="value" :value="value"></ui-option>
+            </ui-select>
+            <ui-select v-model="filters.lineStatus" :placeholder="$t('circuits.allStatuses')" :aria-label="$t('circuits.lineStatus')" clearable filterable>
+              <ui-option v-for="value in options.line_statuses" :key="value" :label="value" :value="value"></ui-option>
+            </ui-select>
+            <ui-button type="primary" native-type="submit" :loading="loading">{{ $t('common.query') }}</ui-button>
+            <ui-button @click="resetFilters">{{ $t('common.reset') }}</ui-button>
+          </form>
         </template>
-        <el-table v-loading="loading" :data="rows" :empty-text="$t('circuits.empty')" stripe>
-          <el-table-column label="Supplier" min-width="120">
+        <ui-table v-loading="loading" :data="rows" :empty-text="$t('circuits.empty')" height="100%" class="circuits-table">
+          <ui-table-column :label="$t('common.supplier')" width="104">
             <template #default="{ row }">
               <span class="cell-main">{{ row.supplier || '-' }}</span>
             </template>
-          </el-table-column>
-          <el-table-column label="Supplier Circuit ID" min-width="220">
+          </ui-table-column>
+          <ui-table-column label="Supplier Circuit ID" width="148">
             <template #default="{ row }">
-              <span class="mono pre-wrap">{{ row.supplier_circuit_id || '-' }}</span>
+              <ui-tooltip v-if="row.supplier_circuit_id" :trigger="['hover', 'focus']" :show-after="300" placement="top-start" popper-class="cell-preview-tooltip" :content="row.supplier_circuit_id">
+                <span class="cell-preview mono" tabindex="0">{{ row.supplier_circuit_id }}</span>
+              </ui-tooltip>
+              <span v-else class="muted">—</span>
             </template>
-          </el-table-column>
-          <el-table-column label="Circuit ID" min-width="220">
+          </ui-table-column>
+          <ui-table-column label="Circuit ID" min-width="200">
             <template #default="{ row }">
-              <span class="mono pre-wrap">{{ row.circuit_id || '-' }}</span>
+              <ui-tooltip v-if="row.circuit_id" :trigger="['hover', 'focus']" :show-after="300" placement="top-start" popper-class="cell-preview-tooltip" :content="row.circuit_id">
+                <span class="cell-preview mono" tabindex="0">{{ row.circuit_id }}</span>
+              </ui-tooltip>
+              <span v-else class="muted">—</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('circuits.lineType')" width="110">
+          </ui-table-column>
+          <ui-table-column :label="$t('circuits.lineType')" width="88">
             <template #default="{ row }">
               <span>{{ row.line_type || '-' }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('circuits.lineStatus')" width="110">
+          </ui-table-column>
+          <ui-table-column :label="$t('circuits.lineStatus')" width="84">
             <template #default="{ row }">
               <span>{{ row.line_status || '-' }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('common.remark')" min-width="160">
+          </ui-table-column>
+          <ui-table-column :label="$t('common.remark')" min-width="180">
             <template #default="{ row }">
-              <span class="muted pre-wrap">{{ row.remark || '-' }}</span>
+              <ui-tooltip v-if="row.remark" :trigger="['hover', 'focus']" :show-after="300" placement="top-start" popper-class="cell-preview-tooltip" :content="row.remark">
+                <span class="cell-preview muted" tabindex="0">{{ row.remark }}</span>
+              </ui-tooltip>
+              <span v-else class="muted">—</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('common.actions')" width="140" align="right" fixed="right">
+          </ui-table-column>
+          <ui-table-column :label="$t('common.actions')" width="112" align="center" fixed="right">
             <template #default="{ row }">
-              <el-button link type="primary" @click="openDialog(row)">{{ $t('common.edit') }}</el-button>
-              <el-button link type="danger" @click="deleteCircuit(row)">{{ $t('common.delete') }}</el-button>
+              <div class="row-actions">
+                <ui-action type="primary" @click="openDialog(row)" icon="Edit" :label="$t('common.edit')"></ui-action>
+                <ui-action type="danger" @click="deleteCircuit(row)" icon="Delete" :label="$t('common.delete')"></ui-action>
+              </div>
             </template>
-          </el-table-column>
-        </el-table>
+          </ui-table-column>
+        </ui-table>
         <div class="pagination-bar">
           <span class="muted">{{ $t('common.totalItems', { total }) }}</span>
-          <el-pagination layout="prev, pager, next" :total="total" :page-size="CIRCUIT_PAGE_SIZE"
-                         :current-page="page" @current-change="onPageChange"></el-pagination>
+          <ui-pagination layout="prev, pager, next" :total="total" :page-size="CIRCUIT_PAGE_SIZE"
+                         :current-page="page" @current-change="onPageChange"></ui-pagination>
         </div>
-      </el-card>
+      </ui-card>
 
       <!-- 新增/编辑弹窗 -->
-      <el-dialog v-model="dialogVisible" :title="editingId ? $t('circuits.dialogEdit') : $t('circuits.dialogAdd')"
+      <ui-dialog v-model="dialogVisible" :title="editingId ? $t('circuits.dialogEdit') : $t('circuits.dialogAdd')"
                  width="640px" :close-on-click-modal="false" destroy-on-close>
-        <el-alert v-if="formAlert" type="error" :closable="false"
-                  :title="$t('circuits.formAlert')" class="form-alert"></el-alert>
-        <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
-          <el-form-item label="Supplier" prop="supplier">
-            <el-autocomplete v-model="form.supplier" :fetch-suggestions="suggestSupplier"
-                             :placeholder="$t('circuits.supplierPlaceholder')" clearable style="width: 100%"></el-autocomplete>
-          </el-form-item>
+        <ui-alert v-if="formAlert" type="error" :closable="false"
+                  :title="$t('circuits.formAlert')" class="form-alert"></ui-alert>
+        <ui-form ref="formRef" :model="form" :rules="rules" label-position="top">
+          <ui-form-item label="Supplier" prop="supplier">
+            <ui-autocomplete v-model="form.supplier" :fetch-suggestions="suggestSupplier"
+                             :placeholder="$t('circuits.supplierPlaceholder')" clearable style="width: 100%"></ui-autocomplete>
+          </ui-form-item>
           <div class="field-grid-2">
-            <el-form-item :label="$t('circuits.lineType')">
-              <el-autocomplete v-model="form.line_type" :fetch-suggestions="suggestLineType"
-                               :placeholder="$t('circuits.typePlaceholder')" clearable style="width: 100%"></el-autocomplete>
-            </el-form-item>
-            <el-form-item :label="$t('circuits.lineStatus')">
-              <el-autocomplete v-model="form.line_status" :fetch-suggestions="suggestLineStatus"
-                               :placeholder="$t('circuits.statusPlaceholder')" clearable style="width: 100%"></el-autocomplete>
-            </el-form-item>
+            <ui-form-item :label="$t('circuits.lineType')">
+              <ui-autocomplete v-model="form.line_type" :fetch-suggestions="suggestLineType"
+                               :placeholder="$t('circuits.typePlaceholder')" clearable style="width: 100%"></ui-autocomplete>
+            </ui-form-item>
+            <ui-form-item :label="$t('circuits.lineStatus')">
+              <ui-autocomplete v-model="form.line_status" :fetch-suggestions="suggestLineStatus"
+                               :placeholder="$t('circuits.statusPlaceholder')" clearable style="width: 100%"></ui-autocomplete>
+            </ui-form-item>
           </div>
-          <el-form-item label="Supplier Circuit ID" prop="supplier_circuit_id">
-            <el-input v-model="form.supplier_circuit_id" type="textarea" :rows="3" class="mono-input"
-                      :placeholder="$t('circuits.supplierCircuitIdPlaceholder')"></el-input>
+          <ui-form-item label="Supplier Circuit ID" prop="supplier_circuit_id">
+            <ui-input v-model="form.supplier_circuit_id" type="textarea" :rows="3" class="mono-input"
+                      :placeholder="$t('circuits.supplierCircuitIdPlaceholder')"></ui-input>
             <div class="field-hint">{{ $t('circuits.supplierCircuitIdHint') }}</div>
-          </el-form-item>
-          <el-form-item label="Circuit ID">
-            <el-input v-model="form.circuit_id" type="textarea" :rows="4" class="mono-input"
-                      :placeholder="$t('circuits.circuitIdPlaceholder')"></el-input>
+          </ui-form-item>
+          <ui-form-item label="Circuit ID">
+            <ui-input v-model="form.circuit_id" type="textarea" :rows="4" class="mono-input"
+                      :placeholder="$t('circuits.circuitIdPlaceholder')"></ui-input>
             <div class="field-hint">{{ $t('circuits.circuitIdHint') }}</div>
-          </el-form-item>
-          <el-form-item :label="$t('common.remark')">
-            <el-input v-model="form.remark" type="textarea" :rows="2"
-                      :placeholder="$t('circuits.remarkPlaceholder')"></el-input>
-          </el-form-item>
-        </el-form>
+          </ui-form-item>
+          <ui-form-item :label="$t('common.remark')">
+            <ui-input v-model="form.remark" type="textarea" :rows="2"
+                      :placeholder="$t('circuits.remarkPlaceholder')"></ui-input>
+          </ui-form-item>
+        </ui-form>
         <template #footer>
-          <el-button @click="dialogVisible = false">{{ $t('common.cancel') }}</el-button>
-          <el-button type="primary" :loading="saving" @click="saveCircuit">{{ $t('circuits.saveCircuit') }}</el-button>
+          <ui-button @click="dialogVisible = false">{{ $t('common.cancel') }}</ui-button>
+          <ui-button type="primary" :loading="saving" @click="saveCircuit">{{ $t('circuits.saveCircuit') }}</ui-button>
         </template>
-      </el-dialog>
+      </ui-dialog>
 
       <!-- 导入弹窗 -->
-      <el-dialog v-model="importDialogVisible" :title="$t('circuits.importTitle')" width="820px"
+      <ui-dialog v-model="importDialogVisible" :title="$t('circuits.importTitle')" width="820px"
                  class="circuits-import-dialog" :close-on-click-modal="false" destroy-on-close>
         <div class="import-hint-panel">
           <p class="import-hint-text">{{ $t('circuits.importHint') }}</p>
-          <el-alert type="warning" :closable="false" show-icon :title="$t('circuits.importReplaceAlert')"
-                    class="import-replace-alert"></el-alert>
+          <ui-alert type="warning" :closable="false" show-icon :title="$t('circuits.importReplaceAlert')"
+                    class="import-replace-alert"></ui-alert>
         </div>
-        <el-upload class="import-upload" drag :auto-upload="false" :limit="1" accept=".xlsx"
+        <ui-upload class="import-upload" drag :auto-upload="false" :limit="1" accept=".xlsx"
                    :file-list="importFileList" :on-change="onImportFileChange"
                    :on-remove="onImportFileRemove" :on-exceed="onImportFileExceed">
-          <el-icon class="import-upload-icon"><UploadFilled /></el-icon>
+          <ui-icon class="import-upload-icon"><UploadFilled /></ui-icon>
           <p class="import-upload-text">{{ $t('circuits.uploadText') }}</p>
           <p class="import-upload-sub">{{ $t('circuits.uploadFormatHint') }}</p>
-        </el-upload>
+        </ui-upload>
         <div class="import-actions">
-          <el-button type="primary" :icon="icons.View" :loading="parsing" :disabled="!importFile" @click="parseImport">
+          <ui-button type="primary" :icon="icons.View" :loading="parsing" :disabled="!importFile" @click="parseImport">
             {{ $t('circuits.parsePreview') }}
-          </el-button>
+          </ui-button>
         </div>
         <div v-if="!importPreview" class="import-empty">
-          <el-icon class="import-empty-icon"><Document /></el-icon>
+          <ui-icon class="import-empty-icon"><Document /></ui-icon>
           <p>{{ importFile ? $t('circuits.notParsed') : $t('circuits.noFile') }}</p>
           <span>{{ importFile ? $t('circuits.notParsedHint') : $t('circuits.noFileHint') }}</span>
         </div>
@@ -3863,46 +4112,46 @@ const ViewCircuits = defineComponent({
           <div v-if="(importPreview.warnings || []).length" class="import-warnings">
             <p v-for="(warning, index) in importPreview.warnings" :key="index" class="warn-text">{{ warning }}</p>
           </div>
-          <el-table :data="importPreview.rows || []" size="small" border max-height="360">
-            <el-table-column prop="supplier" label="Supplier" min-width="100">
+          <ui-table :data="importPreview.rows || []" size="small" border max-height="360">
+            <ui-table-column prop="supplier" label="Supplier" min-width="100">
               <template #default="{ row }">
                 <span>{{ row.supplier || '-' }}</span>
               </template>
-            </el-table-column>
-            <el-table-column label="Supplier Circuit ID" min-width="180">
+            </ui-table-column>
+            <ui-table-column label="Supplier Circuit ID" min-width="180">
               <template #default="{ row }">
                 <span class="mono pre-wrap">{{ row.supplier_circuit_id || '-' }}</span>
               </template>
-            </el-table-column>
-            <el-table-column label="Circuit ID" min-width="180">
+            </ui-table-column>
+            <ui-table-column label="Circuit ID" min-width="180">
               <template #default="{ row }">
                 <span class="mono pre-wrap">{{ row.circuit_id || '-' }}</span>
               </template>
-            </el-table-column>
-            <el-table-column :label="$t('circuits.lineType')" width="90">
+            </ui-table-column>
+            <ui-table-column :label="$t('circuits.lineType')" width="90">
               <template #default="{ row }">
                 <span>{{ row.line_type || '-' }}</span>
               </template>
-            </el-table-column>
-            <el-table-column :label="$t('circuits.lineStatus')" width="100">
+            </ui-table-column>
+            <ui-table-column :label="$t('circuits.lineStatus')" width="100">
               <template #default="{ row }">
                 <span>{{ row.line_status || '-' }}</span>
               </template>
-            </el-table-column>
-            <el-table-column :label="$t('common.remark')" min-width="140">
+            </ui-table-column>
+            <ui-table-column :label="$t('common.remark')" min-width="140">
               <template #default="{ row }">
                 <span class="muted pre-wrap">{{ row.remark || '-' }}</span>
               </template>
-            </el-table-column>
-          </el-table>
+            </ui-table-column>
+          </ui-table>
         </template>
         <template #footer>
-          <el-button @click="importDialogVisible = false">{{ $t('common.cancel') }}</el-button>
-          <el-button type="danger" :loading="importing" :disabled="!importPreview" @click="confirmImport">
+          <ui-button @click="importDialogVisible = false">{{ $t('common.cancel') }}</ui-button>
+          <ui-button type="danger" :loading="importing" :disabled="!importPreview" @click="confirmImport">
             {{ $t('circuits.confirmImport') }}
-          </el-button>
+          </ui-button>
         </template>
-      </el-dialog>
+      </ui-dialog>
     </div>
   `,
   computed: {
@@ -4014,7 +4263,7 @@ const ViewDispatchSession = defineComponent({
     }
 
     function showError(error) {
-      ElMessage.error(error.message || tt("common.requestFailed"));
+      NocMessage.error(error.message || tt("common.requestFailed"));
       setStatus(error.message || tt("common.requestFailed"), "error");
     }
 
@@ -4097,7 +4346,7 @@ const ViewDispatchSession = defineComponent({
 
     function requireBaseFields() {
       if (!form.account.trim() || !form.password || !form.captcha.trim()) {
-        ElMessage.warning(tt("dispatchSession.completeFields"));
+        NocMessage.warning(tt("dispatchSession.completeFields"));
         return false;
       }
       return true;
@@ -4116,7 +4365,7 @@ const ViewDispatchSession = defineComponent({
           }),
         });
         smsRequested.value = true;
-        ElMessage.success(tt("dispatchSession.smsSent"));
+        NocMessage.success(tt("dispatchSession.smsSent"));
       } catch (error) {
         showError(error);
       } finally {
@@ -4126,7 +4375,7 @@ const ViewDispatchSession = defineComponent({
 
     async function submitLogin() {
       if (!canSubmit.value) {
-        ElMessage.warning(tt("dispatchSession.completeFields"));
+        NocMessage.warning(tt("dispatchSession.completeFields"));
         return;
       }
       action.value = "login";
@@ -4146,7 +4395,7 @@ const ViewDispatchSession = defineComponent({
           body: JSON.stringify(body),
         }));
         clearSensitiveForm();
-        ElMessage.success(tt("dispatchSession.loginSuccess"));
+        NocMessage.success(tt("dispatchSession.loginSuccess"));
         setStatusKey("dispatchSession.loginSuccess");
       } catch (error) {
         showError(error);
@@ -4170,16 +4419,9 @@ const ViewDispatchSession = defineComponent({
   },
   template: `
     <div class="view-body dispatch-session-view">
-      <div class="dispatch-session-intro">
-        <div>
-          <h3>{{ $t('dispatchSession.title') }}</h3>
-          <p>{{ $t('dispatchSession.subtitle') }}</p>
-        </div>
-      </div>
-
       <section class="dispatch-status-panel" :class="statusTone" aria-live="polite">
         <div class="dispatch-status-icon">
-          <el-icon :class="{ 'is-spinning': checking }"><component :is="statusIcon" /></el-icon>
+          <ui-icon :class="{ 'is-spinning': checking }"><component :is="statusIcon" /></ui-icon>
         </div>
         <div class="dispatch-status-copy">
           <span class="dispatch-status-environment">{{ environmentLabel }}</span>
@@ -4187,12 +4429,12 @@ const ViewDispatchSession = defineComponent({
           <p>{{ status.message }}</p>
         </div>
         <div class="dispatch-status-actions">
-          <el-button :loading="checking" @click="loadStatus(false)">
-            <el-icon><Refresh /></el-icon>{{ $t('dispatchSession.checkNow') }}
-          </el-button>
-          <el-button type="primary" :loading="action === 'begin'" :disabled="!status.configured" @click="beginAttempt">
-            <el-icon><Key /></el-icon>{{ $t('dispatchSession.relogin') }}
-          </el-button>
+          <ui-button :loading="checking" @click="loadStatus(false)">
+            <ui-icon><Refresh /></ui-icon>{{ $t('dispatchSession.checkNow') }}
+          </ui-button>
+          <ui-button type="primary" :loading="action === 'begin'" :disabled="!status.configured" @click="beginAttempt">
+            <ui-icon><Key /></ui-icon>{{ $t('dispatchSession.relogin') }}
+          </ui-button>
         </div>
       </section>
 
@@ -4210,12 +4452,12 @@ const ViewDispatchSession = defineComponent({
               <strong>{{ $t('dispatchSession.environmentTitle') }}</strong>
               <span>{{ $t('dispatchSession.environmentHint') }}</span>
             </div>
-            <el-select class="dispatch-environment-select" :model-value="environment"
+            <ui-select class="dispatch-environment-select" :model-value="environment"
                        :aria-label="$t('dispatchSession.environmentTitle')"
                        :disabled="checking || action !== ''" @change="changeEnvironment">
-              <el-option :label="$t('dispatchSession.environment.test')" value="test"></el-option>
-              <el-option :label="$t('dispatchSession.environment.production')" value="production"></el-option>
-            </el-select>
+              <ui-option :label="$t('dispatchSession.environment.test')" value="test"></ui-option>
+              <ui-option :label="$t('dispatchSession.environment.production')" value="production"></ui-option>
+            </ui-select>
           </div>
 
           <div class="dispatch-mode-switch" role="radiogroup" :aria-label="$t('dispatchSession.loginMethod')">
@@ -4244,18 +4486,18 @@ const ViewDispatchSession = defineComponent({
             <div class="dispatch-field-grid">
               <label class="dispatch-field">
                 <span>{{ mode === 'password' ? $t('dispatchSession.username') : $t('dispatchSession.phone') }}</span>
-                <el-input v-model="form.account" :placeholder="mode === 'password' ? $t('dispatchSession.usernamePlaceholder') : $t('dispatchSession.phonePlaceholder')"
-                          :autocomplete="mode === 'password' ? 'username' : 'tel'" clearable></el-input>
+                <ui-input v-model="form.account" :placeholder="mode === 'password' ? $t('dispatchSession.usernamePlaceholder') : $t('dispatchSession.phonePlaceholder')"
+                          :autocomplete="mode === 'password' ? 'username' : 'tel'" clearable></ui-input>
               </label>
               <label class="dispatch-field">
                 <span>{{ $t('dispatchSession.password') }}</span>
-                <el-input v-model="form.password" type="password" show-password autocomplete="current-password"
-                          :placeholder="$t('dispatchSession.passwordPlaceholder')"></el-input>
+                <ui-input v-model="form.password" type="password" show-password autocomplete="current-password"
+                          :placeholder="$t('dispatchSession.passwordPlaceholder')"></ui-input>
               </label>
               <label class="dispatch-field dispatch-field--captcha">
                 <span>{{ $t('dispatchSession.captcha') }}</span>
                 <div class="dispatch-inline-field">
-                  <el-input v-model="form.captcha" autocomplete="off" :placeholder="$t('dispatchSession.captchaPlaceholder')"></el-input>
+                  <ui-input v-model="form.captcha" autocomplete="off" :placeholder="$t('dispatchSession.captchaPlaceholder')"></ui-input>
                   <button class="dispatch-captcha-button" type="button" :disabled="action === 'captcha'" @click="refreshCaptcha">
                     <img v-if="attempt.captcha_data_url" :src="attempt.captcha_data_url" width="144" height="44"
                          :alt="$t('dispatchSession.captchaAlt')">
@@ -4266,20 +4508,20 @@ const ViewDispatchSession = defineComponent({
               <label v-if="mode === 'mobile'" class="dispatch-field">
                 <span>{{ $t('dispatchSession.smsCode') }}</span>
                 <div class="dispatch-inline-field">
-                  <el-input v-model="form.sms_code" autocomplete="one-time-code" :disabled="!smsRequested"
-                            :placeholder="$t('dispatchSession.smsPlaceholder')"></el-input>
-                  <el-button class="dispatch-sms-button" type="primary" plain :loading="action === 'sms'" @click="requestSmsCode">
+                  <ui-input v-model="form.sms_code" autocomplete="one-time-code" :disabled="!smsRequested"
+                            :placeholder="$t('dispatchSession.smsPlaceholder')"></ui-input>
+                  <ui-button class="dispatch-sms-button" type="primary" plain :loading="action === 'sms'" @click="requestSmsCode">
                     {{ smsRequested ? $t('dispatchSession.resendSms') : $t('dispatchSession.sendSms') }}
-                  </el-button>
+                  </ui-button>
                 </div>
               </label>
             </div>
             <p class="dispatch-form-note">{{ $t('dispatchSession.captchaHint') }}</p>
             <div class="dispatch-form-actions">
-              <el-button @click="clearSensitiveForm">{{ $t('dispatchSession.clear') }}</el-button>
-              <el-button type="primary" native-type="submit" :loading="action === 'login'" :disabled="!canSubmit">
+              <ui-button @click="clearSensitiveForm">{{ $t('dispatchSession.clear') }}</ui-button>
+              <ui-button type="primary" native-type="submit" :loading="action === 'login'" :disabled="!canSubmit">
                 {{ $t('dispatchSession.loginSubmit') }}
-              </el-button>
+              </ui-button>
             </div>
           </form>
         </section>
@@ -4333,7 +4575,7 @@ const ViewSettings = defineComponent({
 
     async function saveSettings() {
       if (!nocPhone.value.trim() || !provinceReviewerName.value.trim() || !provinceReviewerPhone.value.trim()) {
-        ElMessage.warning(tt("settings.backbonePersonnelRequired"));
+        NocMessage.warning(tt("settings.backbonePersonnelRequired"));
         return;
       }
       saving.value = true;
@@ -4353,10 +4595,10 @@ const ViewSettings = defineComponent({
         nocPhone.value = data.backbone_noc_phone || "";
         provinceReviewerName.value = data.backbone_province_reviewer_name || "";
         provinceReviewerPhone.value = data.backbone_province_reviewer_phone || "";
-        ElMessage.success(tt("settings.saved"));
+        NocMessage.success(tt("settings.saved"));
         setStatusKey("settings.saved");
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
         setStatus(error.message, "error");
       } finally {
         saving.value = false;
@@ -4396,27 +4638,28 @@ const ViewSettings = defineComponent({
     };
   },
   template: `
-    <div class="view-body" v-loading="loading">
+    <div class="view-body settings-view" v-loading="loading">
+      <discovery-settings></discovery-settings>
       <div class="block-section">
         <div class="block-head">
           <span>{{ $t('settings.guardTitle') }}</span>
         </div>
         <p class="field-hint">{{ $t('settings.guardHint') }}</p>
-        <el-form label-width="110px">
-          <el-form-item :label="$t('settings.guardStart')">
-            <el-date-picker v-model="guardStart" type="datetime" format="YYYY-MM-DD HH:mm:ss"
+        <ui-form label-position="top">
+          <ui-form-item :label="$t('settings.guardStart')">
+            <ui-date-picker v-model="guardStart" type="datetime" format="YYYY-MM-DD HH:mm:ss"
                             value-format="YYYY-MM-DD HH:mm:ss" :placeholder="$t('settings.guardStartPlaceholder')"
-                            clearable style="width: 240px"></el-date-picker>
-          </el-form-item>
-          <el-form-item :label="$t('settings.guardEnd')">
-            <el-date-picker v-model="guardEnd" type="datetime" format="YYYY-MM-DD HH:mm:ss"
+                            clearable class="settings-field"></ui-date-picker>
+          </ui-form-item>
+          <ui-form-item :label="$t('settings.guardEnd')">
+            <ui-date-picker v-model="guardEnd" type="datetime" format="YYYY-MM-DD HH:mm:ss"
                             value-format="YYYY-MM-DD HH:mm:ss" :placeholder="$t('settings.guardEndPlaceholder')"
-                            clearable style="width: 240px"></el-date-picker>
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" :loading="saving" @click="saveSettings">{{ $t('common.save') }}</el-button>
-          </el-form-item>
-        </el-form>
+                            clearable class="settings-field"></ui-date-picker>
+          </ui-form-item>
+          <div class="settings-actions">
+            <ui-button type="primary" :loading="saving" @click="saveSettings">{{ $t('common.save') }}</ui-button>
+          </div>
+        </ui-form>
       </div>
 
       <div class="block-section">
@@ -4424,38 +4667,38 @@ const ViewSettings = defineComponent({
           <span>{{ $t('settings.backbonePersonnelTitle') }}</span>
         </div>
         <p class="field-hint">{{ $t('settings.backbonePersonnelHint') }}</p>
-        <el-form label-width="180px">
-          <el-form-item :label="$t('settings.nocPhone')">
-            <el-input v-model="nocPhone" :placeholder="$t('settings.nocPhonePlaceholder')"
-                      style="width: 320px"></el-input>
-          </el-form-item>
-          <el-form-item :label="$t('settings.provinceReviewerName')">
-            <el-input v-model="provinceReviewerName" :placeholder="$t('settings.provinceReviewerNamePlaceholder')"
-                      style="width: 320px"></el-input>
-          </el-form-item>
-          <el-form-item :label="$t('settings.provinceReviewerPhone')">
-            <el-input v-model="provinceReviewerPhone" :placeholder="$t('settings.provinceReviewerPhonePlaceholder')"
-                      style="width: 320px"></el-input>
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" :loading="saving" @click="saveSettings">{{ $t('common.save') }}</el-button>
-          </el-form-item>
-        </el-form>
+        <ui-form label-position="top">
+          <ui-form-item :label="$t('settings.nocPhone')">
+            <ui-input v-model="nocPhone" :placeholder="$t('settings.nocPhonePlaceholder')"
+                      class="settings-field"></ui-input>
+          </ui-form-item>
+          <ui-form-item :label="$t('settings.provinceReviewerName')">
+            <ui-input v-model="provinceReviewerName" :placeholder="$t('settings.provinceReviewerNamePlaceholder')"
+                      class="settings-field"></ui-input>
+          </ui-form-item>
+          <ui-form-item :label="$t('settings.provinceReviewerPhone')">
+            <ui-input v-model="provinceReviewerPhone" :placeholder="$t('settings.provinceReviewerPhonePlaceholder')"
+                      class="settings-field"></ui-input>
+          </ui-form-item>
+          <div class="settings-actions">
+            <ui-button type="primary" :loading="saving" @click="saveSettings">{{ $t('common.save') }}</ui-button>
+          </div>
+        </ui-form>
       </div>
 
-      <div class="block-section">
+      <div class="block-section settings-language">
         <div class="block-head">
           <span>{{ $t('settings.languageTitle') }}</span>
         </div>
         <p class="field-hint">{{ $t('settings.languageHint') }}</p>
-        <el-form label-width="110px">
-          <el-form-item :label="$t('settings.languageLabel')">
-            <el-select :model-value="currentLang" @change="changeLang" style="width: 240px">
-              <el-option v-for="option in langOptions" :key="option.value"
-                         :label="option.label" :value="option.value"></el-option>
-            </el-select>
-          </el-form-item>
-        </el-form>
+        <ui-form label-position="top">
+          <ui-form-item :label="$t('settings.languageLabel')">
+            <ui-select :model-value="currentLang" @change="changeLang" class="settings-field">
+              <ui-option v-for="option in langOptions" :key="option.value"
+                         :label="option.label" :value="option.value"></ui-option>
+            </ui-select>
+          </ui-form-item>
+        </ui-form>
       </div>
     </div>
   `,
@@ -4540,7 +4783,7 @@ const ViewMailAccounts = defineComponent({
 
     function lastEmailAt(row) {
       const status = statusMap.value[row.id] || {};
-      return status.last_email_at || "";
+      return (status.last_email_at || "").slice(0, 19).replace("T", " ");
     }
 
     function openDialog(account = null) {
@@ -4587,18 +4830,18 @@ const ViewMailAccounts = defineComponent({
             method: "PUT",
             body: JSON.stringify(payload),
           });
-          ElMessage.success(tt("mailAccounts.updated"));
+          NocMessage.success(tt("mailAccounts.updated"));
         } else {
           await requestJson("/api/system/mail-accounts", {
             method: "POST",
             body: JSON.stringify(payload),
           });
-          ElMessage.success(tt("mailAccounts.created"));
+          NocMessage.success(tt("mailAccounts.created"));
         }
         dialogVisible.value = false;
         await loadAccounts();
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
         setStatus(error.message, "error");
       } finally {
         saving.value = false;
@@ -4607,7 +4850,7 @@ const ViewMailAccounts = defineComponent({
 
     async function removeAccount(account) {
       try {
-        await ElMessageBox.confirm(
+        await NocDialog.confirm(
           tt("mailAccounts.deleteConfirm", { address: account.email_address }),
           tt("mailAccounts.deleteTitle"),
           { confirmButtonText: tt("common.confirmDelete"), cancelButtonText: tt("common.cancel"), type: "warning" },
@@ -4617,10 +4860,10 @@ const ViewMailAccounts = defineComponent({
       }
       try {
         await requestJson(`/api/system/mail-accounts/${account.id}`, { method: "DELETE" });
-        ElMessage.success(tt("mailAccounts.deleted"));
+        NocMessage.success(tt("mailAccounts.deleted"));
         await loadAccounts();
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       }
     }
 
@@ -4633,7 +4876,7 @@ const ViewMailAccounts = defineComponent({
         });
         await loadAccounts();
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         togglingId.value = null;
       }
@@ -4643,9 +4886,9 @@ const ViewMailAccounts = defineComponent({
       testingId.value = account.id;
       try {
         const data = await requestJson(`/api/system/mail-accounts/${account.id}/test`, { method: "POST" });
-        ElMessage.success(data && data.message ? data.message : tt("mailAccounts.testSuccess"));
+        NocMessage.success(data && data.message ? data.message : tt("mailAccounts.testSuccess"));
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         testingId.value = null;
       }
@@ -4654,7 +4897,7 @@ const ViewMailAccounts = defineComponent({
     async function testPreview() {
       // 保存前用当前表单配置测试连接（编辑时密码留空无法测试）
       if (!form.email_address.trim() || !form.imap_server.trim() || !form.email_password) {
-        ElMessage.warning(tt("mailAccounts.testPreviewRequire"));
+        NocMessage.warning(tt("mailAccounts.testPreviewRequire"));
         return;
       }
       previewing.value = true;
@@ -4670,9 +4913,9 @@ const ViewMailAccounts = defineComponent({
             imap_use_ssl: form.imap_use_ssl,
           }),
         });
-        ElMessage.success(data && data.message ? data.message : tt("mailAccounts.testSuccess"));
+        NocMessage.success(data && data.message ? data.message : tt("mailAccounts.testSuccess"));
       } catch (error) {
-        ElMessage.error(error.message);
+        NocMessage.error(error.message);
       } finally {
         previewing.value = false;
       }
@@ -4706,111 +4949,114 @@ const ViewMailAccounts = defineComponent({
   },
   template: `
     <div class="view-body" v-loading="loading">
-      <div class="block-section">
+      <div class="block-section mail-accounts-panel">
         <div class="block-head">
-          <span>{{ $t('mailAccounts.title') }}</span>
-          <el-button type="primary" :icon="icons.Plus" @click="openDialog()">{{ $t('mailAccounts.add') }}</el-button>
+          <h2 class="card-title">{{ $t('mailAccounts.title') }}</h2>
+          <ui-button type="primary" :icon="icons.Plus" @click="openDialog()">{{ $t('mailAccounts.add') }}</ui-button>
         </div>
         <p class="field-hint">{{ $t('mailAccounts.hint') }}</p>
 
-        <el-table :data="rows" class="data-table" :empty-text="$t('common.noData')">
-          <el-table-column prop="name" :label="$t('mailAccounts.name')" min-width="140"></el-table-column>
-          <el-table-column prop="email_address" :label="$t('mailAccounts.address')" min-width="200"></el-table-column>
-          <el-table-column :label="$t('mailAccounts.imapTitle')" min-width="200">
+        <ui-table :data="rows" class="data-table" :empty-text="$t('common.noData')">
+          <ui-table-column prop="name" :label="$t('mailAccounts.name')" min-width="100"></ui-table-column>
+          <ui-table-column prop="email_address" :label="$t('mailAccounts.address')" min-width="190" show-overflow-tooltip></ui-table-column>
+          <ui-table-column :label="$t('mailAccounts.imapTitle')" min-width="160">
             <template #default="{ row }">
               <span class="mono">{{ imapLabel(row) }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('mailAccounts.statusColumn')" width="120">
+          </ui-table-column>
+          <ui-table-column :label="$t('mailAccounts.statusColumn')" width="100">
             <template #default="{ row }">
-              <el-tooltip v-if="accountStatus(row).error" :content="accountStatus(row).error" placement="top">
-                <el-tag :type="accountStatus(row).type" size="small">{{ accountStatus(row).text }}</el-tag>
-              </el-tooltip>
-              <el-tag v-else :type="accountStatus(row).type" size="small">{{ accountStatus(row).text }}</el-tag>
+              <ui-tooltip v-if="accountStatus(row).error" :content="accountStatus(row).error" placement="top">
+                <ui-tag :type="accountStatus(row).type" size="small">{{ accountStatus(row).text }}</ui-tag>
+              </ui-tooltip>
+              <ui-tag v-else :type="accountStatus(row).type" size="small">{{ accountStatus(row).text }}</ui-tag>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('mailAccounts.lastEmailAt')" width="170">
+          </ui-table-column>
+          <ui-table-column :label="$t('mailAccounts.lastEmailAt')" width="142">
             <template #default="{ row }">
-              <span class="mono muted">{{ lastEmailAt(row) || $t('mailAccounts.neverReceived') }}</span>
+              <span v-if="lastEmailAt(row)" class="cell-timestamp" :title="lastEmailAt(row)">
+                {{ lastEmailAt(row).slice(0, 10) }}<span>{{ lastEmailAt(row).slice(11) }}</span>
+              </span>
+              <span v-else class="muted">{{ $t('mailAccounts.neverReceived') }}</span>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('mailAccounts.enabledColumn')" width="110">
+          </ui-table-column>
+          <ui-table-column :label="$t('mailAccounts.enabledColumn')" width="110">
             <template #default="{ row }">
-              <el-switch :model-value="row.enabled" :loading="togglingId === row.id"
+              <ui-switch :model-value="row.enabled" :loading="togglingId === row.id"
                          :active-text="$t('mailAccounts.enabledText')" :inactive-text="$t('mailAccounts.disabledText')"
-                         inline-prompt @change="toggleEnabled(row)"></el-switch>
+                         inline-prompt @change="toggleEnabled(row)"></ui-switch>
             </template>
-          </el-table-column>
-          <el-table-column :label="$t('common.actions')" width="230" align="right" fixed="right">
+          </ui-table-column>
+          <ui-table-column :label="$t('common.actions')" width="152" align="center" fixed="right">
             <template #default="{ row }">
               <div class="row-actions">
-                <el-button link type="primary" :loading="testingId === row.id"
-                           @click="testConnection(row)">{{ $t('mailAccounts.test') }}</el-button>
-                <el-button link type="primary" @click="openDialog(row)">{{ $t('common.edit') }}</el-button>
-                <el-button link type="danger" @click="removeAccount(row)">{{ $t('common.delete') }}</el-button>
+                <ui-action type="primary" :loading="testingId === row.id"
+                           @click="testConnection(row)" icon="Connection" :label="$t('mailAccounts.test')"></ui-action>
+                <ui-action type="primary" @click="openDialog(row)" icon="Edit" :label="$t('common.edit')"></ui-action>
+                <ui-action type="danger" @click="removeAccount(row)" icon="Delete" :label="$t('common.delete')"></ui-action>
               </div>
             </template>
-          </el-table-column>
-        </el-table>
+          </ui-table-column>
+        </ui-table>
       </div>
 
       <!-- 新建/编辑邮箱弹窗 -->
-      <el-dialog v-model="dialogVisible" :title="editingId ? $t('mailAccounts.dialogEdit') : $t('mailAccounts.dialogAdd')"
+      <ui-dialog v-model="dialogVisible" :title="editingId ? $t('mailAccounts.dialogEdit') : $t('mailAccounts.dialogAdd')"
                  width="640px" :close-on-click-modal="false" destroy-on-close>
-        <el-alert v-if="formAlert" type="error" :closable="false"
-                  :title="$t('mailAccounts.formAlert')" class="form-alert"></el-alert>
-        <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
+        <ui-alert v-if="formAlert" type="error" :closable="false"
+                  :title="$t('mailAccounts.formAlert')" class="form-alert"></ui-alert>
+        <ui-form ref="formRef" :model="form" :rules="rules" label-position="top">
           <div class="field-grid-2">
-            <el-form-item :label="$t('mailAccounts.name')" prop="name">
-              <el-input v-model="form.name" :placeholder="$t('mailAccounts.namePlaceholder')" clearable></el-input>
-            </el-form-item>
-            <el-form-item :label="$t('mailAccounts.address')" prop="email_address">
-              <el-input v-model="form.email_address" :placeholder="$t('mailAccounts.addressPlaceholder')" clearable></el-input>
-            </el-form-item>
+            <ui-form-item :label="$t('mailAccounts.name')" prop="name">
+              <ui-input v-model="form.name" :placeholder="$t('mailAccounts.namePlaceholder')" clearable></ui-input>
+            </ui-form-item>
+            <ui-form-item :label="$t('mailAccounts.address')" prop="email_address">
+              <ui-input v-model="form.email_address" :placeholder="$t('mailAccounts.addressPlaceholder')" clearable></ui-input>
+            </ui-form-item>
           </div>
-          <el-form-item :label="$t('mailAccounts.password')" prop="email_password">
-            <el-input v-model="form.email_password" type="password" show-password
-                      :placeholder="editingId ? $t('mailAccounts.passwordKeep') : $t('mailAccounts.passwordPlaceholder')"></el-input>
-          </el-form-item>
+          <ui-form-item :label="$t('mailAccounts.password')" prop="email_password">
+            <ui-input v-model="form.email_password" type="password" show-password
+                      :placeholder="editingId ? $t('mailAccounts.passwordKeep') : $t('mailAccounts.passwordPlaceholder')"></ui-input>
+          </ui-form-item>
 
           <p class="field-hint">{{ $t('mailAccounts.imapTitle') }}</p>
           <div class="field-grid-2">
-            <el-form-item :label="$t('mailAccounts.imapServer')" prop="imap_server">
-              <el-input v-model="form.imap_server" :placeholder="$t('mailAccounts.imapServerPlaceholder')" clearable></el-input>
-            </el-form-item>
-            <el-form-item :label="$t('mailAccounts.imapPort')">
-              <el-input-number v-model="form.imap_port" :min="1" :max="65535" style="width: 100%"></el-input-number>
-            </el-form-item>
+            <ui-form-item :label="$t('mailAccounts.imapServer')" prop="imap_server">
+              <ui-input v-model="form.imap_server" :placeholder="$t('mailAccounts.imapServerPlaceholder')" clearable></ui-input>
+            </ui-form-item>
+            <ui-form-item :label="$t('mailAccounts.imapPort')">
+              <ui-input-number v-model="form.imap_port" :min="1" :max="65535" style="width: 100%"></ui-input-number>
+            </ui-form-item>
           </div>
-          <el-form-item :label="$t('mailAccounts.imapSsl')">
-            <el-switch v-model="form.imap_use_ssl"></el-switch>
-          </el-form-item>
+          <ui-form-item :label="$t('mailAccounts.imapSsl')">
+            <ui-switch v-model="form.imap_use_ssl"></ui-switch>
+          </ui-form-item>
 
           <p class="field-hint">{{ $t('mailAccounts.smtpTitle') }}</p>
           <div class="field-grid-2">
-            <el-form-item :label="$t('mailAccounts.smtpServer')">
-              <el-input v-model="form.smtp_server" :placeholder="$t('mailAccounts.smtpServerPlaceholder')" clearable></el-input>
-            </el-form-item>
-            <el-form-item :label="$t('mailAccounts.smtpPort')">
-              <el-input-number v-model="form.smtp_port" :min="1" :max="65535" style="width: 100%"></el-input-number>
-            </el-form-item>
+            <ui-form-item :label="$t('mailAccounts.smtpServer')">
+              <ui-input v-model="form.smtp_server" :placeholder="$t('mailAccounts.smtpServerPlaceholder')" clearable></ui-input>
+            </ui-form-item>
+            <ui-form-item :label="$t('mailAccounts.smtpPort')">
+              <ui-input-number v-model="form.smtp_port" :min="1" :max="65535" style="width: 100%"></ui-input-number>
+            </ui-form-item>
           </div>
           <div class="field-grid-2">
-            <el-form-item :label="$t('mailAccounts.smtpSsl')">
-              <el-switch v-model="form.smtp_use_ssl"></el-switch>
-            </el-form-item>
-            <el-form-item :label="$t('mailAccounts.smtpTls')">
-              <el-switch v-model="form.smtp_use_tls"></el-switch>
-            </el-form-item>
+            <ui-form-item :label="$t('mailAccounts.smtpSsl')">
+              <ui-switch v-model="form.smtp_use_ssl"></ui-switch>
+            </ui-form-item>
+            <ui-form-item :label="$t('mailAccounts.smtpTls')">
+              <ui-switch v-model="form.smtp_use_tls"></ui-switch>
+            </ui-form-item>
           </div>
-        </el-form>
+        </ui-form>
         <template #footer>
-          <el-button @click="dialogVisible = false">{{ $t('common.cancel') }}</el-button>
-          <el-button :loading="previewing" :disabled="Boolean(editingId) && !form.email_password"
-                     @click="testPreview">{{ $t('mailAccounts.test') }}</el-button>
-          <el-button type="primary" :loading="saving" @click="saveAccount">{{ $t('common.save') }}</el-button>
+          <ui-button @click="dialogVisible = false">{{ $t('common.cancel') }}</ui-button>
+          <ui-button :loading="previewing" :disabled="Boolean(editingId) && !form.email_password"
+                     @click="testPreview">{{ $t('mailAccounts.test') }}</ui-button>
+          <ui-button type="primary" :loading="saving" @click="saveAccount">{{ $t('common.save') }}</ui-button>
         </template>
-      </el-dialog>
+      </ui-dialog>
     </div>
   `,
   computed: {
