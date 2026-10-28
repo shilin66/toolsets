@@ -6,6 +6,7 @@ from loguru import logger
 from cutover_task import CUTOVER_SCENE_NORMAL, CUTOVER_TAG_DUPLICATE, cutover_scene_label
 from database import EmailDatabase
 from email_attachments import build_attachment_url
+from user_access import Principal, UserAccessRepository
 
 
 class QueryPage(TypedDict):
@@ -70,20 +71,30 @@ def _cutover_task_line_count(line_type: str | None, fill_result: dict) -> int:
 
 
 class RecordQueryRepository:
-    def __init__(self, db: EmailDatabase):
+    def __init__(self, db: EmailDatabase, principal: Principal | None = None):
         self.db = db
+        self.principal = principal
+
+    def _scope(self, table='email_records'):
+        if table == 'email_records':
+            return UserAccessRepository.email_scope(self.principal)
+        scope, params = UserAccessRepository.email_scope(self.principal)
+        return (f'EXISTS (SELECT 1 FROM email_records WHERE '
+                f'email_records.id={table}.email_records_id AND {scope})', params)
 
     def get_operations_summary(self) -> OperationsSummary:
+        email_scope, email_params = self._scope()
+        task_scope, task_params = self._scope('cutover_tasks')
         with self.db.get_connection() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT
-                    (SELECT COUNT(*) FROM cutover_tasks WHERE status = 'draft') AS pending_tasks,
-                    (SELECT COUNT(*) FROM cutover_tasks WHERE status = 'report_failed') AS failed_tasks,
+                    (SELECT COUNT(*) FROM cutover_tasks WHERE status = 'draft' AND {task_scope}) AS pending_tasks,
+                    (SELECT COUNT(*) FROM cutover_tasks WHERE status = 'report_failed' AND {task_scope}) AS failed_tasks,
                     (SELECT COUNT(*) FROM email_records
-                     WHERE DATE(create_time) = DATE('now', 'localtime')) AS today_emails,
-                    (SELECT MAX(create_time) FROM email_records) AS last_email_at
-                """
+                     WHERE DATE(create_time) = DATE('now', 'localtime') AND {email_scope}) AS today_emails,
+                    (SELECT MAX(create_time) FROM email_records WHERE {email_scope}) AS last_email_at
+                """, [*task_params, *task_params, *email_params, *email_params]
             ).fetchone()
 
         return {
@@ -94,8 +105,8 @@ class RecordQueryRepository:
         }
 
     def list_email_records(self, page: QueryPage, sender: str | None, receiver: str | None = None) -> EmailRecordListResult:
-        conditions = []
-        params: list[str | int] = []
+        scope, params = self._scope()
+        conditions = [scope]
         if sender:
             conditions.append("sender LIKE ?")
             params.append(f"%{sender}%")
@@ -141,10 +152,10 @@ class RecordQueryRepository:
         }
 
     def list_ticket_records(self, page: QueryPage, status: str | None) -> TicketRecordListResult:
-        where_clause = ""
-        params: list[str | int] = []
+        scope, params = self._scope('ticket_records')
+        where_clause = f"WHERE {scope}"
         if status:
-            where_clause = "WHERE ticket_records.status = ?"
+            where_clause += " AND ticket_records.status = ?"
             params.append(status)
 
         with self.db.get_connection() as conn:
@@ -182,8 +193,8 @@ class RecordQueryRepository:
         status: str | None,
         supplier: str | None,
     ) -> CutoverTaskListResult:
-        conditions = []
-        params: list[str | int] = []
+        scope, params = self._scope('cutover_tasks')
+        conditions = [scope]
         if status:
             conditions.append("cutover_tasks.status = ?")
             params.append(status)
@@ -247,8 +258,8 @@ class RecordQueryRepository:
         keyword: str | None = None,
     ) -> CutoverTaskEmailListResult:
         """按邮件维度列出供应商邮件及其割接任务，每封邮件内嵌其割接任务列表。"""
-        conditions = ["(email_records.processing_origin='configured' OR email_records.mail_type='割接通知')"]
-        params: list[str | int] = []
+        scope, params = self._scope()
+        conditions = [scope, "(email_records.processing_origin='configured' OR email_records.mail_type='割接通知')"]
         # 任务级条件（同时作用于内嵌任务列表）与邮件级条件（仅过滤邮件）分开维护
         task_conditions = []
         task_params: list[str | int] = []
@@ -447,18 +458,21 @@ class RecordQueryRepository:
 
     def get_distinct_mail_types(self) -> list[str]:
         """返回已解析的邮件类型去重列表（非空），供列表标签筛选下拉使用。"""
+        scope, params = self._scope()
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT DISTINCT mail_type FROM email_records "
                 "WHERE mail_type IS NOT NULL AND mail_type != '' "
                 "AND (processing_origin='configured' OR mail_type='割接通知') "
-                "ORDER BY mail_type"
+                f"AND {scope} ORDER BY mail_type", params
             )
             return [row["mail_type"] for row in cursor.fetchall()]
 
     def get_cutover_email_detail(self, email_records_id: int) -> dict | None:
         """获取割接邮件详情：邮件基本信息、正文、附件及其下的割接任务列表。"""
+        if self.principal and not UserAccessRepository(self.db).can_access_email(self.principal, email_records_id):
+            return None
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -466,7 +480,7 @@ class RecordQueryRepository:
                 SELECT id, email_id, sender, receiver, subject, content,
                        html_content, attachments, cutover_scene, cutover_scene_remark,
                        mail_type, extract_result, is_duplicate, is_read,
-                       reply_status, pending_reply_content, pending_reply_scene, reply_time,
+                       reply_status, pending_reply_content, pending_reply_scene, reply_time, reply_history,
                        api_forward_status, api_forward_error, api_forward_time,
                        line_match_payload,
                        processing_origin,
@@ -497,6 +511,14 @@ class RecordQueryRepository:
             email["pending_reply_scene_label"] = cutover_scene_label(email["pending_reply_scene"]) \
                 if email["pending_reply_scene"] else ""
             email["reply_time"] = email.get("reply_time") or ""
+            email["reply_history"] = self.db._deserialize_json(email.get("reply_history")) or []
+            if not email["reply_history"] and email["reply_status"] == 'sent':
+                email["reply_history"] = [{
+                    'sent_at': email["reply_time"],
+                    'content': email["pending_reply_content"],
+                    'recipients': None, 'cc_recipients': None,
+                    'legacy': True,
+                }]
             email["reply_to"] = email.get("reply_to") or ""
             email["api_forward"] = {
                 "status": email.pop("api_forward_status", "") or "not_recorded",

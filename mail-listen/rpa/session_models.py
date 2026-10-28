@@ -91,6 +91,9 @@ class SessionStatus:
     mobile_login_url: str | None = None
     state_path: Path = Path("data/rpa/auth-state-test.json")
     keepalive: SessionKeepaliveStatus | None = None
+    portal_username: str | None = None
+    session_version: str | None = None
+    reporting: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +130,7 @@ class SmsRequestResult:
     sms_requested: bool
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass
 class PortalSessionError(RpaError):
     code: str
     message: str

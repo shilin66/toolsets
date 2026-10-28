@@ -23,6 +23,12 @@ from database import EmailDatabase
 from mail_artifacts import mailbox_storage_key
 from supplier_config import SupplierConfigCreate, SupplierConfigRepository
 from rpa.session_models import PortalEnvironment
+from rpa.session_models import LoginMode
+from rpa.session_config import PortalSessionSettings
+from rpa.user_sessions import PortalSessionRegistry
+from rpa.report_worker import execute as execute_report_job
+from tests.rpa.test_user_sessions import FakeSessionService
+from user_access import UserAccessRepository
 
 
 CUSTOMER_CIRCUIT = {
@@ -48,17 +54,33 @@ class CutoverTaskApiTest(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db = EmailDatabase(os.path.join(self.tmpdir.name, "mail_listener.db"))
+        self.access_repo = UserAccessRepository(self.db)
+        self.operator = self.access_repo.create_user('operator', 'operator-password', '值班用户')
+        account_id = self.db.add_mail_account({'email_address': 'noc@example.com', 'imap_server': 'example.com'})
+        self.access_repo.set_grants(self.operator['id'], [{'account_id': account_id, 'can_operate': True}])
         self.api_db_patch = patch.object(api_server, "email_db", self.db)
         self.api_db_patch.start()
         self.task_db_patch = patch.object(cutover_task, "email_db", self.db)
         self.task_db_patch.start()
-        self.session_service = SimpleNamespace(
-            status=lambda environment=None: SimpleNamespace(
-                state="authenticated",
-                authenticated=True,
-                message="综调会话有效",
-            )
-        )
+        self.data_dir = Path(self.tmpdir.name) / 'api-data'
+        self.data_dir.mkdir()
+        (self.data_dir / 'RT00_26012495.xlsx').write_bytes(b'unit-test-excel')
+        data_patch = patch.object(api_server, 'DATA_DIR', self.data_dir)
+        data_patch.start()
+        self.addCleanup(data_patch.stop)
+        self.session_registry = PortalSessionRegistry(self.db, self.data_dir,
+            PortalSessionSettings.model_construct(test_login_url='http://localhost/login',
+                test_mobile_login_url='http://localhost/mobile', test_session_check_url='http://localhost/home',
+                production_login_url='http://localhost/login', production_mobile_login_url='http://localhost/mobile',
+                production_session_check_url='http://localhost/home', session_keepalive_enabled=False),
+            service_factory=FakeSessionService)
+        self.addCleanup(self.session_registry.close)
+        self.session_service = self.session_registry.for_principal(self.access_repo.get_principal(self.operator['id']))
+        self.login_portal(PortalEnvironment.TEST)
+        runner_patch = patch('rpa.report_jobs.run_report_process', side_effect=lambda db, data_dir, report_id:
+            execute_report_job(db, data_dir, report_id, api_server._execute_cutover_report_job))
+        runner_patch.start()
+        self.addCleanup(runner_patch.stop)
         self.session_service_patch = patch.object(
             api_server,
             "get_portal_session_service",
@@ -68,12 +90,21 @@ class CutoverTaskApiTest(unittest.TestCase):
         self.session_service_patch.start()
         self.client = api_server.app.test_client()
         self.headers = {"Authorization": "Bearer test-key"}
+        self.report_client = api_server.app.test_client()
+        token, csrf = self.access_repo.create_session(self.access_repo.get_principal(self.operator['id']), 'test-key')
+        self.report_client.set_cookie('noc_session', token)
+        self.report_headers = {'X-CSRF-Token': csrf}
         self.email_records_id = self.insert_email_record()
         self.supplier_config = SupplierConfigRepository(self.db).create(SupplierConfigCreate(
             name="RT", email="noc@supplier.example.com", cutover_extract_prompt="提取割接字段。",
         ))
 
+    def login_portal(self, environment):
+        attempt = self.session_service.begin(LoginMode.PASSWORD, environment)
+        self.session_service.login_with_password(attempt.attempt_id, 'portal-admin', 'password', '42')
+
     def tearDown(self):
+        self.doCleanups()
         self.session_service_patch.stop()
         self.task_db_patch.stop()
         self.api_db_patch.stop()
@@ -844,8 +875,8 @@ class CutoverTaskApiTest(unittest.TestCase):
         with patch.object(api_server, "ensure_source_email_archived"), patch.object(
             api_server, "report_cutover_task", return_value={"status": "success"},
         ) as report, patch.object(api_server, "submit_cutover_report_job", side_effect=lambda job: job()):
-            response = self.client.post(
-                f"/api/cutover/tasks/{task_id}/report", headers=self.headers, json={},
+            response = self.report_client.post(
+                f"/api/cutover/tasks/{task_id}/report", headers=self.report_headers, json={},
             )
         self.assertEqual(response.status_code, 202)
         self.assertEqual(report.call_args.args[0]["fill_result"]["backbone_circuits"], forms)
@@ -910,8 +941,8 @@ class CutoverTaskApiTest(unittest.TestCase):
             with self.subTest(status=status):
                 self.db.update_cutover_task(task_id, status=status)
                 with patch.object(api_server, "submit_cutover_report_job") as submit:
-                    response = self.client.post(
-                        f"/api/cutover/tasks/{task_id}/report", headers=self.headers, json={},
+                    response = self.report_client.post(
+                        f"/api/cutover/tasks/{task_id}/report", headers=self.report_headers, json={},
                     )
                 self.assertEqual(response.status_code, 400)
                 self.assertIn("至少保留一条电路", response.get_json()["message"])
@@ -922,8 +953,8 @@ class CutoverTaskApiTest(unittest.TestCase):
     def test_confirm_and_report_flow(self):
         task_id = self.first_task_id(self.post_fill(self.fill_payload()))
 
-        blocked_report = self.client.post(
-            f"/api/cutover/tasks/{task_id}/report", headers=self.headers, json={},
+        blocked_report = self.report_client.post(
+            f"/api/cutover/tasks/{task_id}/report", headers=self.report_headers, json={},
         )
         self.assertEqual(blocked_report.status_code, 400)
 
@@ -955,9 +986,9 @@ class CutoverTaskApiTest(unittest.TestCase):
             "submit_cutover_report_job",
             side_effect=lambda job: job(),
         ):
-            report = self.client.post(
+            report = self.report_client.post(
                 f"/api/cutover/tasks/{task_id}/report",
-                headers=self.headers,
+                headers=self.report_headers,
                 json={},
             )
 
@@ -1027,9 +1058,9 @@ class CutoverTaskApiTest(unittest.TestCase):
             "report_cutover_task",
             side_effect=report_with_progress,
         ) as report_cutover:
-            response = self.client.post(
+            response = self.report_client.post(
                 f"/api/cutover/tasks/{task_id}/report",
-                headers=self.headers,
+                headers=self.report_headers,
                 json={"environment": "test"},
             )
 
@@ -1064,6 +1095,7 @@ class CutoverTaskApiTest(unittest.TestCase):
 
     def test_report_passes_selected_environment_without_session_precheck(self):
         # Given
+        self.login_portal(PortalEnvironment.PRODUCTION)
         task_id = self.first_task_id(self.post_fill(self.fill_payload()))
         self.client.post(
             f"/api/cutover/tasks/{task_id}/confirm",
@@ -1074,6 +1106,7 @@ class CutoverTaskApiTest(unittest.TestCase):
         with patch.object(
             api_server,
             "get_portal_session_service",
+            return_value=self.session_service,
         ) as get_session_service, patch.object(
             api_server,
             "report_cutover_task",
@@ -1083,15 +1116,15 @@ class CutoverTaskApiTest(unittest.TestCase):
             "submit_cutover_report_job",
             side_effect=lambda job: job(),
         ):
-            response = self.client.post(
+            response = self.report_client.post(
                 f"/api/cutover/tasks/{task_id}/report",
-                headers=self.headers,
+                headers=self.report_headers,
                 json={"environment": "production"},
             )
 
         # Then
         self.assertEqual(response.status_code, 202)
-        get_session_service.assert_not_called()
+        get_session_service.assert_called_once()
         self.assertEqual(
             report_cutover.call_args.kwargs["environment"],
             PortalEnvironment.PRODUCTION,
@@ -1109,6 +1142,7 @@ class CutoverTaskApiTest(unittest.TestCase):
         with patch.object(
             api_server,
             "get_portal_session_service",
+            return_value=self.session_service,
         ) as get_session_service, patch.object(
             api_server,
             "report_cutover_task",
@@ -1118,15 +1152,15 @@ class CutoverTaskApiTest(unittest.TestCase):
             "submit_cutover_report_job",
             side_effect=lambda job: job(),
         ):
-            response = self.client.post(
+            response = self.report_client.post(
                 f"/api/cutover/tasks/{task_id}/report",
-                headers=self.headers,
+                headers=self.report_headers,
                 json={},
             )
 
         # Then
         self.assertEqual(response.status_code, 202)
-        get_session_service.assert_not_called()
+        get_session_service.assert_called_once()
         report_cutover.assert_called_once()
         self.assertEqual(self.db.get_cutover_task(task_id)["status"], "reported")
 
@@ -1149,9 +1183,9 @@ class CutoverTaskApiTest(unittest.TestCase):
             "submit_cutover_report_job",
             side_effect=lambda job: job(),
         ):
-            response = self.client.post(
+            response = self.report_client.post(
                 f"/api/cutover/tasks/{task_id}/report",
-                headers=self.headers,
+                headers=self.report_headers,
                 json={"environment": "test"},
             )
 
@@ -1186,9 +1220,9 @@ class CutoverTaskApiTest(unittest.TestCase):
             "submit_cutover_report_job",
             side_effect=lambda job: job(),
         ):
-            response = self.client.post(
+            response = self.report_client.post(
                 f"/api/cutover/tasks/{task_id}/report",
-                headers=self.headers,
+                headers=self.report_headers,
                 json={},
             )
 
@@ -1226,9 +1260,9 @@ class CutoverTaskApiTest(unittest.TestCase):
             "submit_cutover_report_job",
             side_effect=lambda job: job(),
         ):
-            response = self.client.post(
+            response = self.report_client.post(
                 f"/api/cutover/tasks/{task_id}/report",
-                headers=self.headers,
+                headers=self.report_headers,
                 json={"environment": "test"},
             )
 
@@ -1348,9 +1382,9 @@ class CutoverTaskApiTest(unittest.TestCase):
             "submit_cutover_report_job",
             side_effect=lambda job: job(),
         ):
-            response = self.client.post(
+            response = self.report_client.post(
                 f"/api/cutover/tasks/{backbone_task_id}/report",
-                headers=self.headers,
+                headers=self.report_headers,
                 json={},
             )
 
@@ -2090,12 +2124,12 @@ class CutoverTaskApiTest(unittest.TestCase):
             excel_path = Path(data_dir) / "RT00_26012495.xlsx"
             excel_path.write_bytes(b"fake-xlsx-content")
             with patch.object(api_server, "DATA_DIR", Path(data_dir)):
-                response = self.client.get(f"/api/cutover/tasks/{task_id}/excel")
+                response = self.client.get(f"/api/cutover/tasks/{task_id}/excel", headers=self.headers)
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.data, b"fake-xlsx-content")
 
-        missing_task = self.client.get("/api/cutover/tasks/999999/excel")
+        missing_task = self.client.get("/api/cutover/tasks/999999/excel", headers=self.headers)
         self.assertEqual(missing_task.status_code, 404)
 
     def test_switch_customer_task_to_backbone(self):

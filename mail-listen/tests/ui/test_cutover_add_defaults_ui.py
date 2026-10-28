@@ -30,6 +30,7 @@ class CutoverAddDefaultsUiTest(unittest.TestCase):
         self.page.goto(f'{self.base}/admin/cutover-emails/{self.api.email_records_id}?taskId={self.task_id}')
         self.panel = self.page.locator('.task-detail-panel')
         expect(self.panel).to_be_visible()
+        self.panel.get_by_role("button", name="完整填报内容", exact=False).click()
         return task
 
     def save(self):
@@ -152,6 +153,7 @@ class CutoverAddDefaultsUiTest(unittest.TestCase):
             '该割接已按照集团相关文件要求经过省公司领导审批。': '否',
         })
         self.page.reload()
+        self.panel.get_by_role('button', name='完整填报内容', exact=False).click()
         self.panel.get_by_role('button', name='展开全部', exact=True).click()
         expect(checks.first).not_to_be_checked()
         expect(checks.nth(1)).to_be_checked()

@@ -105,7 +105,7 @@ class EmailReplyApiTest(unittest.TestCase):
                 email_attachments.attachment_path_from_relative,
             ):
                 response = api_server.app.test_client().get(
-                    "/api/email/attachments/email_attachments/123/notice.txt"
+                    "/api/email/attachments/email_attachments/123/notice.txt", headers={"Authorization": "Bearer test-key"}
                 )
                 response.get_data()
                 response.close()
@@ -129,14 +129,14 @@ class EmailReplyApiTest(unittest.TestCase):
                 email_attachments.attachment_path_from_relative,
             ):
                 response = api_server.app.test_client().get(
-                    "/api/email/attachments/private.txt"
+                    "/api/email/attachments/private.txt", headers={"Authorization": "Bearer test-key"}
                 )
 
         self.assertEqual(response.status_code, 404)
 
     def test_download_email_attachment_rejects_path_traversal(self):
         response = api_server.app.test_client().get(
-            "/api/email/attachments/../../etc/passwd"
+            "/api/email/attachments/../../etc/passwd", headers={"Authorization": "Bearer test-key"}
         )
 
         self.assertEqual(response.status_code, 404)
@@ -261,6 +261,11 @@ class EmailReplyApiTest(unittest.TestCase):
             ["receiver@example.com"],
         )
         self.assertEqual(mark_sent.call_args.args[0], 5)
+        self.assertEqual(mark_sent.call_args.kwargs['snapshot'], {
+            'content': '拒绝割接', 'scene': 'emergency',
+            'recipients': ['cutover-reply@supplier.example.com'],
+            'cc_recipients': ['receiver@example.com'],
+        })
         update_scene.assert_called_once_with(5, "emergency")
         data = response.get_json()["data"]
         self.assertEqual(data["cutover_scene"], "emergency")

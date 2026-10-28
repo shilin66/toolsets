@@ -77,6 +77,9 @@ class PortalSessionSettings(BaseSettings):
     test_state_path: Path = Path("data/rpa/auth-state-test.json")
     production_state_path: Path = Path("data/rpa/auth-state-production.json")
     artifact_dir: Path = Path("data/rpa/artifacts")
+    session_lock_path: Path | None = None
+    # Canonical account names for alternate login IDs, e.g. {"13800000000": "operator-a"}.
+    account_aliases: dict[str, str] = Field(default_factory=dict)
     report_excel_import_selector: str = 'text=EXCEL导入'
     report_dialog_selector: str = 'text=传输任务及影响电路导入'
     report_file_input_selector: str = 'input[type="file"]'

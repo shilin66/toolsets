@@ -47,6 +47,8 @@ class EmailDatabase:
 
     def __init__(self, db_path: str = None):
         if db_path is None:
+            db_path = os.environ.get('MAIL_DATABASE_PATH') or None
+        if db_path is None:
             # 默认使用 data 目录
             data_dir = os.path.join(os.getcwd(), "data")
             os.makedirs(data_dir, exist_ok=True)
@@ -233,6 +235,10 @@ class EmailDatabase:
                     CREATE INDEX IF NOT EXISTS idx_mail_accounts_enabled ON mail_accounts(enabled)
                 ''')
 
+                from user_access import initialize_access_storage
+                initialize_access_storage(cursor)
+                from operations_storage import initialize_operations_storage
+                initialize_operations_storage(cursor)
                 conn.commit()
                 logger.info(f"数据库初始化完成: {self.db_path}")
 
@@ -260,6 +266,7 @@ class EmailDatabase:
             "pending_reply_content": "TEXT NOT NULL DEFAULT ''",
             "pending_reply_scene": "TEXT NOT NULL DEFAULT ''",
             "reply_time": "TEXT NOT NULL DEFAULT ''",
+            "reply_history": "TEXT NOT NULL DEFAULT '[]'",
             "api_forward_status": "TEXT NOT NULL DEFAULT ''",
             "api_forward_error": "TEXT NOT NULL DEFAULT ''",
             "api_forward_time": "TEXT NOT NULL DEFAULT ''",
@@ -272,6 +279,15 @@ class EmailDatabase:
         for column_name, column_type in required_columns.items():
             if column_name not in existing_columns:
                 cursor.execute(f'ALTER TABLE email_records ADD COLUMN "{column_name}" {column_type}')
+
+        # Preserve the latest legacy sent reply before a later draft replaces it.
+        legacy_replies = cursor.execute("""SELECT id, reply_time, pending_reply_content
+            FROM email_records WHERE reply_status = 'sent' AND reply_history = '[]'""").fetchall()
+        for reply in legacy_replies:
+            history = [{'sent_at': reply['reply_time'], 'content': reply['pending_reply_content'],
+                        'recipients': None, 'cc_recipients': None, 'legacy': True}]
+            cursor.execute('UPDATE email_records SET reply_history = ? WHERE id = ?',
+                           (json.dumps(history, ensure_ascii=False), reply['id']))
 
         # is_duplicate 首次补列时回填存量重复邮件（入库时自动标记，查询直接读列）
         if "is_duplicate" not in existing_columns:
@@ -656,14 +672,21 @@ class EmailDatabase:
             logger.error(f"登记待确认回复失败: {e}")
             return False
 
-    def mark_reply_sent(self, record_id: int, reply_time: str) -> bool:
+    def mark_reply_sent(self, record_id: int, reply_time: str, *, snapshot: dict | None = None) -> bool:
         """确认发送成功后标记回复状态（保留草稿内容与场景供回溯）。"""
         try:
             with self.get_connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
                 cursor = conn.cursor()
+                row = cursor.execute('SELECT reply_history FROM email_records WHERE id = ?', (record_id,)).fetchone()
+                if row is None:
+                    return False
+                history = json.loads(row['reply_history'] or '[]')
+                if snapshot is not None:
+                    history.append({**snapshot, 'sent_at': reply_time})
                 cursor.execute(
-                    f'UPDATE email_records SET reply_status = ?, reply_time = ? WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}',
-                    ('sent', reply_time, record_id),
+                    f'UPDATE email_records SET reply_status = ?, reply_time = ?, reply_history = ? WHERE id = ? AND {EMAIL_NOT_DELETING_SQL}',
+                    ('sent', reply_time, json.dumps(history, ensure_ascii=False), record_id),
                 )
                 conn.commit()
                 return cursor.rowcount > 0
@@ -1134,6 +1157,8 @@ class EmailDatabase:
 
                 if existing:
                     task_id = existing['id']
+                    if conn.execute("SELECT 1 FROM cutover_tasks WHERE id=? AND status='reporting'", (task_id,)).fetchone():
+                        return None
                     cursor.execute('''
                         UPDATE cutover_tasks
                         SET supplier = ?, carrier_ticket_no = ?, title = ?,
@@ -1204,6 +1229,10 @@ class EmailDatabase:
         """删除割接任务及其上报记录。"""
         try:
             with self.get_connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                if conn.execute("SELECT 1 FROM cutover_tasks WHERE id=? AND status='reporting'", (task_id,)).fetchone():
+                    return False
+                conn.execute('DELETE FROM rpa_report_jobs WHERE report_id IN (SELECT id FROM cutover_reports WHERE task_id=?)', (task_id,))
                 cursor = conn.cursor()
                 cursor.execute('DELETE FROM cutover_reports WHERE task_id = ?', (task_id,))
                 cursor.execute('DELETE FROM cutover_tasks WHERE id = ?', (task_id,))
@@ -1292,6 +1321,11 @@ class EmailDatabase:
 
     def update_cutover_report(self, report_id: int, status: str = None, result: Any = None) -> bool:
         """更新割接上报记录状态与结果。"""
+        if isinstance(result, dict):
+            from rpa.report_jobs import get_job, identity
+            job = get_job(self, report_id)
+            if job:
+                result = {**result, 'execution_identity': identity(job)}
         set_clauses = []
         values = []
         if status is not None:
@@ -1322,6 +1356,7 @@ class EmailDatabase:
 
     def get_cutover_reports(self, task_id: int) -> List[Dict[str, Any]]:
         """获取某个任务的全部上报记录，按时间倒序。"""
+        from rpa.report_jobs import report_result_with_username
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -1333,7 +1368,7 @@ class EmailDatabase:
                 reports = []
                 for row in cursor.fetchall():
                     report = dict(row)
-                    report['result'] = self._deserialize_json(report.get('result'))
+                    report['result'] = report_result_with_username(conn, self._deserialize_json(report.get('result')))
                     reports.append(report)
                 return reports
 
@@ -1342,6 +1377,7 @@ class EmailDatabase:
             return []
 
     def get_cutover_report(self, report_id: int) -> Optional[Dict[str, Any]]:
+        from rpa.report_jobs import report_result_with_username
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -1353,7 +1389,7 @@ class EmailDatabase:
                 if not row:
                     return None
                 report = dict(row)
-                report['result'] = self._deserialize_json(report.get('result'))
+                report['result'] = report_result_with_username(conn, self._deserialize_json(report.get('result')))
                 return report
 
         except Exception as e:
@@ -1856,6 +1892,12 @@ class EmailDatabase:
             values.append(datetime.now())
             values.append(account_id)
             with self.get_connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                old = conn.execute('SELECT email_address FROM mail_accounts WHERE id=?', (account_id,)).fetchone()
+                if old and 'email_address' in update_fields and old[0].casefold() != update_fields['email_address'].casefold():
+                    if (conn.execute('SELECT 1 FROM user_mailbox_grants WHERE account_id=?', (account_id,)).fetchone()
+                        or conn.execute('SELECT 1 FROM email_records WHERE receiver=? COLLATE NOCASE LIMIT 1', (old[0],)).fetchone()):
+                        return False
                 cursor = conn.cursor()
                 cursor.execute(
                     f'UPDATE mail_accounts SET {", ".join(set_clauses)}, update_time = ? '
@@ -1880,6 +1922,7 @@ class EmailDatabase:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                conn.execute('DELETE FROM user_mailbox_grants WHERE account_id=?', (account_id,))
                 cursor.execute('DELETE FROM mail_accounts WHERE id = ?', (account_id,))
                 if cursor.rowcount > 0:
                     conn.commit()

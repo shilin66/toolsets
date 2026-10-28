@@ -23,6 +23,37 @@ from supplier_config import SupplierConfigRepository
 
 
 class SupplierConfigApiTest(unittest.TestCase):
+    def test_eml_import_requires_auth_and_does_not_create_supplier(self):
+        from tests.mail.test_supplier_eml import sample_eml
+        url = '/api/suppliers/import-eml'
+        self.assertEqual(self.client.post(url).status_code, 401)
+        self.assertEqual(self.client.post(url, headers=self.headers).status_code, 400)
+        for content, name in ((b'bad', 'bad.eml'), (sample_eml(), 'bad.txt')):
+            result = self.client.post(url, headers=self.headers, data={'file': (BytesIO(content), name)})
+            self.assertEqual(result.status_code, 400)
+        result = self.client.post(url, headers=self.headers, data={'file': (BytesIO(sample_eml()), 'notice.eml')})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.get_json()['data']['sender'], 'notice@example.com')
+        self.assertEqual(len(result.get_json()['data']['attachments']), 1)
+        self.assertEqual(SupplierConfigRepository(self.db).list(), [])
+
+    def test_sample_preview_is_authenticated_sanitized_and_read_only(self):
+        url = '/api/suppliers/sample-preview'
+        self.assertEqual(self.client.post(url, json={'content': 'hello'}).status_code, 401)
+        for body in ([], {}, {'content': []}, {'content': 'a' * (2 * 1024 * 1024 + 1)}):
+            self.assertEqual(self.client.post(url, json=body, headers=self.headers).status_code, 400)
+        result = self.client.post(url, headers=self.headers, json={'content': '''
+            <p>Maintenance</p><table><tr><td>001234</td></tr></table>
+            <script>parent.hacked=true</script><img src="https://tracker.invalid/a">
+            <a href="javascript:alert(1)" onclick="alert(2)">link</a>'''})
+        self.assertEqual(result.status_code, 200)
+        markup = result.get_json()['data']['preview_html']
+        self.assertIn('<td>001234</td>', markup)
+        self.assertIn("default-src 'none'", markup)
+        for unsafe in ('<script', 'parent.hacked', 'tracker.invalid', 'onclick', 'javascript:'):
+            self.assertNotIn(unsafe, markup)
+        self.assertEqual(SupplierConfigRepository(self.db).list(), [])
+
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db = EmailDatabase(os.path.join(self.tmpdir.name, "mail_listener.db"))

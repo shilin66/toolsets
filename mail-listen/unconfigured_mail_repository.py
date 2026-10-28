@@ -8,6 +8,10 @@ from loguru import logger
 from unconfigured_mail import ANALYSIS, DISCOVERY, accepted_branches, accepts_sender, normalize_sender, read_settings
 
 
+SAMPLE_MAIL_TYPES = ('割接通知', '割接改期', '割接取消', '割接提醒')
+SAMPLES_PER_CATEGORY = 3
+
+
 def log_skip(account, email_id, sender, stage, reason_code):
     logger.info('未配置邮件策略不执行 account={} email_records_id={} sender={} stage={} reason_code={}',
                 account, email_id, normalize_sender(sender), stage, reason_code)
@@ -44,6 +48,8 @@ def initialize_storage(cursor):
         'CREATE INDEX IF NOT EXISTS idx_mail_ai_jobs_ready ON mail_ai_jobs(status, next_run_at)',
         'CREATE INDEX IF NOT EXISTS idx_mail_ai_jobs_email ON mail_ai_jobs(email_records_id)',
     ]
+    statements.append('''CREATE TABLE IF NOT EXISTS unconfigured_sample_cleanup (
+        email_records_id INTEGER PRIMARY KEY REFERENCES email_records(id))''')
     for statement in statements:
         cursor.execute(statement)
     if 'workflow_context' not in {row[1] for row in cursor.execute('PRAGMA table_info(mail_ai_jobs)')}:
@@ -191,10 +197,9 @@ class UnconfiguredMailRepository:
                     (candidate_key, sender, display_name, create_time, update_time)
                     VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''', (sender, sender, sender))
                 draft = conn.execute('SELECT * FROM supplier_drafts WHERE candidate_key=?', (sender,)).fetchone()
-            if draft:
-                conn.execute('INSERT OR IGNORE INTO supplier_draft_samples VALUES (?, ?)', (draft['id'], job['email_records_id']))
         return {
-            'should_generate_supplier_draft': bool(draft and draft['status'] == 'collecting' and draft['draft_json'] is None),
+            'should_generate_supplier_draft': bool(draft and draft['status'] == 'collecting' and draft['draft_json'] is None
+                and self._sample_count(conn, draft['id'], '割接通知') < SAMPLES_PER_CATEGORY),
             'should_analyze_cutover_time': bool(branches[ANALYSIS]),
             'draft_id': draft['id'] if draft else None,
             'draft_revision': draft['revision'] if draft else None,
@@ -243,6 +248,7 @@ class UnconfiguredMailRepository:
                 raise ResultConflict('任务来源不匹配')
             self._save_result(conn, job, record, result)
             conn.commit()
+            self.cleanup_excess_samples()
             return result
 
     def _save_result(self, conn, job, record, result):
@@ -254,6 +260,7 @@ class UnconfiguredMailRepository:
             samples = result['config'].setdefault('email_type_samples', {})
             samples['割接通知'] = {
                 **samples.get('割接通知', {}),
+                'source_email_records_id': record['id'],
                 'subject': record['subject'] or '',
                 'content': record['html_content'] or record['content'] or '',
             }
@@ -331,6 +338,7 @@ class UnconfiguredMailRepository:
                 finally:
                     conn.execute('RELEASE branch_result')
             conn.commit()
+            self.cleanup_excess_samples()
             return classified
 
     @staticmethod
@@ -364,12 +372,10 @@ class UnconfiguredMailRepository:
             else:
                 draft = conn.execute('SELECT * FROM supplier_drafts WHERE id=? AND candidate_key=?',
                                      (context['draft_id'], sender)).fetchone()
-            if draft:
-                conn.execute('INSERT OR IGNORE INTO supplier_draft_samples VALUES (?, ?)',
-                         (draft['id'], record['id']))
+            retained = bool(draft and draft['status'] != 'published' and self._collect_sample(conn, draft['id'], record, result['mail_type']))
             can_generate = context is None or (context['should_generate_supplier_draft'] and draft
                                                and context['draft_revision'] == draft['revision'])
-            if notice and draft and can_generate and draft['status'] == 'collecting' and draft['draft_json'] is None:
+            if notice and retained and can_generate and draft['status'] == 'collecting' and draft['draft_json'] is None:
                 conn.execute("UPDATE supplier_drafts SET status='generating', source_email_records_id=?, update_time=CURRENT_TIMESTAMP WHERE id=?",
                              (record['id'], draft['id']))
                 # A cancelled job never replays its old sample; a new notice may start this candidate.
@@ -381,6 +387,29 @@ class UnconfiguredMailRepository:
             self.enqueue(conn, 'cutover_time_extract', record['id'], branches)
         elif not notice:
             log_skip(record['receiver'], record['id'], record['sender'], 'classification', 'not_cutover_notice')
+
+    @staticmethod
+    def _sample_count(conn, draft_id, mail_type):
+        return conn.execute('''SELECT count(*) FROM supplier_draft_samples s
+            JOIN email_records e ON e.id=s.email_records_id WHERE s.draft_id=? AND e.mail_type=?''',
+            (draft_id, mail_type)).fetchone()[0]
+
+    def _collect_sample(self, conn, draft_id, record, mail_type):
+        # Called inside BEGIN IMMEDIATE after classification; retries consume no extra slot.
+        if conn.execute('SELECT 1 FROM supplier_draft_samples WHERE draft_id=? AND email_records_id=?',
+                        (draft_id, record['id'])).fetchone():
+            return True
+        if mail_type in SAMPLE_MAIL_TYPES and self._sample_count(conn, draft_id, mail_type) < SAMPLES_PER_CATEGORY:
+            conn.execute('INSERT INTO supplier_draft_samples VALUES (?, ?)', (draft_id, record['id']))
+            return True
+        conn.execute('INSERT OR IGNORE INTO unconfigured_sample_cleanup VALUES (?)', (record['id'],))
+        log_skip(record['receiver'], record['id'], record['sender'], 'sample',
+                 'sample_limit_reached' if mail_type in SAMPLE_MAIL_TYPES else 'not_sample_category')
+        return False
+
+    def cleanup_excess_samples(self):
+        from sample_retention import cleanup_excess_samples
+        cleanup_excess_samples(self.db)
 
     def retry(self, email_id, task_type):
         if task_type not in ('unconfigured_mail_analyze', 'cutover_time_extract', 'supplier_config_draft'):

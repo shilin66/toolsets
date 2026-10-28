@@ -40,6 +40,11 @@ class PortalSessionRuntime:
         *,
         persist_state: bool,
     ) -> SessionStatus:
+        from .isolation import session_lock
+        with session_lock(self.settings.session_lock_path):
+            return self._inspect_status(environment, persist_state=persist_state)
+
+    def _inspect_status(self, environment, *, persist_state):
         checked_at = datetime.now(UTC)
         info = self.settings.describe_environment(environment)
         if not info.configured:

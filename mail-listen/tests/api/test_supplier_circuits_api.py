@@ -207,7 +207,7 @@ class SupplierCircuitsApiTest(unittest.TestCase):
 
     def test_export_roundtrip(self):
         self.create_circuit()
-        response = self.client.get('/api/circuits/export')
+        response = self.client.get('/api/circuits/export', headers=self.headers)
         self.assertEqual(response.status_code, 200)
         self.assertIn('spreadsheetml', response.headers['Content-Type'])
 

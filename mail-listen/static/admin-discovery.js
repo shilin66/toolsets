@@ -62,6 +62,210 @@ for (const [locale, messages] of Object.entries({'zh-CN': discoveryZh, en: disco
   i18n.global.mergeLocaleMessage(locale, {discovery: messages});
 }
 
+const draftReviewMessages = {
+  "zh-CN": {
+    "title": "审核供应商草稿",
+    "unnamed": "待命名供应商",
+    "intro": "AI 已整理配置建议，请人工核对后启用。保存草稿不会影响正在处理的邮件。",
+    "identity": "确认供应商",
+    "samples": "核对邮件样本",
+    "rules": "检查提取内容",
+    "test": "测试提取效果",
+    "nameMissing": "名称待填写",
+    "nameFilled": "名称已填写 · 请核对回复地址",
+    "sampleMissing": "割接通知样本待补全",
+    "sampleReady": "样本已填写 · 请核对原文",
+    "queryMissing": "尚未选择线路查询信息",
+    "queryCount": "已选择 {count} 项线路查询信息",
+    "untested": "尚未测试",
+    "tested": "已有测试结果 · 请对照原文",
+    "source": "查看原邮件",
+    "sourceHint": "核对来源",
+    "sampleCount": "已收集 {count} 封邮件",
+    "manualName": "供应商名称由您填写，便于后续查找和管理。",
+    "senderLabel": "来信发件地址",
+    "senderHint": "后续来自此地址的邮件会使用这份配置。",
+    "replyHint": "核对正文是否指定了其他回复邮箱；留空时使用来信发件地址。",
+    "sampleHint": "用于教系统识别不同邮件类型。请核对割接通知的主题和正文；其他分类有实际样本时再补充。",
+    "fixedTitle": "割接信息的识别方式",
+    "fixedHint": "逐项核对系统应从哪里读取时间、原因、地点和影响信息。需要调整时，用业务语言描述；使用默认规则不代表已验证准确。",
+    "lineTitle": "用于匹配内部线路的信息",
+    "lineHint": "每条线路的线路编号、服务编号、订单号等可用于查询内部线路。请保留邮件里的完整编号，并勾选需要查询的项目。",
+    "quickHint": "只添加邮件中实际出现的编号；添加后请核对识别说明。",
+    "addIdentifier": "添加{label}",
+    "fieldCode": "字段 key",
+    "fieldCodeHint": "直接作为提取结果的 key，保留大小写和下划线，例如 CircuitId、TGN_NMS_ID。",
+    "extractRule": "在哪里找到这项信息",
+    "queryUse": "用这项信息查询内部线路",
+    "identifierRule": "从正文或可读附件中，提取每条受影响线路对应的{label}。同一行的编号归属同一条线路，保留完整字符串、前导零和标点；不要使用维护工单号，没有明确值时返回空字符串。",
+    "otherTitle": "其他信息（可选）",
+    "otherHint": "仅在现有信息不够时添加，例如需要额外记录的业务属性。不用于匹配内部线路。",
+    "testHint": "使用当前割接通知样本测试，不会启用配置或发送邮件。原邮件附件不会自动带入；如需核对附件中的线路，请先上传对应附件。",
+    "testResultHint": "请核对时间、原因和线路编号。返回结果不代表已经准确；修改样本或规则后请重新测试。",
+    "advanced": "高级设置：完整提示词",
+    "extraHint": "可直接描述特殊情况，例如“正文为通知摘要，线路编号以附件表格为准”。",
+    "questions": "AI 提醒您核对",
+    "questionsHint": "这是生成时留下的疑问，请结合实际邮件判断。",
+    "evidence": "查看 AI 生成依据",
+    "nextCollecting": "等待收到割接通知后生成配置",
+    "nextGenerating": "正在整理邮件中的配置建议",
+    "nextReview": "填写名称，核对后启用",
+    "nextFailed": "查看原因后可重试",
+    "nextPublished": "后续邮件已使用正式配置",
+    "fields": {
+      "carrier_ticket_no": "运营商单号",
+      "cutover_time": "割接时间",
+      "cutover_backup_time": "备用割接时间",
+      "cutover_timezone": "时区",
+      "cutover_reason": "割接原因",
+      "location": "割接地点",
+      "ImpactType": "影响类型",
+      "ImpactDateTime": "线路中断时间",
+      "ImpactDuration": "单次中断时长",
+      "InteruptionsCounts": "中断次数",
+      "CircuitId": "线路编号",
+      "ServiceId": "服务编号",
+      "OrderNumber": "订单号",
+      "CustomerCircuitId": "客户线路编号"
+    }
+  },
+  "en": {
+    "title": "Review supplier draft",
+    "unnamed": "Supplier name needed",
+    "intro": "AI has prepared suggested rules. Review them before enabling. Saving a draft does not affect mail processing.",
+    "identity": "Confirm supplier",
+    "samples": "Review mail samples",
+    "rules": "Check extracted information",
+    "test": "Test extraction",
+    "nameMissing": "Supplier name needed",
+    "nameFilled": "Name entered · check reply address",
+    "sampleMissing": "Complete the cutover notice sample",
+    "sampleReady": "Sample entered · check original mail",
+    "queryMissing": "No circuit lookup fields selected",
+    "queryCount": "{count} circuit lookup fields selected",
+    "untested": "Not tested yet",
+    "tested": "Results available · compare with original",
+    "source": "View original email",
+    "sourceHint": "Source material",
+    "sampleCount": "{count} mail samples collected",
+    "manualName": "Enter a supplier name to identify and manage this configuration.",
+    "senderLabel": "Incoming sender address",
+    "senderHint": "Future mail from this address will use this configuration.",
+    "replyHint": "Check whether the body specifies a different reply address. Leave blank to use the sender address.",
+    "sampleHint": "Samples teach the system to recognize mail types. Review the notice subject and body; add other categories when real samples are available.",
+    "fixedTitle": "How maintenance information is identified",
+    "fixedHint": "Review where time, reason, location and impact are read from. Describe changes in business terms. Default rules have not necessarily been verified.",
+    "lineTitle": "Information used to find internal circuits",
+    "lineHint": "Circuit IDs, service IDs and order numbers can identify internal circuits. Keep complete identifiers and select the ones to use for lookup.",
+    "quickHint": "Only add identifiers present in the mail; review their extraction instructions.",
+    "addIdentifier": "Add {label}",
+    "fieldCode": "Field key",
+    "fieldCodeHint": "Used directly as the extraction output key. Preserve casing and underscores, e.g. CircuitId or TGN_NMS_ID.",
+    "extractRule": "Where to find this information",
+    "queryUse": "Use for internal circuit lookup",
+    "identifierRule": "Extract the {label} for each affected circuit from the body or readable attachment. Keep identifiers from the same row with the same circuit. Preserve full strings, leading zeros and punctuation. Exclude maintenance tickets; return an empty string if no explicit value exists.",
+    "otherTitle": "Other information (optional)",
+    "otherHint": "Add business attributes only when existing fields are insufficient. These are not used for circuit lookup.",
+    "testHint": "Test the current notice sample without enabling the configuration or sending mail. Original attachments are not included automatically; upload relevant files to test their circuit information.",
+    "testResultHint": "Check time, reason and circuit identifiers against the original. Results still need review. Test again after changing samples or rules.",
+    "advanced": "Advanced: complete prompt",
+    "extraHint": "Describe special cases, e.g. “The body is a summary; use circuit identifiers from the attachment table.”",
+    "questions": "AI review notes",
+    "questionsHint": "These questions were recorded during generation. Check them against the original mail.",
+    "evidence": "View AI generation evidence",
+    "nextCollecting": "Waiting for a cutover notice",
+    "nextGenerating": "Preparing suggested rules",
+    "nextReview": "Name, review and enable",
+    "nextFailed": "Review the error and retry",
+    "nextPublished": "New mail uses the active configuration",
+    "fields": {
+      "carrier_ticket_no": "Carrier ticket",
+      "cutover_time": "Maintenance window",
+      "cutover_backup_time": "Backup window",
+      "cutover_timezone": "Time zone",
+      "cutover_reason": "Maintenance reason",
+      "location": "Location",
+      "ImpactType": "Impact type",
+      "ImpactDateTime": "Circuit outage window",
+      "ImpactDuration": "Outage duration",
+      "InteruptionsCounts": "Interruption count",
+      "CircuitId": "Circuit ID",
+      "ServiceId": "Service ID",
+      "OrderNumber": "Order number",
+      "CustomerCircuitId": "Customer circuit ID"
+    }
+  },
+  "zh-HK": {
+    "title": "審核供應商草稿",
+    "unnamed": "待命名供應商",
+    "intro": "AI 已整理配置建議，請人工核對後啟用。儲存草稿不會影響正在處理的郵件。",
+    "identity": "確認供應商",
+    "samples": "核對郵件樣本",
+    "rules": "檢查提取內容",
+    "test": "測試提取效果",
+    "nameMissing": "名稱待填寫",
+    "nameFilled": "名稱已填寫 · 請核對回覆地址",
+    "sampleMissing": "割接通知樣本待補全",
+    "sampleReady": "樣本已填寫 · 請核對原文",
+    "queryMissing": "尚未選擇線路查詢資訊",
+    "queryCount": "已選擇 {count} 項線路查詢資訊",
+    "untested": "尚未測試",
+    "tested": "已有測試結果 · 請對照原文",
+    "source": "查看原郵件",
+    "sourceHint": "核對來源",
+    "sampleCount": "已收集 {count} 封郵件",
+    "manualName": "供應商名稱由您填寫，便於後續查找和管理。",
+    "senderLabel": "來信寄件地址",
+    "senderHint": "後續來自此地址的郵件會使用這份配置。",
+    "replyHint": "核對正文是否指定其他回覆郵箱；留空時使用來信寄件地址。",
+    "sampleHint": "用於教系統識別不同郵件類型。請核對割接通知的主旨和正文；其他分類有實際樣本時再補充。",
+    "fixedTitle": "割接資訊的識別方式",
+    "fixedHint": "逐項核對系統應從哪裏讀取時間、原因、地點和影響資訊。需要調整時，用業務語言描述；使用預設規則不代表已驗證準確。",
+    "lineTitle": "用於匹配內部線路的資訊",
+    "lineHint": "每條線路的線路編號、服務編號、訂單號等可用於查詢內部線路。請保留郵件裏的完整編號，並勾選需要查詢的項目。",
+    "quickHint": "只新增郵件中實際出現的編號；新增後請核對識別說明。",
+    "addIdentifier": "新增{label}",
+    "fieldCode": "欄位 key",
+    "fieldCodeHint": "直接作為提取結果的 key，保留大小寫和底線，例如 CircuitId、TGN_NMS_ID。",
+    "extractRule": "在哪裏找到這項資訊",
+    "queryUse": "用這項資訊查詢內部線路",
+    "identifierRule": "從正文或可讀附件中，提取每條受影響線路對應的{label}。同一行的編號歸屬同一條線路，保留完整字串、前導零和標點；不要使用維護工單號，沒有明確值時回傳空字串。",
+    "otherTitle": "其他資訊（可選）",
+    "otherHint": "僅在現有資訊不夠時新增，例如需額外記錄的業務屬性。不用於匹配內部線路。",
+    "testHint": "使用目前割接通知樣本測試，不會啟用配置或傳送郵件。原郵件附件不會自動帶入；如需核對附件中的線路，請先上傳對應附件。",
+    "testResultHint": "請核對時間、原因和線路編號。回傳結果不代表已經準確；修改樣本或規則後請重新測試。",
+    "advanced": "進階設定：完整提示詞",
+    "extraHint": "可直接描述特殊情況，例如「正文為通知摘要，線路編號以附件表格為準」。",
+    "questions": "AI 提醒您核對",
+    "questionsHint": "這是生成時留下的疑問，請結合實際郵件判斷。",
+    "evidence": "查看 AI 生成依據",
+    "nextCollecting": "等待收到割接通知後生成配置",
+    "nextGenerating": "正在整理郵件中的配置建議",
+    "nextReview": "填寫名稱，核對後啟用",
+    "nextFailed": "查看原因後可重試",
+    "nextPublished": "後續郵件已使用正式配置",
+    "fields": {
+      "carrier_ticket_no": "營運商單號",
+      "cutover_time": "割接時間",
+      "cutover_backup_time": "備用割接時間",
+      "cutover_timezone": "時區",
+      "cutover_reason": "割接原因",
+      "location": "割接地點",
+      "ImpactType": "影響類型",
+      "ImpactDateTime": "線路中斷時間",
+      "ImpactDuration": "單次中斷時長",
+      "InteruptionsCounts": "中斷次數",
+      "CircuitId": "線路編號",
+      "ServiceId": "服務編號",
+      "OrderNumber": "訂單號",
+      "CustomerCircuitId": "客戶線路編號"
+    }
+  }
+};
+for (const [locale, messages] of Object.entries(draftReviewMessages)) {
+  i18n.global.mergeLocaleMessage(locale, {draftReview: messages});
+}
+
 const DiscoverySettings = defineComponent({
   setup() {
     const values = reactive({supplier_auto_discovery_enabled: false, unconfigured_cutover_analysis_enabled: false, unconfigured_sender_filter_mode: 'all'});
@@ -113,15 +317,19 @@ const SupplierDraftsTable = defineComponent({
   setup() {
     const items = ref([]), selected = ref(null), busy = ref(false), error = ref('');
     const status = ref('unpublished');
-    const page = ref(1), total = ref(0), samplePage = ref(1);
-    const editing = ref(false), source = ref(null);
-    const detailBusy = ref(false), selectingId = ref(null), deletingId = ref(null), retrying = ref(false);
+    const page = ref(1), total = ref(0);
+    const editing = ref(false);
+    const selectingId = ref(null), deletingId = ref(null), retrying = ref(null);
     const deletedIds = new Set();
-    let listRequest = 0, detailRequest = 0, sourceRequest = 0, disposed = false;
+    let listRequest = 0, detailRequest = 0, disposed = false;
 
     function supplierName(row) { return row.draft?.config?.name?.trim() || row.sender; }
     function statusTagType(status) {
       return {review:'warning', published:'success', generation_failed:'danger', generating:'primary'}[status] || 'info';
+    }
+    function nextAction(status) {
+      const key = {collecting:'nextCollecting', generating:'nextGenerating', review:'nextReview', generation_failed:'nextFailed', published:'nextPublished'}[status];
+      return key ? tt('draftReview.'+key) : '';
     }
     function timeParts(value) { return String(value || '—').split(/[ T]/, 2); }
     function setDraftQuery(id) {
@@ -130,17 +338,14 @@ const SupplierDraftsTable = defineComponent({
       else url.searchParams.delete('draft');
       window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
     }
-    function closeSource() { sourceRequest += 1; source.value = null; }
     function clearSelection() {
       detailRequest += 1;
-      selected.value = null; editing.value = false; detailBusy.value = false; selectingId.value = null;
-      samplePage.value = 1;
-      closeSource();
+      selected.value = null; editing.value = false; selectingId.value = null;
       setDraftQuery(null);
     }
 
-    async function load(refreshSelection = true) {
-      const request = ++listRequest, selectionAtStart = detailRequest;
+    async function load() {
+      const request = ++listRequest;
       busy.value = true;
       try {
         const result = await requestJson(`/api/supplier-drafts?page=${page.value}&status=${status.value}`);
@@ -148,42 +353,38 @@ const SupplierDraftsTable = defineComponent({
         const lastPage = Math.max(1, Math.ceil(result.total / 20));
         if (page.value > lastPage) {
           page.value = lastPage;
-          await load(refreshSelection);
+          await load();
           return;
         }
         items.value = result.items.filter(row => !deletedIds.has(row.id));
         total.value = result.total; error.value = '';
-        if (refreshSelection && selected.value && !editing.value && selectionAtStart === detailRequest) {
-          await select(selected.value, {keepPage:true});
-        }
       } catch (exc) { if (!disposed && request === listRequest) error.value = exc.message; }
       finally { if (!disposed && request === listRequest) busy.value = false; }
     }
 
-    async function select(row, {edit = false, keepPage = false, reveal = false} = {}) {
+    async function select(row, {reveal = false} = {}) {
       if (!row || deletedIds.has(row.id) || deletingId.value === row.id) return;
-      if (!keepPage || selected.value?.id !== row.id) samplePage.value = 1;
       const request = ++detailRequest;
-      selectingId.value = row.id; detailBusy.value = true;
+      selectingId.value = row.id;
       try {
-        const result = await requestJson(`/api/supplier-drafts/${row.id}?page=${samplePage.value}`);
+        const result = await requestJson(`/api/supplier-drafts/${row.id}`);
         if (disposed || request !== detailRequest || deletedIds.has(row.id) || deletingId.value === row.id) return;
         const resultStatus = result.status === 'published' ? 'published' : 'unpublished';
         if (resultStatus !== status.value) {
-          if (!reveal) { clearSelection(); await load(false); return; }
+          if (!reveal) { clearSelection(); await load(); return; }
           status.value = resultStatus;
           page.value = 1;
-          await load(false);
+          await load();
           if (disposed || request !== detailRequest) return;
         }
-        selected.value = result; editing.value = edit && result.status === 'review';
-        closeSource(); setDraftQuery(row.id);
+        selected.value = result; editing.value = true;
+        setDraftQuery(row.id);
       } catch (exc) {
         if (disposed || request !== detailRequest) return;
         if (exc.status === 404 && (selected.value?.id === row.id || Number(new URLSearchParams(window.location.search).get('draft')) === row.id)) clearSelection();
         NocMessage.error(exc.message);
       } finally {
-        if (!disposed && request === detailRequest) { detailBusy.value = false; selectingId.value = null; }
+        if (!disposed && request === detailRequest) { selectingId.value = null; }
       }
     }
 
@@ -192,21 +393,20 @@ const SupplierDraftsTable = defineComponent({
       if (value === status.value) return;
       status.value = value; page.value = 1; items.value = []; total.value = 0; error.value = '';
       clearSelection();
-      load(false);
+      load();
     }
-    function changeSamplePage(value) { samplePage.value = value; select(selected.value, {keepPage:true}); }
 
-    async function retry() {
-      if (!selected.value) return;
-      const row = selected.value;
-      retrying.value = true;
+    async function retry(row) {
+      if (!row || retrying.value !== null) return;
+      retrying.value = row.id;
       try {
         await requestJson(`/api/supplier-drafts/${row.id}/retry`, {method:'POST'});
-        if (selected.value?.id === row.id) await select(row, {keepPage:true});
-        await load(false);
+        if (disposed) return;
+        await load();
+        NocMessage.success(tt('discovery.retryAccepted'));
       }
       catch (exc) { NocMessage.error(exc.message); }
-      finally { retrying.value = false; }
+      finally { retrying.value = null; }
     }
 
     async function removeDraft(row) {
@@ -218,8 +418,8 @@ const SupplierDraftsTable = defineComponent({
       } catch { return; }
       if (disposed) return;
       deletingId.value = row.id;
-      listRequest += 1; detailRequest += 1; sourceRequest += 1;
-      busy.value = false; detailBusy.value = false; selectingId.value = null;
+      listRequest += 1; detailRequest += 1;
+      busy.value = false; selectingId.value = null;
       try {
         await requestJson(`/api/supplier-drafts/${row.id}`, {method:'DELETE', body:JSON.stringify({revision:row.revision})});
         if (disposed) return;
@@ -235,37 +435,29 @@ const SupplierDraftsTable = defineComponent({
       } finally { if (!disposed) deletingId.value = null; }
     }
 
-    async function openSource(row) {
-      const request = ++sourceRequest;
-      try {
-        const result = await requestJson(`/api/emails/${row.id}/source`);
-        if (!disposed && request === sourceRequest) source.value = result;
-      } catch (exc) { if (!disposed && request === sourceRequest) NocMessage.error(exc.message); }
-    }
     async function closeEditor() {
-      editing.value = false;
-      if (selected.value) await select(selected.value, {keepPage:true});
-      await load(false);
+      clearSelection();
+      await load();
     }
     async function published() {
       const id = selected.value?.id;
       items.value = items.value.filter(row => row.id !== id);
       total.value = Math.max(0, total.value - 1);
       clearSelection();
-      await load(false);
+      await load();
     }
     onMounted(async () => {
       const id = Number(new URLSearchParams(window.location.search).get('draft'));
-      await load(false);
+      await load();
       if (!disposed && id && detailRequest === 0) await select({id}, {reveal:true});
     });
-    onUnmounted(() => { disposed = true; listRequest += 1; detailRequest += 1; sourceRequest += 1; });
-    return {items, selected, busy, error, status, changeStatus, published, page, total, samplePage, editing, source, detailBusy, selectingId, deletingId, retrying,
-      supplierName, statusTagType, timeParts, load, select, retry, openSource, closeSource, closeEditor, clearSelection,
-      changePage, changeSamplePage, removeDraft, icons:ElementPlusIconsVue};
+    onUnmounted(() => { disposed = true; listRequest += 1; detailRequest += 1; });
+    return {items, selected, busy, error, status, changeStatus, published, page, total, editing, selectingId, deletingId, retrying,
+      supplierName, statusTagType, nextAction, timeParts, load, select, retry, closeEditor, clearSelection,
+      changePage, removeDraft, icons:ElementPlusIconsVue};
   },
   template: `<div class="supplier-drafts-workspace">
-    <supplier-draft-editor v-if="editing && selected" :draft-id="selected.id" @close="closeEditor" @published="published"></supplier-draft-editor>
+    <supplier-draft-editor v-if="editing && selected" :key="selected.id" :draft-id="selected.id" @close="closeEditor" @published="published"></supplier-draft-editor>
     <template v-else>
       <section class="drafts-list-panel" :aria-label="$t(status === 'published' ? 'discovery.historyTitle' : 'discovery.queueTitle')">
         <header class="drafts-panel-header">
@@ -285,14 +477,14 @@ const SupplierDraftsTable = defineComponent({
             <template #default="{row}"><div class="draft-supplier-identity"><span class="draft-supplier-name" :title="supplierName(row)">{{ supplierName(row) }}</span>
               <span v-if="supplierName(row) !== row.sender" class="draft-supplier-address" :title="row.sender">{{ row.sender }}</span></div></template>
           </ui-table-column>
-          <ui-table-column :label="$t('common.status')" width="150"><template #default="{row}"><ui-tag class="draft-status-badge" effect="light" :type="statusTagType(row.status)">{{ $t('discovery.'+row.status) }}</ui-tag></template></ui-table-column>
+          <ui-table-column :label="$t('common.status')" width="200"><template #default="{row}"><ui-tag class="draft-status-badge" effect="light" :type="statusTagType(row.status)">{{ $t('discovery.'+row.status) }}</ui-tag><p class="draft-next-action">{{ nextAction(row.status) }}</p><p v-if="row.last_error" class="draft-row-error" :title="row.last_error">{{ row.last_error }}</p></template></ui-table-column>
           <ui-table-column :label="$t('discovery.count')" width="88" align="center"><template #default="{row}"><span class="draft-sample-number">{{ row.sample_count }}</span></template></ui-table-column>
           <ui-table-column :label="$t('common.updateTime')" width="140"><template #default="{row}"><span class="draft-update-date">{{ timeParts(row.update_time)[0] }}</span><span class="draft-update-clock">{{ timeParts(row.update_time)[1] }}</span></template></ui-table-column>
-          <ui-table-column :label="$t('common.actions')" width="152" align="center" fixed="right">
+          <ui-table-column :label="$t('common.actions')" width="224" align="center" fixed="right">
             <template #default="{row}"><div class="draft-list-row-actions">
-              <ui-action v-if="row.status === 'review'" type="primary" :loading="selectingId === row.id" :disabled="deletingId !== null" @click="select(row, {edit:true})" icon="Edit" :label="$t(row.id === selected?.id ? 'discovery.viewConfig' : 'discovery.edit')"></ui-action>
-              <ui-action :disabled="deletingId !== null" @click="select(row)" icon="Document" :label="$t('discovery.samples')"></ui-action>
-              <ui-action type="danger" :loading="deletingId === row.id" :disabled="deletingId !== null && deletingId !== row.id" @click="removeDraft(row)" icon="Delete" :label="$t('common.delete')"></ui-action>
+              <ui-button size="small" :type="row.status === 'review' ? 'primary' : 'default'" :loading="selectingId === row.id" :disabled="deletingId !== null || retrying !== null" @click="select(row)">{{ $t(row.status === 'review' ? 'discovery.edit' : row.status === 'published' ? 'supplierReview.viewRecord' : 'supplierReview.viewMails') }}</ui-button>
+              <ui-button v-if="row.status === 'generation_failed'" size="small" :loading="retrying === row.id" :disabled="deletingId !== null || (retrying !== null && retrying !== row.id)" @click="retry(row)">{{ $t('discovery.retry') }}</ui-button>
+              <ui-action type="danger" :loading="deletingId === row.id" :disabled="retrying !== null || (deletingId !== null && deletingId !== row.id)" @click="removeDraft(row)" icon="Delete" :label="$t('common.delete')"></ui-action>
             </div></template>
           </ui-table-column>
           <template #empty><div class="drafts-empty-state"><ui-icon :size="28" aria-hidden="true"><component :is="icons.Document"></component></ui-icon><strong>{{ $t(status === 'published' ? 'discovery.historyEmptyTitle' : 'discovery.emptyTitle') }}</strong><p>{{ $t(status === 'published' ? 'discovery.historyEmpty' : 'discovery.empty') }}</p></div></template>
@@ -301,46 +493,7 @@ const SupplierDraftsTable = defineComponent({
           <ui-pagination :current-page="page" :total="total" :page-size="20" layout="prev, pager, next" :disabled="busy || deletingId !== null" @current-change="changePage"></ui-pagination>
         </footer>
       </section>
-      <section v-if="selected" class="block-section draft-review-panel" v-loading="detailBusy">
-        <header class="draft-detail-header"><div><p>{{ $t('discovery.details') }}</p><div class="draft-detail-title"><h2>{{ supplierName(selected) }}</h2><ui-tag :type="statusTagType(selected.status)">{{ $t('discovery.' + selected.status) }}</ui-tag></div>
-          <span v-if="supplierName(selected) !== selected.sender" class="draft-supplier-address">{{ selected.sender }}</span></div>
-          <div class="draft-detail-actions">
-            <ui-button v-if="selected.status === 'review'" type="primary" :disabled="deletingId !== null" @click="editing=true">{{ $t('discovery.edit') }}</ui-button>
-            <ui-button v-if="selected.status === 'generation_failed'" :loading="retrying" :disabled="deletingId !== null" @click="retry">{{ $t('discovery.retry') }}</ui-button>
-            <ui-action :disabled="deletingId !== null" @click="clearSelection" icon="Close" :label="$t('discovery.closeDetails')"></ui-action>
-          </div>
-        </header>
-        <p v-if="selected.last_error" role="alert" class="warn-text">{{ selected.last_error }}</p>
-        <div v-if="selected.draft && (selected.draft.evidence?.length || selected.draft.unresolved_questions?.length)" class="draft-review-notes">
-          <section v-if="selected.draft.evidence?.length"><h3>{{ $t('discovery.evidence') }}</h3><ul><li v-for="(text,index) in selected.draft.evidence" :key="index">{{ text }}</li></ul></section>
-          <section v-if="selected.draft.unresolved_questions?.length" class="draft-open-questions"><h3>{{ $t('discovery.questions') }}</h3><ul><li v-for="(text,index) in selected.draft.unresolved_questions" :key="index">{{ text }}</li></ul></section>
-        </div>
-        <div class="draft-sample-counts"><ui-tag v-for="(count,type) in selected.sample_counts" :key="type" type="info">{{ type }} {{ count }}</ui-tag></div>
-        <p class="field-hint">{{ $t('discovery.originalHint') }}</p>
-        <ui-table :data="selected.samples"><ui-table-column prop="mail_type" :label="$t('discovery.classification')" width="130"></ui-table-column>
-          <ui-table-column prop="subject" :label="$t('common.subject')" min-width="250"><template #default="{row}"><button type="button" class="draft-sample-subject" @click="openSource(row)">{{ row.subject || $t('discovery.viewOriginal') }}</button></template></ui-table-column>
-          <ui-table-column prop="content_summary" :label="$t('emails.contentSummary')" min-width="250"><template #default="{row}"><div class="draft-sample-summary">{{ row.content_summary || $t('discovery.summaryUnavailable') }}</div></template></ui-table-column>
-          <ui-table-column :label="$t('common.actions')" width="88" align="center"><template #default="{row}"><ui-action icon="Document" :label="$t('discovery.viewOriginal')" @click="openSource(row)"></ui-action></template></ui-table-column>
-        </ui-table>
-        <ui-pagination :current-page="samplePage" :total="selected.sample_count" :page-size="20" layout="prev, pager, next" :disabled="detailBusy || deletingId !== null" @current-change="changeSamplePage"></ui-pagination>
-      </section>
     </template>
-    <ui-dialog :model-value="!!source" :title="source?.subject || $t('discovery.viewOriginal')" width="1040px" class="draft-source-dialog" @close="closeSource">
-      <template v-if="source">
-        <dl class="draft-source-meta">
-          <div><dt>{{ $t('common.sender') }}</dt><dd>{{ source.sender }}</dd></div>
-          <div><dt>{{ $t('common.receiverMailbox') }}</dt><dd>{{ source.receiver }}</dd></div>
-          <div><dt>{{ $t('common.receiveTime') }}</dt><dd>{{ source.create_time }}</dd></div>
-        </dl>
-        <div class="email-content-body">
-          <iframe v-if="source.preview_html" class="email-html-frame draft-source-frame" sandbox="" referrerpolicy="no-referrer"
-                  :title="$t('discovery.viewOriginal')" :srcdoc="source.preview_html"></iframe>
-          <pre v-else class="email-content-block draft-source-text">{{ source.content || $t('cutover.detail.noContent') }}</pre>
-        </div>
-        <div v-if="source.attachment_urls?.length" class="attachment-list"><a v-for="(url,index) in source.attachment_urls" :key="url" :href="url" target="_blank" rel="noopener noreferrer">{{ $t('common.attachment',{index:index+1}) }}</a></div>
-      </template>
-      <template #footer><ui-button @click="closeSource">{{ $t('common.close') }}</ui-button></template>
-    </ui-dialog>
   </div>`,
 });
 
@@ -348,8 +501,10 @@ const MailAnalysisPanel = defineComponent({
   props: {record: {type: Object, required: true}}, emits: ['changed'],
   setup(props, {emit}) {
     const busy = ref(false);
+    const canRetry = computed(() => canOperateMailbox(props.record.receiver) && !busy.value);
     const taskKeys = {unconfigured_mail_analyze:'classification', supplier_config_draft:'configTask', cutover_time_extract:'timeTask'};
     async function retry(task) {
+      if (!canRetry.value) return;
       busy.value = true;
       try { await requestJson(`/api/emails/${props.record.id}/analysis-retry`, {method:'POST', body:JSON.stringify({task_type:task.task_type})}); emit('changed'); }
       catch (exc) { NocMessage.error(exc.message); }
@@ -364,7 +519,7 @@ const MailAnalysisPanel = defineComponent({
       const value = props.record.unconfigured_analysis[key];
       return ['cutover_start','cutover_end','assessed_at'].includes(key) ? beijingTime(value) : value || '—';
     }
-    return {busy, taskKeys, retry, openDraft, sceneText, sceneTagType, beijingTime, analysisValue};
+    return {busy, canRetry, taskKeys, retry, openDraft, sceneText, sceneTagType, beijingTime, analysisValue};
   },
   template: `<section v-if="record.processing_origin === 'unconfigured' && (record.ai_tasks?.length || record.unconfigured_analysis)" class="block-section mail-analysis-panel">
     <div class="block-head"><span>{{ $t('discovery.analysis') }}</span><div class="toolbar-actions">
@@ -374,7 +529,7 @@ const MailAnalysisPanel = defineComponent({
     <p class="field-hint">{{ $t('discovery.analysisHint') }}</p>
     <div v-for="task in record.ai_tasks || []" :key="task.task_type" class="mail-analysis-task">
       <span>{{ $t('discovery.'+taskKeys[task.task_type]) }}</span><ui-tag :type="task.status === 'failed' ? 'danger' : 'info'">{{ $t('discovery.'+task.status) }}</ui-tag>
-      <span v-if="task.last_error" class="warn-text">{{ task.last_error }}</span><ui-button v-if="task.status === 'failed'" :loading="busy" @click="retry(task)">{{ $t('discovery.retry') }}</ui-button>
+      <span v-if="task.last_error" class="warn-text">{{ task.last_error }}</span><ui-button v-if="task.status === 'failed'" :disabled="!canRetry" :loading="busy" @click="retry(task)">{{ $t('discovery.retry') }}</ui-button>
     </div>
     <template v-if="record.unconfigured_analysis">
       <div class="mail-analysis-heading"><ui-tag :type="record.unconfigured_analysis.analysis_status === 'needs_review' ? 'warning' : sceneTagType(record.unconfigured_analysis.scene)">

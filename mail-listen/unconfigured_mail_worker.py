@@ -44,6 +44,7 @@ class MailAIWorker:
             self.stopping.wait(1)
 
     def run_once(self):
+        self.repo.cleanup_excess_samples()
         job = self.repo.claim(lease_seconds=max(300, settings.api_timeout * 6 + 60), combined=True)
         if job is None:
             return False

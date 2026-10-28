@@ -132,10 +132,11 @@ class EmailImageForwardTest(unittest.TestCase):
         self.assertEqual(payload["content"], "<p>Hello</p>")
         self.assertNotIn("html_content", payload)
         self.assertEqual(payload["attachments"], ["email_attachments/123/notice.txt"])
-        self.assertTrue(payload["attachment_urls"][0].endswith(
+        self.assertTrue(payload["attachment_urls"][0].split('?')[0].endswith(
             "/api/email/attachments/email_attachments/123/notice.txt"
         ))
-        self.assertEqual(payload["image_url"], "http://mail-listen.example.com/api/email/images/email-123.png")
+        self.assertEqual(payload["image_url"].split('?')[0], "http://mail-listen.example.com/api/email/images/email-123.png")
+        self.assertIn('access_token=', payload['image_url'])
 
     def test_build_content_includes_supplier_config_when_sender_matches(self):
         email = EmailMessage(
@@ -289,7 +290,7 @@ class EmailImageForwardTest(unittest.TestCase):
             image_path = Path(tmpdir) / "email-123-test.png"
             image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
 
-            response = api_server.app.test_client().get("/api/email/images/email-123-test.png")
+            response = api_server.app.test_client().get("/api/email/images/email-123-test.png", headers={'Authorization': 'Bearer test-key'})
             response.get_data()
             response.close()
 
@@ -355,7 +356,8 @@ class EmailImageForwardTest(unittest.TestCase):
         render_image.assert_called_once_with("<p>割接通知正文</p>", "割接通知正文", 123)
         sent_json = post.call_args.kwargs["json"]
         payload = json.loads(sent_json["messages"][0]["content"])
-        self.assertEqual(payload["image_url"], "http://mail-listen.example.com/api/email/images/email-123.png")
+        self.assertEqual(payload["image_url"].split('?')[0], "http://mail-listen.example.com/api/email/images/email-123.png")
+        self.assertIn('access_token=', payload['image_url'])
 
     def test_out_of_range_email_skips_parse_and_render_by_internaldate(self):
         raw_message = RawEmailMessage()

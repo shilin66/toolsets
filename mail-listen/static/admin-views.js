@@ -4,13 +4,20 @@
  */
 const { createApp, defineComponent, ref, reactive, computed, onMounted, onUnmounted, watch, nextTick, markRaw } = Vue;
 
-// ==================== 登录页（密码即 API Key） ====================
+// ==================== 工作台登录 ====================
 const ViewLogin = defineComponent({
   name: "ViewLogin",
   setup() {
     const keyInput = ref("");
+    const loginMode = ref('user');
+    const username = ref('');
+    const password = ref('');
     const submitting = ref(false);
     const errorMessage = ref("");
+    const errorField = ref('');
+    const usernameControl = ref(null);
+    const passwordControl = ref(null);
+    const keyControl = ref(null);
 
     // 界面语言：选项名固定为各语言自称，与系统配置页保持一致
     const currentLang = computed(() => i18n.global.locale.value);
@@ -21,28 +28,56 @@ const ViewLogin = defineComponent({
     ];
     function changeLang(value) {
       setLocale(value);
+      errorMessage.value = '';
+      errorField.value = '';
+    }
+
+    async function changeMode(value) {
+      if (submitting.value || loginMode.value === value) return;
+      loginMode.value = value;
+      keyInput.value = password.value = errorMessage.value = errorField.value = '';
+      await nextTick();
+      (value === 'admin' ? keyControl : usernameControl).value?.focus();
+    }
+
+    function showFieldError(field, message, control) {
+      errorField.value = field;
+      errorMessage.value = tt(message);
+      control.value?.focus();
     }
 
     async function submitLogin() {
+      if (submitting.value) return;
       const key = keyInput.value.trim();
-      if (!key) {
-        errorMessage.value = tt("login.keyEmpty");
-        return;
+      if (loginMode.value === 'admin' && !key) {
+        return showFieldError('key', 'login.keyEmpty', keyControl);
+      }
+      if (loginMode.value === 'user' && !username.value.trim()) {
+        return showFieldError('username', 'login.usernameEmpty', usernameControl);
+      }
+      if (loginMode.value === 'user' && !password.value) {
+        return showFieldError('password', 'login.passwordEmpty', passwordControl);
       }
       submitting.value = true;
       errorMessage.value = "";
+      errorField.value = '';
       try {
-        await checkApiKey(key);
-        persistApiKey(key);
+        if (loginMode.value === 'admin') await checkApiKey(key);
+        else await loginSession({username: username.value.trim(), password: password.value});
+        keyInput.value = password.value = '';
         NocMessage.success(tt("login.success"));
       } catch (error) {
-        errorMessage.value = error.message || tt("login.keyInvalid");
+        errorMessage.value = error.status === 401
+          ? tt(loginMode.value === 'admin' ? 'login.keyInvalid' : 'login.userInvalid')
+          : error.message || tt('common.requestFailed');
       } finally {
         submitting.value = false;
       }
     }
 
-    return { keyInput, submitting, errorMessage, currentLang, langOptions, changeLang, submitLogin };
+    onMounted(() => usernameControl.value?.focus());
+    return { keyInput, loginMode, username, password, submitting, errorMessage, errorField,
+      usernameControl, passwordControl, keyControl, currentLang, langOptions, changeLang, changeMode, submitLogin };
   },
   template: `
     <div class="login-screen">
@@ -51,25 +86,73 @@ const ViewLogin = defineComponent({
                    :label="option.label" :value="option.value"></ui-option>
       </ui-select>
 
-      <div class="login-card">
-        <div class="login-brand">
-          <div class="brand-mark login-brand-mark">NOC</div>
-          <div>
-            <h1>{{ $t('common.brandName') }}</h1>
-            <p>{{ $t('common.brandTagline') }}</p>
+      <main class="login-card">
+        <aside class="login-intro">
+          <div class="login-brand">
+            <div class="brand-mark login-brand-mark">NOC</div>
+            <div><h1>{{ $t('common.brandName') }}</h1><p>NETWORK OPERATIONS CENTER</p></div>
           </div>
-        </div>
-        <h2 class="login-title">{{ $t('login.title') }}</h2>
-        <p class="login-subtitle">{{ $t('login.subtitle') }}</p>
-        <ui-input v-model="keyInput" type="password" show-password size="large"
-                  :placeholder="$t('login.keyPlaceholder')"
-                  aria-label="API Key"
-                  @keyup.enter="submitLogin"></ui-input>
-        <p v-if="errorMessage" class="login-error" role="alert">{{ errorMessage }}</p>
-        <ui-button class="login-submit" type="primary" size="large"
-                   :loading="submitting" @click="submitLogin">{{ $t('login.submit') }}</ui-button>
-        <p class="login-hint">{{ $t('login.hint') }}</p>
-      </div>
+          <div class="login-intro-copy">
+            <span class="login-eyebrow">MAIL · TASK · DISPATCH</span>
+            <h2>{{ $t('login.introTitle') }}</h2>
+            <p>{{ $t('login.introDescription') }}</p>
+            <ol class="login-workflow">
+              <li><span>01</span>{{ $t('login.receive') }}</li>
+              <li><span>02</span>{{ $t('login.review') }}</li>
+              <li><span>03</span>{{ $t('login.report') }}</li>
+            </ol>
+          </div>
+          <p class="login-intro-footer">{{ $t('common.brandTagline') }}</p>
+        </aside>
+        <section class="login-form-panel">
+          <header>
+            <div class="login-access-label" aria-hidden="true"><ui-icon><Lock></Lock></ui-icon><span>{{ loginMode === 'admin' ? 'ADMIN ACCESS' : 'WORKSPACE ACCESS' }}</span></div>
+            <h2 id="login-title" class="login-title">{{ $t(loginMode === 'admin' ? 'login.adminSignIn' : 'login.welcome') }}</h2>
+            <p class="login-subtitle">{{ $t(loginMode === 'admin' ? 'login.adminSubtitle' : 'login.subtitle') }}</p></header>
+          <form id="login-panel" class="login-form" aria-labelledby="login-title"
+                :aria-busy="submitting" @submit.prevent="submitLogin">
+            <div class="login-fields">
+              <template v-if="loginMode === 'user'">
+                <div class="login-field"><label for="login-username">{{ $t('login.username') }}</label>
+                  <ui-input id="login-username" ref="usernameControl" v-model="username" size="large"
+                    :aria-label="$t('login.username')" :placeholder="$t('login.usernamePlaceholder')" autocomplete="username"
+                    :disabled="submitting" :aria-invalid="errorField === 'username'" aria-describedby="login-error">
+                    <template #prefix><ui-icon aria-hidden="true"><User></User></ui-icon></template>
+                  </ui-input>
+                </div>
+                <div class="login-field"><label for="login-password">{{ $t('login.password') }}</label>
+                  <ui-input id="login-password" ref="passwordControl" v-model="password" type="password" show-password size="large"
+                    :aria-label="$t('login.password')" :placeholder="$t('login.passwordPlaceholder')" autocomplete="current-password"
+                    :disabled="submitting" :aria-invalid="errorField === 'password'" aria-describedby="login-error">
+                    <template #prefix><ui-icon aria-hidden="true"><Lock></Lock></ui-icon></template>
+                  </ui-input>
+                </div>
+              </template>
+              <template v-else>
+                <div class="login-field"><label for="login-key">API Key</label>
+                  <ui-input id="login-key" ref="keyControl" v-model="keyInput" type="password" show-password size="large"
+                    :placeholder="$t('login.keyPlaceholder')" aria-label="API Key" autocomplete="off"
+                    :disabled="submitting" :aria-invalid="errorField === 'key'" aria-describedby="login-error">
+                    <template #prefix><ui-icon aria-hidden="true"><Key></Key></ui-icon></template>
+                  </ui-input>
+                </div>
+                <p class="login-admin-note">{{ $t('login.adminScope') }}</p>
+              </template>
+            </div>
+            <div class="login-feedback"><p v-if="errorMessage" id="login-error" class="login-error" role="alert">{{ errorMessage }}</p></div>
+            <ui-button class="login-submit" type="primary" size="large" native-type="submit"
+                       :aria-label="$t('login.submit')" :loading="submitting" :disabled="submitting"><span>{{ $t('login.submit') }}</span><ui-icon aria-hidden="true"><ArrowRight></ArrowRight></ui-icon></ui-button>
+          </form>
+          <p class="login-hint">{{ $t(loginMode === 'admin' ? 'login.adminHint' : 'login.userHint') }}</p>
+          <footer class="login-footer">
+            <button class="login-mode-switch" type="button" :disabled="submitting" aria-controls="login-panel"
+                    @click="changeMode(loginMode === 'user' ? 'admin' : 'user')">
+              <ui-icon aria-hidden="true"><Key v-if="loginMode === 'user'"></Key><ArrowLeft v-else></ArrowLeft></ui-icon>
+              <span>{{ $t(loginMode === 'user' ? 'login.adminSignIn' : 'login.backToUser') }}</span>
+            </button>
+          </footer>
+        </section>
+      </main>
     </div>
   `,
 });
@@ -299,6 +382,7 @@ function buildExtractPreviewView(text) {
 
 const ViewSupplierForm = defineComponent({
   name: "ViewSupplierForm",
+  components: {MailAttachmentList, MailAttachmentPreview},
   props: {
     supplierId: { type: Number, default: null },
     draftId: { type: Number, default: null },
@@ -308,6 +392,8 @@ const ViewSupplierForm = defineComponent({
     const isEdit = computed(() => props.supplierId != null);
     const isDraft = computed(() => props.draftId != null);
     const draftRecord = ref(null);
+    const draftReadOnly = computed(() => isDraft.value && draftRecord.value?.status !== 'review');
+    const retryingDraft = ref(false);
     const supplierNameInput = ref(null);
     const loading = ref(false);
     const saving = ref(false);
@@ -342,8 +428,11 @@ const ViewSupplierForm = defineComponent({
     const defaultFixedFieldCount = computed(() => (
       Math.max(fixedFields.value.length - customizedFixedFieldCount.value, 0)
     ));
-    const sectionActiveNames = ref(["basic", "mailTypes", "fixed", "custom", "topCustom", "prompt"]);
+    const sectionActiveNames = ref(['mailTypes', 'fixed', 'custom', 'topCustom', 'prompt']);
+    const showAdvancedPrompt = ref(false);
     const mailTypes = ref([]); // [{ name, subject, content, contentInAttachment }]
+    const samplesRestricted = ref(false);
+    const samplesReadOnly = ref(false);
     const mailTypeOptions = ref([]);
     const mailTypeDialogVisible = ref(false);
     const mailTypeName = ref('');
@@ -363,18 +452,26 @@ const ViewSupplierForm = defineComponent({
     const previewing = ref(false);
     const extracting = ref(false);
     const extractFiles = ref([]); // ui-upload 文件列表，提取预览时随请求上传
-    const extractResultVisible = ref(false); // 提取结果弹窗，避免结果藏在页面底部
 
-    // 影响线路列宽：按表头与内容长度估算，减少横向滚动
-    function lineColumnWidth(col, lines) {
-      let length = col.length;
-      for (const row of lines) {
-        const value = row[col];
-        if (value != null && value !== "") {
-          length = Math.max(length, String(value).length);
-        }
-      }
-      return Math.max(90, Math.min(length * 8 + 28, 400));
+    const editorTitle = computed(() => tt(isDraft.value ? (draftReadOnly.value ? (draftRecord.value?.status==='published' ? 'supplierReview.viewRecord' : 'supplierReview.viewMails') : 'draftReview.title') : isEdit.value ? 'supplierOperator.editTitle' : 'supplierOperator.createTitle'));
+    const usesManualPrompt = computed(() => Boolean(legacyPrompt.value.trim() && !lineFields.value.some(row => row.name.trim() || row.description.trim())));
+    function supplierFieldLabel(name) {
+      // Custom fields use their literal output key everywhere in the editor.
+      if (!fixedFields.value.some(field => field.name === name)) return name;
+      return hasI18nKey(`draftReview.fields.${name}`) ? tt(`draftReview.fields.${name}`) : extractFieldLabel(name);
+    }
+    const review = useSupplierReview({form, isDraft, isEdit, draftRecord, draftReadOnly, mailTypes, fixedFields, lineFields,
+      topCustomFields, legacyPrompt, usesManualPrompt, extractFiles, extractPreview, extractPreviewView,
+      samplesRestricted, supplierFieldLabel});
+    async function openSupplierSection(key) {
+      if (key === 'basic') { supplierNameInput.value?.focus(); return; }
+      review.showAdvanced.value = true;
+      const names = key === 'rules' ? ['fixed', 'custom'] : [key];
+      sectionActiveNames.value = [...new Set([...sectionActiveNames.value, ...names])];
+      await nextTick();
+      const element = document.getElementById(`${isDraft.value ? 'draft' : 'supplier'}-section-${names[0]}`);
+      element?.scrollIntoView({block:'start'});
+      element?.querySelector('input:not(:disabled), textarea, button[role="tab"]')?.focus({preventScroll:true});
     }
 
     async function ensureFixedDefaults() {
@@ -403,6 +500,7 @@ const ViewSupplierForm = defineComponent({
           subject: sample.subject || "",
           content: sample.content || "",
           contentInAttachment: Boolean(sample.content_in_attachment),
+          source_email_records_id: sample.source_email_records_id || null,
         };
       });
     }
@@ -437,6 +535,8 @@ const ViewSupplierForm = defineComponent({
     }
 
     async function fillFromSupplier(supplier) {
+      samplesRestricted.value = Boolean(supplier?.samples_restricted);
+      samplesReadOnly.value = Boolean(supplier?.samples_read_only);
       form.name = supplier ? supplier.name || "" : "";
       form.email = supplier ? supplier.email : "";
       form.reply_email = supplier ? supplier.reply_email || supplier.email : "";
@@ -510,7 +610,7 @@ const ViewSupplierForm = defineComponent({
       loadFailed.value = false;
       try {
         draftRecord.value = isDraft.value ? await requestJson(`/api/supplier-drafts/${props.draftId}`) : null;
-        const supplier = isDraft.value ? draftRecord.value.draft.config : isEdit.value
+        const supplier = isDraft.value ? (draftRecord.value.draft?.config || {email:draftRecord.value.sender}) : isEdit.value
           ? await requestJson(`/api/suppliers/${props.supplierId}`)
           : null;
         await fillFromSupplier(supplier);
@@ -522,12 +622,27 @@ const ViewSupplierForm = defineComponent({
       }
     }
 
+    async function retryDraft() {
+      if (retryingDraft.value || draftRecord.value?.status !== 'generation_failed') return;
+      retryingDraft.value = true;
+      try {
+        await requestJson(`/api/supplier-drafts/${props.draftId}/retry`, {method:'POST'});
+        await loadForm();
+        NocMessage.success(tt('discovery.retryAccepted'));
+      } catch (error) { NocMessage.error(error.message); }
+      finally { retryingDraft.value = false; }
+    }
+    function editPublishedSupplier() {
+      if (draftRecord.value?.published_supplier_id) openSupplierForm(draftRecord.value.published_supplier_id);
+    }
+
     async function loadOriginalSample(item) {
       const sourceId = draftRecord.value?.source_email_records_id;
       if (!sourceId || loadingOriginalSample.value) return;
       loadingOriginalSample.value = true;
       try {
         const source = await requestJson(`/api/emails/${sourceId}/source`);
+        item.source_email_records_id = source.id;
         item.subject = source.subject || '';
         item.content = source.html_content || source.content || '';
         NocMessage.success(tt('supplierForm.originalSampleLoaded'));
@@ -640,6 +755,7 @@ const ViewSupplierForm = defineComponent({
           subject: item.subject.trim(),
           content: item.content.trim(),
           content_in_attachment: item.contentInAttachment,
+          source_email_records_id: item.source_email_records_id || null,
         };
       }
       return emailTypeSamples;
@@ -653,8 +769,10 @@ const ViewSupplierForm = defineComponent({
         email: form.email.trim(),
         reply_email: form.reply_email.trim() || form.email.trim(),
         extra_instructions: form.extra_instructions.trim(),
-        email_type_samples: isDraft.value ? collectCurrentMailTypeSamples() : collectMailTypeSamples(),
       };
+      if (!samplesReadOnly.value) {
+        payload.email_type_samples = isDraft.value ? collectCurrentMailTypeSamples() : collectMailTypeSamples();
+      }
       if (lineCustomFields.length || !legacy) {
         payload.prompt_mode = "auto";
         payload.line_custom_fields = lineCustomFields;
@@ -677,13 +795,11 @@ const ViewSupplierForm = defineComponent({
     }
 
     async function previewPrompt() {
+      showAdvancedPrompt.value = true;
+      await openSupplierSection('prompt');
       previewing.value = true;
       try {
-        const data = await requestJson("/api/suppliers/preview-prompt", {
-          method: "POST",
-          body: JSON.stringify(collectPromptConfig()),
-        });
-        promptPreview.value = data.cutover_extract_prompt;
+        promptPreview.value = await resolveCurrentPrompt();
         setStatusKey("supplierForm.promptPreviewReady");
       } catch (error) {
         promptPreview.value = "";
@@ -704,14 +820,13 @@ const ViewSupplierForm = defineComponent({
       };
     }
 
-    async function resolveCurrentPrompt() {
-      const legacy = legacyPrompt.value.trim();
-      if (legacy) {
-        return legacy;
+    async function resolveCurrentPrompt(config = collectPromptConfig(), manual = usesManualPrompt.value ? legacyPrompt.value.trim() : "") {
+      if (manual) {
+        return manual;
       }
       const data = await requestJson("/api/suppliers/preview-prompt", {
         method: "POST",
-        body: JSON.stringify(collectPromptConfig()),
+        body: JSON.stringify(config),
       });
       return data.cutover_extract_prompt;
     }
@@ -724,19 +839,20 @@ const ViewSupplierForm = defineComponent({
           subject: item.subject.trim(),
           content: item.content.trim(),
           content_in_attachment: item.contentInAttachment,
+          source_email_records_id: item.source_email_records_id || null,
         };
       }
       return samples;
     }
 
-    async function uploadExtractFiles() {
+    async function uploadExtractFiles(files = [...extractFiles.value]) {
       const attachments = [];
-      for (const item of extractFiles.value) {
+      for (const item of files) {
         const formData = new FormData();
         formData.append("file", item.raw);
         const response = await fetch("/api/suppliers/preview-attachments", {
           method: "POST",
-          headers: { Authorization: `Bearer ${appStore.apiKey}` },
+          headers: { 'X-CSRF-Token': appStore.csrfToken },
           body: formData,
         });
         const payload = await response.json();
@@ -749,7 +865,9 @@ const ViewSupplierForm = defineComponent({
     }
 
     async function previewExtract() {
-      const sample = mailTypes.value.find((item) => item.name === "割接通知");
+      if (extracting.value || samplesRestricted.value || draftReadOnly.value || review.sourceBusy.value || review.collectedBusy.value) return;
+      const sample = review.activeSample.value;
+      if (review.reviewMailType.value !== '割接通知') return;
       if (!sample) {
         NocMessage.error(tt("supplierForm.mailTypeNotLoaded"));
         return;
@@ -758,37 +876,44 @@ const ViewSupplierForm = defineComponent({
         NocMessage.error(tt("supplierForm.previewNeedsSample"));
         return;
       }
+      const fingerprint = review.reviewFingerprint.value;
+      const config = collectPromptConfig();
+      const manual = usesManualPrompt.value ? legacyPrompt.value.trim() : '';
+      const files = [...extractFiles.value];
+      const sourceAttachments = review.attachments.value.filter(item => !item.raw && item.path)
+        .map(item => decodeURIComponent(item.path.slice('/api/email/attachments/'.length)));
+      const payload = {
+        subject:sample.subject.trim(), content:sample.content.trim(), content_in_attachment:sample.contentInAttachment,
+        sender:form.email.trim(), supplier_name:form.name.trim(), email_type_samples:collectCurrentMailTypeSamples()
+      };
+      review.showAdvanced.value = false;
+      review.reviewStage.value = 'review';
+      review.reviewError.value = '';
       extracting.value = true;
       try {
-        const attachments = await uploadExtractFiles();
-        const cutoverExtractPrompt = await resolveCurrentPrompt();
-        const data = await requestJson("/api/suppliers/preview-extract", {
-          method: "POST",
-          body: JSON.stringify({
-            subject: sample.subject.trim(),
-            content: sample.content.trim(),
-            content_in_attachment: sample.contentInAttachment,
-            attachments,
-            sender: form.email.trim(),
-            supplier_name: form.name.trim(),
-            email_type_samples: collectCurrentMailTypeSamples(),
-            cutover_extract_prompt: cutoverExtractPrompt,
-          }),
+        const attachments = [...sourceAttachments, ...await uploadExtractFiles(files)];
+        const cutoverExtractPrompt = await resolveCurrentPrompt(config, manual);
+        const data = await requestJson('/api/suppliers/preview-extract', {
+          method:'POST', body:JSON.stringify({...payload, attachments, cutover_extract_prompt:cutoverExtractPrompt})
         });
-        extractPreview.value = data.extract_result || "";
-        extractResultVisible.value = true;
-        setStatusKey("supplierForm.extractPreviewReady");
+        extractPreview.value = typeof data.extract_result === 'string' ? data.extract_result : JSON.stringify(data.extract_result ?? '');
+        review.resultFingerprint.value = fingerprint;
+        setStatusKey('supplierForm.extractPreviewReady');
       } catch (error) {
-        extractPreview.value = "";
-        extractResultVisible.value = false;
-        setStatus(error.message, "error");
-        NocMessage.error(error.message);
+        review.reviewError.value = error.message;
+        setStatus(error.message, 'error');
       } finally {
         extracting.value = false;
       }
     }
 
     async function saveSupplier() {
+      if (!isDraft.value && !form.name.trim()) {
+        await openSupplierSection('basic');
+        NocMessage.error(tt('supplierOperator.nameRequired'));
+        supplierNameInput.value?.focus();
+        return;
+      }
       let payload;
       try {
         payload = buildSupplierPayload();
@@ -831,7 +956,7 @@ const ViewSupplierForm = defineComponent({
       try {
         collectMailTypeSamples();
       } catch (error) {
-        if (!sectionActiveNames.value.includes('mailTypes')) sectionActiveNames.value.push('mailTypes');
+        await openSupplierSection('mailTypes');
         NocMessage.error(error.message);
         return;
       }
@@ -856,16 +981,16 @@ const ViewSupplierForm = defineComponent({
     });
 
     return {
-      isEdit, isDraft, draftRecord, supplierNameInput, publishDraft, loading, saving, loadFailed, form,
+      isEdit, isDraft, draftRecord, draftReadOnly, retryingDraft, retryDraft, loadForm, editPublishedSupplier, supplierNameInput, publishDraft, loading, saving, loadFailed, form,
+      ...review, editorTitle, usesManualPrompt, supplierFieldLabel, openSupplierSection, showAdvancedPrompt,
       fixedFields, selectedFixedField, selectedFixedFieldName,
       customizedFixedFieldCount, defaultFixedFieldCount,
-      mailTypes, configuredMailTypeCount,
+      mailTypes, configuredMailTypeCount, samplesRestricted, samplesReadOnly,
       sampleEditor, loadingOriginalSample, loadOriginalSample,
       mailTypeDialogVisible, mailTypeName, mailTypeNameError, mailTypeNameInput,
       openMailTypeDialog, addMailType, removeMailType,
       sectionActiveNames, lineFields, topCustomFields, legacyPrompt, promptPreview, previewing,
-      extractPreview, extracting, extractFiles, extractPreviewView, extractResultVisible,
-      lineColumnWidth,
+      extractPreview, extracting, extractFiles, extractPreviewView,
       isFixedFieldCustomized, selectFixedField, moveFixedFieldSelection,
       restoreSelectedFixedField, addLineField, removeLineField,
       addTopCustomField, removeTopCustomField, previewPrompt,
@@ -884,99 +1009,77 @@ const ViewSupplierForm = defineComponent({
     },
   },
   template: `
-    <div class="view-body supplier-form-view" v-loading="loading">
-      <p v-if="isDraft" class="field-hint">{{ $t('discovery.draftHint') }}</p>
+    <div class="view-body supplier-form-view supplier-operator-form supplier-form" :class="{'draft-operator-form':isDraft}" v-loading="loading">
+      <header class="draft-editor-head">
+        <div><p>{{ editorTitle }}</p><h2>{{ form.name.trim() || $t('draftReview.unnamed') }}</h2><span>{{ form.email }}</span></div>
+        <div class="supplier-section-actions">
+          <ui-button v-if="reviewStage === 'review' && (!draftReadOnly || draftRecord?.draft)" size="small" :aria-expanded="showAdvanced" @click="showAdvanced=!showAdvanced">{{ $t(showAdvanced ? 'supplierReview.back' : 'supplierReview.advanced') }}</ui-button>
+          <ui-button size="small" @click="goBack">{{ $t(isDraft ? 'supplierReview.backToList' : 'common.cancel') }}</ui-button>
+          <ui-button v-if="isDraft && draftRecord?.status === 'review'" size="small" :loading="saving" :disabled="loading || loadFailed" @click="saveSupplier">{{ $t('discovery.saveDraft') }}</ui-button>
+          <ui-button v-if="isDraft && draftRecord?.status === 'review'" size="small" type="primary" :loading="saving" :disabled="loading || loadFailed" @click="publishDraft">{{ $t('discovery.publish') }}</ui-button>
+          <ui-button v-if="!isDraft && reviewStage === 'review'" size="small" type="primary" :loading="saving" :disabled="loading || loadFailed" @click="saveSupplier">{{ $t('supplierForm.saveConfig') }}</ui-button>
+        </div>
+      </header>
+      ${SUPPLIER_REVIEW_TEMPLATE}
 
       <p v-if="!loading && loadFailed" class="empty-inline">{{ $t('common.loadFailedBack') }}</p>
 
-      <ui-collapse v-if="!loadFailed"
+      <div v-if="showAdvanced && !loadFailed" class="supplier-advanced-config">
+      <p class="field-hint">{{ $t('supplierReview.advancedHint') }}</p>
+      <details v-if="isDraft && draftRecord?.draft?.evidence?.length" class="review-generation-evidence"><summary>{{ $t('discovery.evidence') }}</summary><ul><li v-for="(text,index) in draftRecord.draft.evidence" :key="index">{{ text }}</li></ul></details>
+      <details v-if="draftReadOnly && draftRecord?.draft?.config" class="review-config-snapshot"><summary>{{ $t('supplierReview.snapshot') }}</summary><pre>{{ JSON.stringify(draftRecord.draft.config,null,2) }}</pre></details>
+      <ui-collapse v-if="!draftReadOnly"
                    v-model="sectionActiveNames"
-                   class="supplier-form supplier-form-page supplier-section-collapse">
-        <!-- 基本信息 -->
-        <ui-collapse-item name="basic" class="supplier-section supplier-section--basic">
-          <template #title>
-            <div class="supplier-section-head">
-              <strong>{{ $t('supplierForm.basicInfo') }}</strong>
-              <div class="supplier-section-actions">
-                <ui-button size="small" @click.stop="goBack">{{ $t('common.cancel') }}</ui-button>
-                <ui-button v-if="!isDraft || draftRecord?.status === 'review'" size="small" type="primary" :loading="saving" @click.stop="saveSupplier">{{ isDraft ? $t('discovery.saveDraft') : $t('supplierForm.saveConfig') }}</ui-button>
-                <ui-button v-if="isDraft && draftRecord?.status === 'review'" size="small" :loading="saving" @click.stop="publishDraft">{{ $t('discovery.publish') }}</ui-button>
-                <ui-tag v-if="isDraft && draftRecord?.status === 'published'" type="success">{{ $t('discovery.published') }}</ui-tag>
-              </div>
-            </div>
-          </template>
-          <div class="field-grid-2">
-            <div class="form-field">
-              <label class="form-label">{{ $t('supplierForm.nameLabel') }} <span class="required-mark">*</span></label>
-              <ui-input ref="supplierNameInput" v-model="form.name" :aria-label="$t('supplierForm.nameLabel')" :placeholder="$t('supplierForm.namePlaceholder')"></ui-input>
-            </div>
-            <div class="form-field">
-              <label class="form-label">{{ $t('supplierForm.emailLabel') }} <span class="required-mark">*</span></label>
-              <ui-input v-model="form.email" type="email" :disabled="isDraft" :placeholder="$t('supplierForm.emailPlaceholder')"></ui-input>
-            </div>
-            <div class="form-field">
-              <label class="form-label">{{ $t('supplierForm.replyEmailLabel') }}</label>
-              <ui-input v-model="form.reply_email" type="email" :placeholder="$t('supplierForm.replyEmailPlaceholder')"></ui-input>
-              <p class="field-hint">{{ $t('supplierForm.replyEmailHint') }}</p>
-            </div>
-          </div>
-        </ui-collapse-item>
-
+                   class="supplier-form-page supplier-section-collapse">
         <!-- 邮件类型样本 -->
-        <ui-collapse-item name="mailTypes" class="supplier-section supplier-section--mail-types">
+        <ui-collapse-item name="mailTypes" :id="isDraft ? 'draft-section-mailTypes' : 'supplier-section-mailTypes'" class="supplier-section supplier-section--mail-types">
           <template #title>
             <div class="supplier-section-head">
-              <strong>{{ $t('supplierForm.mailTypesTitle') }}</strong>
+              <strong>{{ $t('draftReview.samples') }}</strong>
               <div class="supplier-section-actions" :aria-label="$t('supplierForm.mailTypesStatsLabel')">
                 <span class="is-configured">{{ $t('supplierForm.configuredCount', { count: configuredMailTypeCount, total: mailTypes.length }) }}</span>
-                <ui-button size="small" :icon="icons.Plus" :disabled="!mailTypes.length" @click.stop="openMailTypeDialog">{{ $t('supplierForm.addMailType') }}</ui-button>
+                <ui-button size="small" :icon="icons.Plus" :disabled="samplesReadOnly || !mailTypes.length" @click.stop="openMailTypeDialog">{{ $t('supplierForm.addMailType') }}</ui-button>
               </div>
             </div>
           </template>
-          <p class="field-hint">{{ $t('supplierForm.mailTypesHint') }}</p>
-          <div v-if="!mailTypes.length" class="empty-inline">{{ $t('supplierForm.mailTypesLoadFailed') }}</div>
+          <p class="field-hint">{{ $t('draftReview.sampleHint') }}</p>
+          <ui-alert v-if="samplesRestricted" type="info" :closable="false" title="邮件样本未获来源邮箱授权，已隐藏；其他配置仍可维护。"></ui-alert>
+          <div v-else-if="!mailTypes.length" class="empty-inline">{{ $t('supplierForm.mailTypesLoadFailed') }}</div>
           <div v-else class="mail-type-list" :aria-label="$t('supplierForm.mailTypesListLabel')">
             <div v-for="item in mailTypes" :key="item.name" class="mail-type-item">
               <div class="mail-type-heading">
                 <span class="form-label mail-type-name">{{ item.name }}<span v-if="item.name === '割接通知'" class="required-mark"> *</span></span>
                 <div class="toolbar-actions">
                   <ui-button v-if="isDraft && draftRecord?.source_email_records_id && item.name === '割接通知'" size="small" :loading="loadingOriginalSample" @click="loadOriginalSample(item)">{{ $t('supplierForm.loadOriginalSample') }}</ui-button>
-                  <ui-button size="small" @click="sampleEditor=item">{{ $t('supplierForm.expandSample') }}</ui-button>
-                  <ui-action v-if="item.isCustom" type="danger" @click="removeMailType(item)" icon="Delete" :label="$t('supplierForm.removeMailType')"></ui-action>
+                  <ui-button size="small" :disabled="samplesReadOnly" @click="sampleEditor=item">{{ $t('supplierForm.expandSample') }}</ui-button>
+                  <ui-action v-if="item.isCustom" :disabled="samplesReadOnly" type="danger" @click="removeMailType(item)" icon="Delete" :label="$t('supplierForm.removeMailType')"></ui-action>
                 </div>
               </div>
-              <ui-input v-model="item.subject" :placeholder="$t('supplierForm.subjectPlaceholder')"
+              <ui-input v-model="item.subject" :disabled="samplesReadOnly" :placeholder="$t('supplierForm.subjectPlaceholder')"
                         :aria-label="$t('supplierForm.categorySubjectLabel', {name:item.name})"
                         style="margin-bottom: 8px"></ui-input>
-              <ui-input v-model="item.content" type="textarea" :rows="6" resize="vertical"
+              <ui-input v-model="item.content" :disabled="samplesReadOnly" type="textarea" :rows="6" resize="vertical"
                         :aria-label="$t('supplierForm.categoryContentLabel', {name:item.name})"
                         :placeholder="$t('supplierForm.contentPlaceholder', { name: item.name })"></ui-input>
-              <ui-checkbox v-if="item.name === '割接通知'" v-model="item.contentInAttachment"
+              <ui-checkbox v-if="item.name === '割接通知'" :disabled="samplesReadOnly" v-model="item.contentInAttachment"
                            class="mail-type-attachment-flag">{{ $t('supplierForm.contentInAttachment') }}</ui-checkbox>
             </div>
           </div>
-          <ui-dialog :model-value="!!sampleEditor" :title="sampleEditor ? $t('supplierForm.fullSampleTitle', {name:sampleEditor.name}) : ''" class="mail-sample-editor-dialog" width="1040px" @close="sampleEditor=null">
-            <template v-if="sampleEditor">
-              <p class="field-hint">{{ $t('supplierForm.fullSampleHint') }}</p>
-              <ui-input v-model="sampleEditor.subject" :aria-label="$t('supplierForm.categorySubjectLabel', {name:sampleEditor.name})" :placeholder="$t('supplierForm.subjectPlaceholder')"></ui-input>
-              <ui-input v-model="sampleEditor.content" type="textarea" :rows="16" :aria-label="$t('supplierForm.categoryContentLabel', {name:sampleEditor.name})" :placeholder="$t('supplierForm.contentPlaceholder', {name:sampleEditor.name})"></ui-input>
-            </template>
-            <template #footer><ui-button @click="sampleEditor=null">{{ $t('common.close') }}</ui-button></template>
-          </ui-dialog>
+
         </ui-collapse-item>
 
         <!-- 固定字段提取规则 -->
-        <ui-collapse-item name="fixed" class="supplier-section supplier-section--fixed">
+        <ui-collapse-item name="fixed" :id="isDraft ? 'draft-section-fixed' : 'supplier-section-fixed'" class="supplier-section supplier-section--fixed">
           <template #title>
             <div class="supplier-section-head">
-              <strong>{{ $t('supplierForm.fixedTitle') }}</strong>
+              <strong>{{ $t('draftReview.fixedTitle') }}</strong>
               <div class="fixed-field-summary" :aria-label="$t('supplierForm.fixedStatsLabel')">
                 <span class="is-configured">{{ $t('supplierForm.customizedCount', { count: customizedFixedFieldCount }) }}</span>
                 <span class="is-default">{{ $t('supplierForm.defaultCount', { count: defaultFixedFieldCount }) }}</span>
               </div>
             </div>
           </template>
-          <p class="field-hint">{{ $t('supplierForm.fixedHint') }}</p>
+          <p class="field-hint">{{ $t('draftReview.fixedHint') }}</p>
           <div v-if="fixedFields.length" class="fixed-field-workbench">
             <div class="fixed-field-tabs" role="tablist" :aria-label="$t('supplierForm.fixedTabsLabel')">
               <button
@@ -1000,7 +1103,7 @@ const ViewSupplierForm = defineComponent({
                 @keydown.down.prevent="moveFixedFieldSelection(1)"
               >
                 <span class="fixed-field-tab-main">
-                  <span class="fixed-field-tab-name">{{ field.name }}</span>
+                  <span class="fixed-field-tab-name">{{ supplierFieldLabel(field.name) }}</span>
                   <span class="fixed-field-tab-meta">{{ field.required ? $t('supplierForm.required') : (field.isLineField ? $t('supplierForm.lineField') : $t('supplierForm.optional')) }}</span>
                 </span>
                 <span
@@ -1020,7 +1123,7 @@ const ViewSupplierForm = defineComponent({
               <div class="fixed-field-editor-head">
                 <div>
                   <div class="fixed-field-editor-title">
-                    <strong>{{ selectedFixedField.name }}</strong>
+                    <strong>{{ supplierFieldLabel(selectedFixedField.name) }}</strong>
                     <ui-tag size="small" effect="plain">
                       {{ selectedFixedField.required ? $t('supplierForm.requiredField') : (selectedFixedField.isLineField ? $t('supplierForm.lineField') : $t('supplierForm.optionalField')) }}
                     </ui-tag>
@@ -1044,32 +1147,38 @@ const ViewSupplierForm = defineComponent({
                 :rows="7"
                 resize="vertical"
                 :placeholder="selectedFixedField.description"
+                :aria-label="supplierFieldLabel(selectedFixedField.name)"
               ></ui-input>
             </section>
           </div>
         </ui-collapse-item>
 
         <!-- line_array 自定义字段 -->
-        <ui-collapse-item name="custom" class="supplier-section supplier-section--custom">
+        <ui-collapse-item name="custom" :id="isDraft ? 'draft-section-custom' : 'supplier-section-custom'" class="supplier-section supplier-section--custom">
           <template #title>
             <div class="supplier-section-head">
-              <strong>{{ $t('supplierForm.customTitle') }}</strong>
+              <strong>{{ $t('draftReview.lineTitle') }}</strong>
               <div class="supplier-section-actions">
                 <span v-if="lineFields.length" class="muted">{{ $t('supplierForm.fieldCount', { count: lineFields.length }) }}</span>
                 <ui-button size="small" :icon="icons.Plus" @click.stop="addLineField">{{ $t('supplierForm.addField') }}</ui-button>
               </div>
             </div>
           </template>
-          <p class="field-hint">{{ $t('supplierForm.customHint') }}</p>
+          <p class="field-hint">{{ $t('draftReview.lineHint') }}</p>
           <div v-if="!lineFields.length" class="empty-inline">{{ $t('supplierForm.noCustomFields') }}</div>
           <div v-else class="custom-field-list" :aria-label="$t('supplierForm.customListLabel')">
-            <div v-for="(row, index) in lineFields" :key="index" class="extract-field-row">
+            <div v-for="(row, index) in lineFields" :key="index" :id="(isDraft ? 'draft' : 'supplier')+'-line-field-'+index" class="extract-field-row">
+              <strong v-if="row.name.trim()" class="draft-line-field-label">{{ supplierFieldLabel(row.name.trim()) }}</strong>
               <div class="line-field-top">
-                <ui-input v-model="row.name" :placeholder="$t('supplierForm.fieldNamePlaceholder')" style="width: 220px"></ui-input>
-                <ui-checkbox v-model="row.keyword">{{ $t('supplierForm.asKeyword') }}</ui-checkbox>
+                <label class="form-label">{{ $t('draftReview.fieldCode') }}</label>
+                <ui-input v-model="row.name" :aria-label="$t('draftReview.fieldCode')" :placeholder="$t('supplierForm.fieldNamePlaceholder')" style="width: 220px"></ui-input>
+                <ui-checkbox v-model="row.keyword">{{ $t('draftReview.queryUse') }}</ui-checkbox>
                 <ui-action type="danger" @click="removeLineField(index)" icon="Delete" :label="$t('common.delete')"></ui-action>
               </div>
+              <p class="field-hint">{{ $t('draftReview.fieldCodeHint') }}</p>
+              <label class="form-label">{{ $t('draftReview.extractRule') }}</label>
               <ui-input v-model="row.description" type="textarea" :rows="2"
+                        :aria-label="$t('draftReview.extractRule')"
                         :placeholder="$t('supplierForm.fieldDescPlaceholder')"></ui-input>
             </div>
           </div>
@@ -1079,14 +1188,14 @@ const ViewSupplierForm = defineComponent({
         <ui-collapse-item name="topCustom" class="supplier-section supplier-section--custom">
           <template #title>
             <div class="supplier-section-head">
-              <strong>{{ $t('supplierForm.topCustomTitle') }}</strong>
+              <strong>{{ $t('draftReview.otherTitle') }}</strong>
               <div class="supplier-section-actions">
                 <span v-if="topCustomFields.length" class="muted">{{ $t('supplierForm.fieldCount', { count: topCustomFields.length }) }}</span>
                 <ui-button size="small" :icon="icons.Plus" @click.stop="addTopCustomField">{{ $t('supplierForm.addField') }}</ui-button>
               </div>
             </div>
           </template>
-          <p class="field-hint">{{ $t('supplierForm.topCustomHint') }}</p>
+          <p class="field-hint">{{ $t('draftReview.otherHint') }}</p>
           <div v-if="!topCustomFields.length" class="empty-inline">{{ $t('supplierForm.noTopCustomFields') }}</div>
           <div v-else class="custom-field-list" :aria-label="$t('supplierForm.customListLabel')">
             <div v-for="(row, index) in topCustomFields" :key="index" class="extract-field-row">
@@ -1101,21 +1210,22 @@ const ViewSupplierForm = defineComponent({
         </ui-collapse-item>
 
         <!-- 提示词 -->
-        <ui-collapse-item name="prompt" class="supplier-section supplier-section--prompt">
+        <ui-collapse-item name="prompt" :id="isDraft ? 'draft-section-prompt' : 'supplier-section-prompt'" class="supplier-section supplier-section--prompt">
           <template #title>
             <div class="supplier-section-head">
-              <strong>{{ $t('supplierForm.promptTitle') }}</strong>
+              <strong>{{ $t('draftReview.test') }}</strong>
               <div class="supplier-section-actions">
                 <ui-button size="small" :loading="previewing" @click.stop="previewPrompt">{{ $t('supplierForm.previewPrompt') }}</ui-button>
-                <ui-button size="small" type="primary" :loading="extracting" @click.stop="previewExtract">{{ $t('supplierForm.previewExtract') }}</ui-button>
+                <ui-button size="small" type="primary" :loading="extracting" :disabled="loading || samplesRestricted" @click.stop="previewExtract">{{ $t('supplierForm.previewExtract') }}</ui-button>
               </div>
             </div>
           </template>
-          <p class="field-hint">{{ $t('supplierForm.promptHint') }}</p>
+          <p class="field-hint">{{ $t(isDraft ? 'draftReview.testHint' : 'supplierOperator.testHint') }}</p>
           <div class="form-field">
             <label class="form-label">{{ $t('supplierForm.extraInstructionsLabel') }}</label>
             <ui-input v-model="form.extra_instructions" type="textarea" :rows="2"
                       :placeholder="$t('supplierForm.extraInstructionsPlaceholder')"></ui-input>
+            <p class="field-hint">{{ $t('draftReview.extraHint') }}</p>
           </div>
           <div class="form-field">
             <label class="form-label">{{ $t('supplierForm.extractFilesLabel') }}</label>
@@ -1125,7 +1235,8 @@ const ViewSupplierForm = defineComponent({
             </ui-upload>
             <p class="field-hint extract-preview-upload-hint">{{ $t('supplierForm.extractFilesHint') }}</p>
           </div>
-          <div class="form-field">
+          <ui-button class="draft-advanced-toggle" size="small" :aria-expanded="showAdvancedPrompt" @click="showAdvancedPrompt=!showAdvancedPrompt">{{ $t('draftReview.advanced') }}</ui-button>
+          <div v-if="showAdvancedPrompt" class="form-field">
             <label class="form-label">{{ $t('supplierForm.promptPreviewLabel') }}</label>
             <ui-input v-model="promptPreview" type="textarea" :rows="6" readonly
                       :placeholder="$t('supplierForm.promptPreviewPlaceholder')"></ui-input>
@@ -1135,50 +1246,12 @@ const ViewSupplierForm = defineComponent({
             <div v-if="!extractPreview" class="extract-preview-empty">
               {{ $t('supplierForm.extractPreviewEmpty') }}
             </div>
-            <ui-button v-else link type="primary" @click="extractResultVisible = true">
+            <ui-button v-else link type="primary" @click="showAdvanced=false">
               {{ $t('supplierForm.viewLastExtract') }}
             </ui-button>
           </div>
-          <ui-dialog v-model="extractResultVisible" :title="$t('supplierForm.extractResultTitle')" top="8vh"
-                     class="extract-result-dialog" append-to-body>
-            <div class="extract-preview-result">
-              <template v-for="(block, blockIndex) in extractPreviewView.blocks" :key="blockIndex">
-                <div v-if="block.kind === 'classify'" class="extract-preview-classify">
-                  <span class="extract-preview-block-label">{{ $t('supplierForm.classifyResult') }}</span>
-                  <ui-tag type="primary" effect="dark">{{ block.mailType }}</ui-tag>
-                </div>
-                <div v-else-if="block.kind === 'extract'" class="extract-preview-extract">
-                  <div v-for="field in block.fields" :key="field.key" class="extract-preview-field">
-                    <span class="extract-preview-field-label">{{ field.label }}</span>
-                    <div v-if="field.timeRange" class="extract-preview-time-range">
-                      <span class="mono">{{ $t('supplierForm.timeStart', { time: field.timeRange.startTime }) }}</span>
-                      <span class="mono">{{ $t('supplierForm.timeEnd', { time: field.timeRange.endTime }) }}</span>
-                    </div>
-                    <span v-else class="mono extract-preview-field-value">{{ field.value || '-' }}</span>
-                  </div>
-                  <div v-if="block.tags.length" class="extract-preview-field">
-                    <span class="extract-preview-field-label">{{ $t('supplierForm.lineKeywordsLabel') }}</span>
-                    <div class="extract-preview-tags">
-                      <ui-tag v-for="tag in block.tags" :key="tag" size="small" effect="plain">{{ tag }}</ui-tag>
-                    </div>
-                  </div>
-                  <div v-if="block.lines.length" class="extract-preview-lines">
-                    <div class="extract-preview-block-label">{{ $t('supplierForm.affectedLines', { count: block.lines.length }) }}</div>
-                    <ui-table :data="block.lines" size="small" border>
-                      <ui-table-column v-for="col in block.lineColumns" :key="col" :prop="col" :label="col" :min-width="lineColumnWidth(col, block.lines)">
-                        <template #default="{ row }">
-                          <span class="mono">{{ row[col] === '' || row[col] == null ? '-' : row[col] }}</span>
-                        </template>
-                      </ui-table-column>
-                    </ui-table>
-                  </div>
-                </div>
-                <pre v-else class="extract-preview-raw">{{ block.text }}</pre>
-              </template>
-              <pre v-if="extractPreviewView.raw" class="extract-preview-raw">{{ extractPreviewView.raw }}</pre>
-            </div>
-          </ui-dialog>
-          <ui-collapse class="legacy-prompt-collapse">
+
+          <ui-collapse v-if="showAdvancedPrompt || legacyPrompt" class="legacy-prompt-collapse">
             <ui-collapse-item name="legacy">
               <template #title>
                 <span class="muted">{{ $t('supplierForm.legacyTitle') }}</span>
@@ -1189,6 +1262,16 @@ const ViewSupplierForm = defineComponent({
           </ui-collapse>
         </ui-collapse-item>
       </ui-collapse>
+
+      </div>
+          <ui-dialog :model-value="!!sampleEditor" :title="sampleEditor ? $t('supplierForm.fullSampleTitle', {name:sampleEditor.name}) : ''" class="mail-sample-editor-dialog" width="1040px" @close="sampleEditor=null">
+            <template v-if="sampleEditor">
+              <p class="field-hint">{{ $t('supplierForm.fullSampleHint') }}</p>
+              <ui-input v-model="sampleEditor.subject" :aria-label="$t('supplierForm.categorySubjectLabel', {name:sampleEditor.name})" :placeholder="$t('supplierForm.subjectPlaceholder')"></ui-input>
+              <ui-input v-model="sampleEditor.content" type="textarea" :rows="16" :aria-label="$t('supplierForm.categoryContentLabel', {name:sampleEditor.name})" :placeholder="$t('supplierForm.contentPlaceholder', {name:sampleEditor.name})"></ui-input>
+            </template>
+            <template #footer><ui-button @click="sampleEditor=null">{{ $t('common.close') }}</ui-button></template>
+          </ui-dialog>
 
       <ui-dialog v-model="mailTypeDialogVisible" :title="$t('supplierForm.addMailTypeTitle')" width="440px" @opened="mailTypeNameInput?.focus()">
         <form @submit.prevent="addMailType">
@@ -1466,7 +1549,7 @@ const ViewCutoverTasks = defineComponent({
 
     async function loadSupplierOptions() {
       try {
-        const suppliers = await requestJson("/api/suppliers");
+        const suppliers = await requestJson("/api/me/suppliers");
         supplierOptions.value = (suppliers || []).map((supplier) => supplier.name);
       } catch (error) {
         supplierOptions.value = [];
@@ -1602,7 +1685,7 @@ const ViewCutoverTasks = defineComponent({
       items: displayItems, total, loading, readStateBusyIds, deleteBusyIds, filters, statusOptions, tagOptions, supplierOptions, mailboxOptions,
       page, pageSize, showAdvanced, advancedFilterCount, searchTasks, changePageSize,
       loadTasks, resetFilters, openDetail, toggleReadState, deleteEmail, shortText,
-      sceneText, sceneTagType, isRejectedScene, mailboxLabel,
+      sceneText, sceneTagType, isRejectedScene, mailboxLabel, canOperateMailbox,
     };
   },
   template: `
@@ -1688,10 +1771,10 @@ const ViewCutoverTasks = defineComponent({
                 <ui-action class="cutover-read-action" :class="{ 'is-read': row.is_read }"
                            :icon="row.is_read ? 'MessageBox' : 'Message'" :type="row.is_read ? 'default' : 'primary'"
                            :label="row.is_read ? $t('common.markAsUnread') : $t('common.markAsRead')"
-                           :loading="readStateBusyIds.includes(row.id)" :disabled="readStateBusyIds.includes(row.id) || deleteBusyIds.includes(row.id)"
+                           :loading="readStateBusyIds.includes(row.id)" :disabled="!canOperateMailbox(row.receiver) || readStateBusyIds.includes(row.id) || deleteBusyIds.includes(row.id)"
                            @click.stop="toggleReadState(row)"></ui-action>
                 <ui-action icon="Delete" type="danger" class="cutover-delete-action" :label="$t('cutover.delete.rowAction')"
-                           :loading="deleteBusyIds.includes(row.id)" :disabled="deleteBusyIds.includes(row.id) || readStateBusyIds.includes(row.id)"
+                           :loading="deleteBusyIds.includes(row.id)" :disabled="!canOperateMailbox(row.receiver) || deleteBusyIds.includes(row.id) || readStateBusyIds.includes(row.id)"
                            @click.stop="deleteEmail(row)"></ui-action>
               </div>
             </template>
@@ -1861,11 +1944,19 @@ const TaskDetailPanel = defineComponent({
   components: { ReportScreenshotGallery },
   props: {
     task: { type: Object, required: true },
+    operatorMode: Boolean,
+    historyOnly: Boolean,
   },
-  emits: ["changed", "collapse"],
+  emits: ["changed", "collapse", "dirty-change"],
   setup(props, { emit }) {
     const localTask = ref(props.task);
     const busy = ref(false);
+    const fillExpanded = ref(false);
+    const formSnapshot = ref('');
+    const formState = () => JSON.stringify({type: localTask.value.line_type,
+      circuits: collectRows(circuitRows.value, circuitColumns.value), reasons: collectRows(reasonRows.value, reasonColumns.value),
+      backbone: collectBackboneCircuits()});
+    const formDirty = computed(() => !!formSnapshot.value && formState() !== formSnapshot.value);
     const reportImageUrls = reactive({});
     const reportProgressVisible = ref(false);
     const activeReport = ref(null);
@@ -1879,6 +1970,20 @@ const TaskDetailPanel = defineComponent({
     const isBackbone = computed(() => localTask.value.line_type === "backbone");
     const fill = computed(() => localTask.value.fill_result || {});
     const validationMessages = computed(() => fill.value.validation_messages || []);
+    const reportSummary = computed(() => {
+      const text = value => Array.isArray(value) ? value.join('、') : value == null || value === '' ? '—' : String(value);
+      if (isBackbone.value) return (fill.value.backbone_circuits || []).map(card => {
+        const target = card['割接对象'] || {}, basic = card['基本信息'] || {};
+        return {name:text(target['系统名称']), window:[target['割接开始时间'],target['割接结束时间']].map(text).join(' — '),
+          impact:[basic['中断类型'],basic['中断时间 (分钟)'] != null ? basic['中断时间 (分钟)']+' min' : ''].filter(Boolean).join(' · ') || '—',
+          reason:text(card['其他']?.['割接原因'])};
+      });
+      return (fill.value.circuits || []).map(row => {
+        const reason = (fill.value.reasons || []).find(item => item['割接线路/设备名称'] === row['电路代号']);
+        return {name:text(row['电路代号']), window:text(row['割接时间']),
+          impact:text(row['预计影响客户业务时长']), reason:text(reason?.['割接原因'])};
+      });
+    });
 
     // ---------- 客户线路可编辑表格 ----------
     const circuitColumns = ref([]);
@@ -2155,9 +2260,11 @@ const TaskDetailPanel = defineComponent({
         reasonColumns.value = orderSheetColumns("reason", reasons.length ? Object.keys(reasons[0]) : (template.reason || []));
         reasonRows.value = reasons.map((row) => normalizeRow(row, reasonColumns.value));
       }
+      formSnapshot.value = formState();
       resumeReportProgress(task);
     }
 
+    watch(formDirty, value => emit('dirty-change', value));
     watch(() => props.task, (task) => {
       if (task) {
         initFromTask(task);
@@ -2214,6 +2321,13 @@ const TaskDetailPanel = defineComponent({
       if (localTask.value.line_type === targetType) {
         return;
       }
+      if (formDirty.value) {
+        try {
+          await NocDialog.confirm(tt('cw.discardTask'), tt('cw.fillDetails'), {
+            confirmButtonText: tt('cw.discard'), cancelButtonText: tt('common.cancel'), type: 'warning',
+          });
+        } catch { return; }
+      }
       const payload = await runAction(() => (
         requestFull(`/api/cutover/tasks/${localTask.value.id}/switch-type`, {
           method: "POST",
@@ -2226,6 +2340,7 @@ const TaskDetailPanel = defineComponent({
     }
 
     async function confirmTask() {
+      if (formDirty.value) { NocMessage.warning(tt('cw.editsUnsaved')); return; }
       const payload = await runAction(() => (
         requestFull(`/api/cutover/tasks/${localTask.value.id}/confirm`, {
           method: "POST",
@@ -2295,6 +2410,7 @@ const TaskDetailPanel = defineComponent({
       } catch (error) {
         reportProgressError.value = error.message || tt("cutover.task.reportPollingError");
       }
+      await refreshPortalStatus();
       if (report.result && report.result.error_code === "RPA_SESSION_REQUIRED") {
         NocMessage.warning(report.result.error || tt("dispatchSession.reportBlocked"));
         navigateTo("dispatchSession");
@@ -2339,6 +2455,14 @@ const TaskDetailPanel = defineComponent({
     }
 
     async function reportTask() {
+      if (formDirty.value) { NocMessage.warning(tt('cw.editsUnsaved')); return; }
+      if (appStore.user?.is_admin) return;
+      await refreshPortalStatus();
+      if (!appStore.portalStatus?.authenticated) {
+        NocMessage.warning('请先确认当前环境的个人综调账号已登录');
+        navigateTo('dispatchSession');
+        return;
+      }
       let sessionError = null;
       const payload = await runAction(async () => {
         try {
@@ -2346,6 +2470,7 @@ const TaskDetailPanel = defineComponent({
             method: "POST",
             body: JSON.stringify({
               environment: appStore.portalEnvironment || undefined,
+              session_version: appStore.portalStatus.session_version,
             }),
           });
         } catch (error) {
@@ -2383,6 +2508,22 @@ const TaskDetailPanel = defineComponent({
       NocMessage.success(payload.message || tt("cutover.task.reportSubmitted"));
       setStatus(payload.message || tt("cutover.task.reportSubmitted"));
       startReportPolling(report.id);
+      // The durable job now owns this account; checking returns its execution state.
+      refreshPortalStatus();
+    }
+
+    async function resolveReport(report, resolution) {
+      try {
+        await NocDialog.confirm('请先在综调系统核对实际提交结果。此操作只修正本地记录；标记失败后将允许重新上报。', '人工核对上报结果', {type: 'warning'});
+      } catch { return; }
+      await runAction(async () => {
+        await requestFull(`/api/cutover/reports/${report.id}/resolve`, {method: 'POST', body: JSON.stringify({
+          resolution, note: resolution === 'success' ? '已在综调确认提交成功' : '已在综调确认未提交成功，可重新上报'})});
+        const task = await requestJson(`/api/cutover/tasks/${localTask.value.id}`);
+        await initFromTask(task);
+        emit('changed', task);
+        await refreshPortalStatus();
+      });
     }
 
     function downloadExcel() {
@@ -2390,11 +2531,12 @@ const TaskDetailPanel = defineComponent({
     }
 
     // 按钮禁用规则与旧版一致
-    const saveDisabled = computed(() => busy.value || localTask.value.status === "reporting");
-    const confirmDisabled = computed(() => busy.value || localTask.value.status !== "draft");
+    const canOperate = computed(() => canOperateMailbox(localTask.value.email?.receiver));
+    const saveDisabled = computed(() => !canOperate.value || busy.value || localTask.value.status === "reporting");
+    const confirmDisabled = computed(() => !canOperate.value || busy.value || localTask.value.status !== "draft" || formDirty.value);
     const reportDisabled = computed(() => {
       const status = localTask.value.status;
-      return busy.value || !(status === "confirmed" || status === "report_failed");
+      return appStore.user?.is_admin || !canOperate.value || busy.value || formDirty.value || !(status === "confirmed" || status === "report_failed");
     });
     const excelDisabled = computed(() => !localTask.value.customer_excel_filename);
     function clearReportImageUrls() {
@@ -2446,7 +2588,7 @@ const TaskDetailPanel = defineComponent({
     });
 
     return {
-      localTask, busy, isBackbone, fill, validationMessages,
+      localTask, busy, fillExpanded, formDirty, isBackbone, fill, validationMessages, reportSummary, appStore, canOperate,
       circuitColumns, circuitRows, reasonColumns, reasonRows,
       addSheetRow, removeSheetRow, customerEnumOptions, customerColumnClass,
       backboneCards, backboneActive, addBackboneCard, removeBackboneCard,
@@ -2454,7 +2596,7 @@ const TaskDetailPanel = defineComponent({
       orderedBackboneSections, orderedBackboneFields, controlKind, isWideField,
       isBackboneSystemField, isBackboneConfirmationField, backboneEnumOptions,
       handleBackboneEnumChange,
-      saveEdit, switchType, confirmTask, reportTask, downloadExcel,
+      saveEdit, switchType, confirmTask, reportTask, downloadExcel, resolveReport,
       saveDisabled, confirmDisabled, reportDisabled, excelDisabled,
       reportImageUrls, reportImageLoadingKeys, reportProgressVisible, activeReport, activeReportSteps,
       activeReportInProgress, reportProgressError, reportStatusType, reportStatusText,
@@ -2463,7 +2605,7 @@ const TaskDetailPanel = defineComponent({
     };
   },
   template: `
-    <div class="task-detail-panel">
+    <div class="task-detail-panel" :class="{'cw-task-detail':operatorMode}">
       <div class="panel-heading">
         <div>
           <p class="eyebrow">Cutover Task</p>
@@ -2519,7 +2661,7 @@ const TaskDetailPanel = defineComponent({
         </div>
       </ui-drawer>
 
-      <div class="task-meta-grid">
+      <div v-show="!historyOnly" class="task-meta-grid">
         <div class="task-meta-item">
           <span>{{ $t('common.status') }}</span>
           <ui-tag :type="statusTagType(localTask.status)" effect="dark">
@@ -2560,10 +2702,18 @@ const TaskDetailPanel = defineComponent({
         </div>
       </div>
 
+      <div v-if="operatorMode && !historyOnly" class="cw-report-summary">
+        <h3>{{ $t('cw.savedReport') }}</h3>
+        <div class="cw-report-table"><table><thead><tr><th>{{ $t('cw.internalLine') }}</th><th>{{ $t('cutover.task.cutoverWindow') }}</th><th>{{ $t('cw.impact') }}</th><th>{{ $t('cw.reason') }}</th></tr></thead><tbody><tr v-for="(row,index) in reportSummary" :key="index"><td>{{ row.name }}</td><td>{{ row.window }}</td><td>{{ row.impact }}</td><td>{{ row.reason }}</td></tr></tbody></table></div>
+        <p v-if="!reportSummary.length" class="cw-hint">{{ $t('cw.noReportLines') }}</p>
+      </div>
+
+      <div v-if="operatorMode && !historyOnly" class="cw-task-controls"><ui-button @click="fillExpanded=!fillExpanded" :aria-expanded="fillExpanded">{{ $t('cw.fillDetails') }} {{ fillExpanded ? '−' : '+' }}</ui-button><span v-if="validationMessages.length" class="warn-text">{{ $t('cutover.task.validationTitle',{count:validationMessages.length}) }}</span><span v-if="formDirty" class="warn-text">{{ $t('cw.editsUnsaved') }}</span></div>
+      <div v-show="!historyOnly && (!operatorMode || fillExpanded)" class="cw-full-form">
       <div class="task-type-switch">
         <span class="muted">{{ $t('cutover.task.fillTypeLabel') }}</span>
         <ui-radio-group class="task-type-options" role="radiogroup" :name="'cutover-line-type-' + localTask.id"
-                        :aria-label="$t('cutover.task.fillTypeLabel')" :model-value="localTask.line_type" :disabled="localTask.status === 'reporting'"
+                        :aria-label="$t('cutover.task.fillTypeLabel')" :model-value="localTask.line_type" :disabled="!canOperate || localTask.status === 'reporting'"
                         @change="switchType">
           <ui-radio-button value="customer"><span class="task-type-label"><ui-icon aria-hidden="true"><component :is="icons.Check"></component></ui-icon>{{ $t('cutover.task.fillCustomer') }}</span></ui-radio-button>
           <ui-radio-button value="backbone"><span class="task-type-label"><ui-icon aria-hidden="true"><component :is="icons.Check"></component></ui-icon>{{ $t('cutover.task.fillBackbone') }}</span></ui-radio-button>
@@ -2730,6 +2880,7 @@ const TaskDetailPanel = defineComponent({
         </div>
       </div>
 
+      </div>
       <!-- 上报记录 -->
       <div class="block-section">
         <div class="block-head">
@@ -2751,6 +2902,10 @@ const TaskDetailPanel = defineComponent({
                   <strong class="mono">{{ row.result.portal_task_number }}</strong>
                 </div>
                 <p v-if="row.result && row.result.error" class="report-error">{{ row.result.error }}</p>
+                <div v-if="canOperate && ['pending', 'running', 'interrupted'].includes(row.status)">
+                  <ui-button size="small" @click="resolveReport(row, 'success')">核对后标记成功</ui-button>
+                  <ui-button size="small" @click="resolveReport(row, 'failed')">核对后标记失败</ui-button>
+                </div>
                 <report-screenshot-gallery v-if="row.result && row.result.operation_log && row.result.operation_log.length"
                                            :report-id="row.id" :steps="row.result.operation_log"
                                            :image-urls="reportImageUrls" :loading-keys="reportImageLoadingKeys"/>
@@ -2765,7 +2920,7 @@ const TaskDetailPanel = defineComponent({
           </ui-table-column>
           <ui-table-column :label="$t('common.type')" width="100">
             <template #default="{ row }">
-              <span>{{ row.report_type || 'all' }}</span>
+              <span>{{ lineTypeText({line_type: row.report_type}) }}</span>
             </template>
           </ui-table-column>
           <ui-table-column :label="$t('common.status')" width="120">
@@ -2777,7 +2932,15 @@ const TaskDetailPanel = defineComponent({
           </ui-table-column>
           <ui-table-column :label="$t('cutover.task.reportNote')" min-width="260">
             <template #default="{ row }">
-              <span class="muted">
+              <div v-if="row.result?.execution_identity" class="report-identity">
+                <span class="report-environment" :class="{'is-production': row.result.execution_identity.environment === 'production'}">
+                  {{ row.result.execution_identity.environment === 'production' ? '生产环境' : '测试环境' }}
+                </span>
+                <span class="report-account"><span>综调账号</span><strong>{{ row.result.execution_identity.username || '未记录' }}</strong></span>
+                <span class="report-account"><span>工作台用户</span><strong>{{ row.result.execution_identity.workbench_username || '未记录' }}</strong></span>
+              </div>
+              <div v-else class="muted">历史记录 · 未记录执行账号</div>
+              <span class="muted report-result-note">
                 {{ (row.result && (row.result.note || row.result.error || row.result.portal_task_number)) || '-' }}
               </span>
             </template>
@@ -2790,10 +2953,11 @@ const TaskDetailPanel = defineComponent({
         </ui-table>
       </div>
 
-      <div class="panel-actions">
+      <div v-show="!historyOnly" class="panel-actions">
         <ui-button v-if="!isBackbone" :disabled="excelDisabled" @click="downloadExcel">{{ $t('cutover.task.downloadExcel') }}</ui-button>
         <ui-button :disabled="saveDisabled" @click="saveEdit">{{ $t('cutover.task.saveEdit') }}</ui-button>
         <ui-button :disabled="confirmDisabled" @click="confirmTask">{{ $t('cutover.task.manualConfirm') }}</ui-button>
+        <span v-if="appStore.user?.is_admin" class="muted report-permission-hint">综调上报请使用普通用户账号</span>
         <ui-button type="primary" :disabled="reportDisabled" @click="reportTask">{{ $t('cutover.task.reportSubmit') }}</ui-button>
       </div>
     </div>
@@ -2803,6 +2967,7 @@ const TaskDetailPanel = defineComponent({
 // ==================== 割接邮件详情页 ====================
 const ViewCutoverEmailDetail = defineComponent({
   name: "ViewCutoverEmailDetail",
+  components: {MailAttachmentList, MailAttachmentPreview},
   props: {
     emailRecordId: { type: Number, required: true },
   },
@@ -2829,6 +2994,15 @@ const ViewCutoverEmailDetail = defineComponent({
     const manualBindings = reactive({});
     const manualBindingTypes = reactive({});
     const editingLineBindings = reactive({});
+    const workbench = useCutoverWorkbench({email, extractionDraft, savedExtractionDraft, extractionBusy,
+      replyBusy, apiForwardBusy, deleteBusy, saveExtraction});
+    const requestedTaskId = ref(null);
+    const taskFormDirty = ref(false);
+    let taskRequest = 0;
+    let detailRequest = 0;
+    let replySnapshot = '';
+    const replySignature = () => JSON.stringify([replyDraft.value, replyRecipients.value, replyCcRecipients.value]);
+    onUnmounted(() => { taskRequest++; detailRequest++; });
     const extractionDirty = computed(() => {
       try {
         return JSON.stringify(JSON.parse(extractionDraft.value)) !== JSON.stringify(JSON.parse(savedExtractionDraft.value));
@@ -2897,11 +3071,11 @@ const ViewCutoverEmailDetail = defineComponent({
     }
 
     async function saveExtraction(generate = false) {
-      if (extractionBusy.value) return;
+      if (!workbench.canEditMail.value) return false;
       extractionBusy.value = true;
       try {
         const payload = extractionPayload();
-        if (generate && !(await confirmTaskRegeneration())) return;
+        if (generate && !(await confirmTaskRegeneration())) return false;
         const saved = await requestJson(`/api/cutover/emails/${props.emailRecordId}/extraction`, {
           method: "PUT", body: JSON.stringify(payload),
         });
@@ -2919,14 +3093,18 @@ const ViewCutoverEmailDetail = defineComponent({
         savedExtractionDraft.value = extractionDraft.value;
         if (generate) {
           const result = await requestJson("/api/cutover/tasks/generate", {method: "POST", body: JSON.stringify(saved.fill_payload)});
+          closeTask();
           await loadDetail();
           if (!result.tasks?.length) {
             throw new Error((result.validation_messages || []).map((item) => item.message).join("；") || result.msg);
           }
         }
+        workbench.tasksStale.value = !generate && !!email.value?.tasks?.length;
         NocMessage.success(tt(generate ? "cutover.detail.tasksGenerated" : "cutover.detail.extractionSaved"));
+        return true;
       } catch (error) {
         NocMessage.error(error.message);
+        return false;
       } finally {
         extractionBusy.value = false;
       }
@@ -2946,7 +3124,8 @@ const ViewCutoverEmailDetail = defineComponent({
     }
 
     async function bindLine(lineIndex) {
-      if (extractionBusy.value) return;
+      if (!workbench.canEditMail.value) return;
+      if (extractionDirty.value) { NocMessage.warning(tt('cw.editsUnsaved')); return; }
       extractionBusy.value = true;
       try {
         const saved = await requestJson(`/api/cutover/emails/${props.emailRecordId}/line-bindings`, {
@@ -2955,6 +3134,8 @@ const ViewCutoverEmailDetail = defineComponent({
         });
         email.value.line_table = saved.line_table;
         email.value.fill_payload = saved.fill_payload;
+        editingLineBindings[lineIndex] = false;
+        workbench.tasksStale.value = !!email.value.tasks?.length;
         NocMessage.success(tt("cutover.detail.bindingSaved"));
       } catch (error) {
         NocMessage.error(error.message);
@@ -2964,7 +3145,7 @@ const ViewCutoverEmailDetail = defineComponent({
     }
 
     async function regenerateTasks() {
-      if (extractionBusy.value) return;
+      if (!workbench.canEditMail.value) return;
       if (extractionDirty.value || unsavedLineBindings.value) {
         NocMessage.warning(tt("cutover.detail.unsavedGenerationInputs"));
         return;
@@ -2975,10 +3156,12 @@ const ViewCutoverEmailDetail = defineComponent({
         const result = await requestJson("/api/cutover/tasks/generate", {
           method: "POST", body: JSON.stringify({...email.value.fill_payload, email_records_id: props.emailRecordId}),
         });
+        closeTask();
         await loadDetail();
         if (!result.tasks?.length) {
           throw new Error((result.validation_messages || []).map((item) => item.message).join("；") || result.msg);
         }
+        workbench.tasksStale.value = false;
         NocMessage.success(tt("cutover.detail.tasksGenerated"));
       } catch (error) {
         NocMessage.error(error.message);
@@ -3008,11 +3191,15 @@ const ViewCutoverEmailDetail = defineComponent({
     });
 
     async function loadDetail() {
+      const request = ++detailRequest;
+      const recordId = props.emailRecordId;
+      const preserveReply = email.value?.id === recordId && replySnapshot && replySignature() !== replySnapshot;
       loading.value = true;
-      expandedKeys.value = [];
-      detailTask.value = null;
       try {
-        email.value = await requestJson(`/api/cutover/emails/${props.emailRecordId}`);
+        const record = await requestJson(`/api/cutover/emails/${recordId}`);
+        if (request !== detailRequest) return;
+        if (email.value?.id !== recordId || !record.tasks?.some(task=>task.id===detailTask.value?.id)) closeTask();
+        email.value = record;
         if (email.value.processing_origin === 'unconfigured') contentCollapsed.value = ['content'];
         const extracted = Object.assign({}, ...extractJsonObjects(email.value.extract_result || ""));
         const saved = email.value.fill_payload || {};
@@ -3026,22 +3213,27 @@ const ViewCutoverEmailDetail = defineComponent({
           manualBindings[index] = entry.line.bound_circuit_id || "";
           manualBindingTypes[index] = entry.line.bound_line_type || entry.circuits?.[0]?.line_type || "客户";
         });
-        replyDraft.value = (email.value && email.value.pending_reply_content) || "";
-        replyRecipients.value = recipientOptions.value.slice(0, 1);
-        replyCcRecipients.value = (email.value.reply_cc_recipients || []).slice();
+        if (!preserveReply || record.reply_status !== 'pending') {
+          replyDraft.value = (email.value && email.value.pending_reply_content) || "";
+          replyRecipients.value = recipientOptions.value.slice(0, 1);
+          replyCcRecipients.value = (email.value.reply_cc_recipients || []).slice();
+          replySnapshot = replySignature();
+        }
       } catch (error) {
+        if (request !== detailRequest) return;
         email.value = null;
         replyDraft.value = "";
         replyRecipients.value = [];
         replyCcRecipients.value = [];
         setStatus(error.message, "error");
       } finally {
-        loading.value = false;
+        if (request === detailRequest) loading.value = false;
       }
     }
 
     // 人工确认发送待确认回复（发送前二次确认，内容与收件人可在页面上修改）
     async function confirmReply() {
+      if (!workbench.canReply.value || email.value.reply_status !== 'pending') return;
       if (!replyDraft.value.trim()) {
         NocMessage.error(tt("cutover.detail.replyContentRequired"));
         return;
@@ -3102,6 +3294,7 @@ const ViewCutoverEmailDetail = defineComponent({
 
     // 放弃待确认回复（不发送，不写入割接场景）
     async function cancelReply() {
+      if (!workbench.canReply.value || email.value.reply_status !== 'pending') return;
       try {
         await NocDialog.confirm(
           tt("cutover.detail.replyCancelMessage"),
@@ -3226,20 +3419,52 @@ const ViewCutoverEmailDetail = defineComponent({
     });
 
     // ---------- 任务展开行（单例面板，变更后仅局部更新对应行） ----------
-    async function openTask(taskId) {
+    async function openTask(taskId, tab = 'report') {
+      if (!email.value?.tasks?.some(task=>task.id===taskId)) return;
+      if (detailTask.value?.id !== taskId && !(await confirmLeaveTask())) return;
+      workbench.activeTab.value = tab;
+      if (detailTask.value?.id === taskId) return;
+      const request = ++taskRequest;
+      requestedTaskId.value = taskId;
+      workbench.taskLoading.value = true;
+      workbench.taskError.value = '';
       try {
-        detailTask.value = await requestJson(`/api/cutover/tasks/${taskId}`);
+        const task = await requestJson(`/api/cutover/tasks/${taskId}`);
+        if (request !== taskRequest) return;
+        taskFormDirty.value = false;
+        detailTask.value = task;
         expandedKeys.value = [taskId];
       } catch (error) {
+        if (request !== taskRequest) return;
         detailTask.value = null;
         expandedKeys.value = [];
+        workbench.taskError.value = error.message || tt('cw.taskLoadFailed');
         setStatus(error.message, "error");
+      } finally {
+        if (request === taskRequest) workbench.taskLoading.value = false;
       }
     }
 
     function closeTask() {
+      taskRequest++;
+      taskFormDirty.value = false;
+      workbench.taskLoading.value = false;
+      workbench.taskError.value = '';
       expandedKeys.value = [];
       detailTask.value = null;
+    }
+
+    async function confirmLeaveTask() {
+      if (!taskFormDirty.value) return true;
+      try {
+        await NocDialog.confirm(tt('cw.discardTask'), tt('cw.fillDetails'), {
+          confirmButtonText: tt('cw.discard'), cancelButtonText: tt('common.cancel'), type: 'warning',
+        });
+        return true;
+      } catch { return false; }
+    }
+    async function requestCloseTask() {
+      if (await confirmLeaveTask()) closeTask();
     }
 
     function toggleTask(task) {
@@ -3271,7 +3496,8 @@ const ViewCutoverEmailDetail = defineComponent({
     }
 
     return {
-      email, loading, contentCollapsed, contentFrame, expandedKeys, detailTask,
+      ...workbench, requestedTaskId, openTask, taskFormDirty, requestCloseTask,
+      email, loading, contentCollapsed, contentFrame, expandedKeys, detailTask, canOperateMailbox,
       replyDraft, replyRecipients, replyBusy, recipientOptions, replyCcRecipients, confirmReply, cancelReply,
       apiForwardBusy, retryApiForward,
       readStateBusy, toggleReadState, deleteBusy, deleteEmail,
@@ -3280,342 +3506,7 @@ const ViewCutoverEmailDetail = defineComponent({
       statusTagType, statusText, mailboxLabel,
     };
   },
-  template: `
-    <div class="view-body" :class="{'unconfigured-detail-grid':email?.processing_origin === 'unconfigured'}" v-loading="loading">
-      <header class="supplier-context-bar">
-        <span v-if="email" class="supplier-context-detail">{{ email.subject || $t('cutover.detail.emailFallback', { id: email.email_id || email.id }) }}</span>
-        <ui-button v-if="email" type="danger" plain class="cutover-email-delete-action"
-                   :loading="deleteBusy" :disabled="deleteBusy || loading || replyBusy || extractionBusy || apiForwardBusy || readStateBusy"
-                   @click="deleteEmail">{{ $t('cutover.delete.detailAction') }}</ui-button>
-      </header>
-
-      <p v-if="!loading && !email" class="empty-inline">{{ $t('common.loadFailedBack') }}</p>
-
-      <template v-if="email">
-        <!-- 邮件 meta -->
-        <div class="task-meta-grid">
-          <div class="task-meta-item">
-            <span>{{ $t('cutover.detail.emailUid') }}</span>
-            <strong class="mono">{{ email.email_id || '-' }}</strong>
-          </div>
-          <div class="task-meta-item">
-            <span>{{ $t('common.sender') }}</span>
-            <strong>{{ email.sender || '-' }}</strong>
-          </div>
-          <div class="task-meta-item">
-            <span>{{ $t('common.receiverMailbox') }}</span>
-            <strong :title="email.receiver || ''">{{ mailboxLabel(email.receiver) }}</strong>
-          </div>
-          <div class="task-meta-item task-meta-item--timestamp">
-            <span>{{ $t('common.receiveTime') }}</span>
-            <strong class="mono" :title="email.create_time">{{ String(email.create_time || '—').replace('T', ' ').slice(0, 19) }}</strong>
-          </div>
-          <div class="task-meta-item">
-            <span>{{ $t('common.readState') }}</span>
-            <div class="mail-read-state-control" :class="email.is_read ? 'is-read' : 'is-unread'"
-                 role="status" aria-live="polite" :aria-busy="readStateBusy">
-              <span class="read-state-indicator">
-                <span class="read-state-dot" aria-hidden="true"></span>
-                <span class="read-state-text">{{ email.is_read ? $t('common.read') : $t('common.unread') }}</span>
-              </span>
-              <ui-button class="read-state-toggle" link :loading="readStateBusy"
-                         :disabled="readStateBusy || deleteBusy"
-                         @click="toggleReadState">
-                {{ email.is_read ? $t('common.markAsUnread') : $t('common.markAsRead') }}
-              </ui-button>
-            </div>
-          </div>
-        </div>
-
-        <mail-analysis-panel :record="email" @changed="loadDetail"></mail-analysis-panel>
-        <div v-if="email.processing_origin !== 'unconfigured'" class="api-forward-card"
-             :class="'api-forward-' + (apiForwardBusy ? 'forwarding' : (email.api_forward.status || 'not_recorded'))"
-             role="status" aria-live="polite" :aria-busy="apiForwardBusy">
-          <div class="api-forward-main">
-            <div class="api-forward-head">
-              <strong>{{ $t('cutover.detail.apiForwardTitle') }}</strong>
-              <ui-tag :type="apiForwardBusy ? 'warning' : (email.api_forward.status === 'succeeded' ? 'success' : (email.api_forward.status === 'failed' ? 'danger' : (email.api_forward.status === 'forwarding' ? 'warning' : 'info')))"
-                      size="small" effect="plain">
-                {{ $t('cutover.detail.apiForwardStatus.' + (apiForwardBusy ? 'forwarding' : (email.api_forward.status || 'not_recorded'))) }}
-              </ui-tag>
-              <span v-if="email.api_forward.updated_at" class="mono muted">
-                {{ $t('cutover.detail.apiForwardTime', { time: email.api_forward.updated_at }) }}
-              </span>
-            </div>
-            <p v-if="email.api_forward.error && !apiForwardBusy" class="api-forward-error" role="alert">
-              <span>{{ $t('cutover.detail.apiForwardReason') }}</span>
-              {{ email.api_forward.error }}
-            </p>
-          </div>
-          <ui-button v-if="email.api_forward.status === 'failed'" type="primary"
-                     :loading="apiForwardBusy" :disabled="apiForwardBusy"
-                     @click="retryApiForward">
-            {{ $t('cutover.detail.apiForwardRetry') }}
-          </ui-button>
-        </div>
-
-        <!-- 待确认回复（FastGPT 登记草稿，人工确认后才发送） -->
-        <div v-if="email.reply_status === 'pending'" class="reply-pending-card">
-          <div class="reply-pending-head">
-            <ui-tag type="warning" effect="dark" size="small">{{ $t('cutover.detail.replyPendingTitle') }}</ui-tag>
-            <ui-tag v-if="isRejectedScene(email.pending_reply_scene)"
-                    :type="sceneTagType(email.pending_reply_scene)" effect="plain" size="small">
-              {{ sceneText(email.pending_reply_scene, email.pending_reply_scene_label) }}
-            </ui-tag>
-            <span class="muted">{{ $t('cutover.detail.replyPendingHint') }}</span>
-          </div>
-          <div class="reply-recipients">
-            <span class="reply-recipients-label">
-              <ui-icon class="reply-recipients-icon"><Promotion /></ui-icon>
-              {{ $t('cutover.detail.replyRecipient') }}
-            </span>
-            <ui-select v-model="replyRecipients" multiple filterable allow-create default-first-option
-                       :placeholder="$t('cutover.detail.replyRecipientPlaceholder')" class="reply-recipients-select">
-              <ui-option v-for="addr in recipientOptions" :key="addr" :label="addr" :value="addr"></ui-option>
-            </ui-select>
-          </div>
-          <div class="reply-recipients">
-            <span class="reply-recipients-label">{{ $t('cutover.detail.replyCc') }}</span>
-            <ui-select v-model="replyCcRecipients" multiple filterable allow-create clearable default-first-option
-                       :placeholder="$t('cutover.detail.replyCcPlaceholder')" class="reply-recipients-select">
-              <ui-option v-for="addr in replyCcRecipients" :key="addr" :label="addr" :value="addr"></ui-option>
-            </ui-select>
-          </div>
-          <ui-input v-model="replyDraft" type="textarea" :rows="4"
-                    :placeholder="$t('cutover.detail.replyContentLabel')"></ui-input>
-          <div class="reply-pending-actions">
-            <ui-button :disabled="replyBusy" @click="cancelReply">{{ $t('cutover.detail.replyCancel') }}</ui-button>
-            <ui-button type="primary" :loading="replyBusy" :disabled="!replyDraft.trim()" @click="confirmReply">
-              {{ $t('cutover.detail.replyConfirmSend') }}
-            </ui-button>
-          </div>
-        </div>
-
-        <!-- 割接场景提示（已回复拒绝割接时展示） -->
-        <div v-if="email.processing_origin !== 'unconfigured' && isRejectedScene(email.cutover_scene)"
-             class="scene-notice" :class="'scene-' + email.cutover_scene">
-          <ui-tag :type="sceneTagType(email.cutover_scene)" effect="dark" size="small">
-            {{ sceneText(email.cutover_scene, email.cutover_scene_label) }}
-          </ui-tag>
-          <span v-if="email.cutover_scene === 'emergency'">{{ $t('cutover.detail.sceneNoticeEmergency') }}</span>
-          <span v-else-if="email.cutover_scene === 'major_event'">{{ $t('cutover.detail.sceneNoticeMajorEvent') }}</span>
-          <span v-else-if="email.cutover_scene === 'in_window'">{{ $t('cutover.detail.sceneNoticeInWindow') }}</span>
-          <span v-else-if="email.cutover_scene === 'rule_skipped'">{{ email.cutover_scene_remark || $t('cutover.detail.sceneNoticeRuleSkipped') }}</span>
-          <span v-if="email.reply_time" class="mono muted">{{ email.reply_time }}</span>
-        </div>
-
-        <!-- 重复邮件提示 -->
-        <div v-if="email.is_duplicate" class="scene-notice scene-duplicate">
-          <ui-tag type="info" effect="plain" size="small">{{ $t('cutover.tag.duplicate') }}</ui-tag>
-          <span>{{ $t('cutover.detail.duplicateNotice') }}</span>
-        </div>
-
-        <!-- 附件 -->
-        <div v-if="(email.attachment_urls || []).length" class="attachment-list detail-attachments">
-          <a v-for="(url, index) in email.attachment_urls" :key="url" :href="url"
-             target="_blank" rel="noopener noreferrer">{{ $t('common.attachment', { index: index + 1 }) }}</a>
-        </div>
-
-        <!-- 邮件内容（默认收起） -->
-        <ui-collapse v-model="contentCollapsed" class="email-content-collapse">
-          <ui-collapse-item :title="$t('cutover.detail.emailContent')" name="content">
-            <div class="email-content-body">
-              <iframe v-if="email.html_content" ref="contentFrame" class="email-html-frame" sandbox="allow-same-origin"
-                      :srcdoc="email.html_content" @load="onIframeLoad"></iframe>
-              <pre v-else class="email-content-block">{{ email.content || $t('cutover.detail.noContent') }}</pre>
-            </div>
-          </ui-collapse-item>
-          <ui-collapse-item v-if="email.processing_origin !== 'unconfigured'" :title="$t('cutover.detail.extractResult')" name="extract">
-            <div class="extraction-panel">
-              <div class="extraction-toolbar">
-                <span class="extraction-format-label">JSON</span>
-                <span>{{ $t('cutover.detail.extractionEditorHint') }}</span>
-                <span v-if="email.supplier_name" class="muted">{{ $t('common.supplier') }}：{{ email.supplier_name }}</span>
-              </div>
-              <ui-input v-model="extractionDraft" type="textarea" :rows="16" :disabled="extractionBusy"
-                        :aria-label="$t('cutover.detail.extractResult')" class="extraction-editor" spellcheck="false"></ui-input>
-              <div class="extraction-footer">
-                <p class="extraction-footer-note">{{ $t('cutover.detail.extractionSaveHint') }}</p>
-                <div class="extraction-actions">
-                  <ui-button :loading="extractionBusy" @click="saveExtraction()">{{ $t('cutover.detail.saveRematch') }}</ui-button>
-                  <ui-button type="primary" :loading="extractionBusy" @click="saveExtraction(true)">{{ $t('cutover.detail.generateTasks') }}</ui-button>
-                </div>
-              </div>
-            </div>
-          </ui-collapse-item>
-        </ui-collapse>
-
-        <!-- 线路表匹配结果 -->
-        <div v-if="email.processing_origin !== 'unconfigured'" class="block-section">
-          <div class="block-head">
-            <span>{{ $t('cutover.detail.lineTableTitle') }}</span>
-            <span v-if="email.line_table && email.line_table.supplier" class="muted">
-              {{ $t('cutover.detail.supplierPrefix', { name: email.line_table.supplier }) }}
-            </span>
-          </div>
-          <p v-if="!email.line_table && isRejectedScene(email.cutover_scene)" class="empty-inline">{{ $t('cutover.detail.lineTableRejected') }}</p>
-          <p v-else-if="!email.line_table" class="empty-inline">{{ $t('cutover.detail.lineTableNoTask') }}</p>
-          <p v-else-if="email.line_table.error" class="warn-text">{{ $t('cutover.detail.lineTableError', { error: email.line_table.error }) }}</p>
-          <p v-else-if="!(email.line_table.lines || []).length" class="empty-inline">{{ $t('cutover.detail.lineTableNoLines') }}</p>
-          <template v-else>
-            <div v-for="(line, lineIndex) in email.line_table.lines" :key="lineIndex" class="line-match-block">
-              <div class="line-match-heading">
-                <p class="cell-main">{{ $t('cutover.detail.lineEntry', { index: lineIndex + 1, keywords: (line.keywords || []).join('、') || '-' }) }}</p>
-                <ui-tooltip v-if="isAutomaticLineMatch(line)" :content="$t(editingLineBindings[lineIndex] ? 'cutover.detail.cancelMatchEdit' : 'cutover.detail.editMatch')" :trigger="['hover', 'focus']" placement="top">
-                  <ui-button text circle :icon="editingLineBindings[lineIndex] ? icons.Close : icons.Edit"
-                             :disabled="extractionBusy" :aria-expanded="!!editingLineBindings[lineIndex]"
-                             :aria-label="$t(editingLineBindings[lineIndex] ? 'cutover.detail.cancelMatchEdit' : 'cutover.detail.editMatch')"
-                             @click="toggleLineBindingEditor(line, lineIndex)"></ui-button>
-                </ui-tooltip>
-              </div>
-              <div v-if="!isAutomaticLineMatch(line) || editingLineBindings[lineIndex]" class="line-binding-controls">
-                <ui-select v-if="line.circuits && line.circuits.length > 1" v-model="manualBindings[lineIndex]"
-                           class="line-binding-circuit-select" :disabled="extractionBusy" filterable allow-create clearable default-first-option
-                           :placeholder="$t('cutover.detail.selectOrEnterCircuit')" aria-label="Circuit ID"
-                           @change="selectCircuitCandidate(line, lineIndex, $event)">
-                  <ui-option v-for="(circuit, candidateIndex) in line.circuits" :key="candidateIndex"
-                             :label="circuit.circuit_id || '-'" :value="circuit.circuit_id || ''" :disabled="!circuit.circuit_id">
-                    <span class="line-candidate-id">{{ circuit.circuit_id || '-' }}</span>
-                    <span class="line-candidate-type">{{ circuit.line_type || '-' }} · {{ circuit.line_status || '-' }}</span>
-                  </ui-option>
-                </ui-select>
-                <ui-input v-else v-model="manualBindings[lineIndex]" :disabled="extractionBusy"
-                          :placeholder="$t('cutover.detail.bindCircuitPlaceholder')" aria-label="Circuit ID" clearable></ui-input>
-                <ui-select v-model="manualBindingTypes[lineIndex]" :disabled="extractionBusy" class="line-binding-type"
-                           :aria-label="$t('cutover.detail.bindingType')">
-                  <ui-option :label="$t('cutover.detail.bindCustomer')" value="客户"></ui-option>
-                  <ui-option :label="$t('cutover.detail.bindBackbone')" value="骨干"></ui-option>
-                </ui-select>
-                <ui-button :loading="extractionBusy" @click="bindLine(lineIndex)">{{ $t('cutover.detail.bindCircuit') }}</ui-button>
-                <span class="muted">{{ $t('cutover.detail.bindCircuitHint') }}</span>
-              </div>
-              <p v-if="line.manual_unlisted" class="warn-text" role="status">{{ $t('cutover.detail.unlistedBinding') }}</p>
-              <p v-if="!(line.circuits || []).length" class="warn-text">{{ $t('cutover.detail.lineNoMatch') }}</p>
-              <p v-else-if="line.circuits.length > 1" class="warn-text">
-                {{ $t('cutover.detail.lineMultiMatch', { count: line.circuits.length }) }}
-              </p>
-              <p v-if="line.task_generation_blocked" class="warn-text" role="alert">
-                {{ $t('cutover.detail.lineStatusBlocked', { statuses: (line.blocked_statuses || []).join('、') || '-' }) }}
-              </p>
-              <ui-table v-if="(line.circuits || []).length" :data="line.circuits" stripe>
-                <ui-table-column prop="supplier" label="Supplier" min-width="120">
-                  <template #default="{ row }">
-                    <span class="cell-main">{{ row.supplier || '-' }}</span>
-                  </template>
-                </ui-table-column>
-                <ui-table-column label="Supplier Circuit ID" min-width="220">
-                  <template #default="{ row }">
-                    <span class="mono pre-wrap">{{ row.supplier_circuit_id || '-' }}</span>
-                  </template>
-                </ui-table-column>
-                <ui-table-column label="Circuit ID" min-width="220">
-                  <template #default="{ row }">
-                    <span class="mono pre-wrap">{{ row.circuit_id || '-' }}</span>
-                  </template>
-                </ui-table-column>
-                <ui-table-column :label="$t('circuits.lineType')" width="110">
-                  <template #default="{ row }">
-                    <span>{{ row.line_type || '-' }}</span>
-                  </template>
-                </ui-table-column>
-                <ui-table-column :label="$t('circuits.lineStatus')" width="110">
-                  <template #default="{ row }">
-                    <span>{{ row.line_status || '-' }}</span>
-                  </template>
-                </ui-table-column>
-                <ui-table-column :label="$t('common.remark')" min-width="160">
-                  <template #default="{ row }">
-                    <span class="muted pre-wrap">{{ row.remark || '-' }}</span>
-                  </template>
-                </ui-table-column>
-              </ui-table>
-            </div>
-          </template>
-          <div v-if="hasSavedManualBinding" class="cutover-regenerate-footer">
-            <div class="cutover-regenerate-summary">
-              <span class="cell-main">{{ $t('cutover.detail.regenerateSummary', matchedTypeCounts) }}</span>
-              <span class="muted">{{ $t('cutover.detail.regenerateHint') }}</span>
-            </div>
-            <ui-button plain :loading="extractionBusy" @click="regenerateTasks">
-              {{ $t('cutover.detail.regenerateTasks') }}
-            </ui-button>
-          </div>
-        </div>
-
-        <!-- 任务列表 -->
-        <div v-if="email.processing_origin !== 'unconfigured'" class="block-section">
-          <div class="block-head">
-            <span>{{ $t('cutover.detail.taskTitle', { count: (email.tasks || []).length }) }}</span>
-          </div>
-          <div v-if="!(email.tasks || []).length && email.cutover_scene === 'rule_skipped'"
-               class="scene-notice scene-closed">
-            <span>{{ $t('cutover.detail.taskRuleSkipped') }}</span>
-          </div>
-          <div v-else-if="!(email.tasks || []).length && isRejectedScene(email.cutover_scene)"
-               class="scene-notice scene-closed">
-            <span>{{ $t('cutover.detail.taskRejectedClosed', { scene: sceneText(email.cutover_scene, email.cutover_scene_label) }) }}</span>
-          </div>
-          <div v-else-if="!(email.tasks || []).length && email.is_duplicate"
-               class="scene-notice scene-duplicate">
-            <span>{{ $t('cutover.detail.taskDuplicateIgnored') }}</span>
-          </div>
-          <ui-table v-else :data="email.tasks || []" :empty-text="$t('cutover.detail.taskEmpty')"
-                    class="cutover-task-table" table-layout="fixed" row-key="id" :expand-row-keys="expandedKeys" @expand-change="onExpandChange">
-            <ui-table-column type="expand">
-              <template #default="{ row }">
-                <task-detail-panel v-if="detailTask && detailTask.id === row.id"
-                                   :task="detailTask" @changed="onTaskChanged"
-                                   @collapse="closeTask"></task-detail-panel>
-              </template>
-            </ui-table-column>
-            <ui-table-column prop="id" :label="$t('cutover.detail.taskId')" width="64">
-              <template #default="{ row }">
-                <span class="mono">{{ row.id }}</span>
-              </template>
-            </ui-table-column>
-            <ui-table-column :label="$t('common.type')" min-width="140">
-              <template #default="{ row }">
-                <span class="cell-main">{{ lineTypeText(row) }} · {{ $t('cutover.task.lineCount', { count: taskLineCount(row) }) }}</span>
-              </template>
-            </ui-table-column>
-            <ui-table-column :label="$t('common.supplier')" width="80">
-              <template #default="{ row }">
-                <span>{{ row.supplier || '-' }}</span>
-              </template>
-            </ui-table-column>
-            <ui-table-column :label="$t('common.carrierTicketNo')" min-width="120">
-              <template #default="{ row }">
-                <span>{{ row.carrier_ticket_no || '-' }}</span>
-              </template>
-            </ui-table-column>
-            <ui-table-column :label="$t('common.status')" width="88" align="center">
-              <template #default="{ row }">
-                <ui-tag :type="statusTagType(row.status)" size="small">
-                  {{ statusText(row.status, row.status_label) }}
-                </ui-tag>
-              </template>
-            </ui-table-column>
-            <ui-table-column :label="$t('cutover.detail.validationColumn')" width="88">
-              <template #default="{ row }">
-                <span v-if="row.validation_count" class="warn-text">{{ $t('cutover.detail.validationCount', { count: row.validation_count }) }}</span>
-                <span v-else class="muted">-</span>
-              </template>
-            </ui-table-column>
-            <ui-table-column :label="$t('common.updateTime')" width="136">
-              <template #default="{ row }">
-                <span class="mono muted">{{ String(row.update_time || '').replace('T', ' ').slice(0, 19) }}</span>
-              </template>
-            </ui-table-column>
-            <ui-table-column :label="$t('common.actions')" width="88" align="right">
-              <template #default="{ row }">
-                <ui-action type="primary" @click="toggleTask(row)" icon="View" :label="$t('cutover.detail.taskDetail')"></ui-action>
-              </template>
-            </ui-table-column>
-          </ui-table>
-        </div>
-      </template>
-    </div>
-  `,
+  template: CUTOVER_WORKBENCH_TEMPLATE,
   computed: {
     icons() {
       return ElementPlusIconsVue;
@@ -3869,7 +3760,7 @@ const ViewCircuits = defineComponent({
       }
       const response = await fetch("/api/circuits/import", {
         method: "POST",
-        headers: { Authorization: `Bearer ${appStore.apiKey}` },
+        headers: { 'X-CSRF-Token': appStore.csrfToken },
         body: formData,
       });
       const payload = await response.json();
@@ -4164,6 +4055,8 @@ const ViewCircuits = defineComponent({
 const ViewDispatchSession = defineComponent({
   name: "ViewDispatchSession",
   setup() {
+    let disposed = false;
+    let statusRequest = 0;
     const checking = ref(false);
     const action = ref("");
     const environment = ref(appStore.portalEnvironment || "");
@@ -4230,7 +4123,16 @@ const ViewDispatchSession = defineComponent({
       && (mode.value === "password" || (smsRequested.value && form.sms_code.trim()))
     ));
 
+    function statusResponseGuard() {
+      const requestId = ++statusRequest;
+      const authVersion = appStore.authVersion;
+      const requestedEnvironment = environment.value;
+      return () => !disposed && requestId === statusRequest && authVersion === appStore.authVersion
+        && requestedEnvironment === environment.value && requestedEnvironment === appStore.portalEnvironment;
+    }
+
     function assignStatus(data) {
+      if (data.environment && data.environment !== environment.value) return false;
       status.state = data.state || "login_required";
       status.authenticated = Boolean(data.authenticated);
       status.checked_at = data.checked_at || "";
@@ -4239,10 +4141,10 @@ const ViewDispatchSession = defineComponent({
       status.password_login_url = data.password_login_url || "";
       status.mobile_login_url = data.mobile_login_url || "";
       status.state_path = data.state_path || "";
-      if (data.environment) {
-        environment.value = data.environment;
-        persistPortalEnvironment(data.environment);
-      }
+      // A completed login/check supersedes any earlier header status request.
+      portalStatusRequest += 1;
+      appStore.portalStatus = data;
+      return true;
     }
 
     function resetAttempt() {
@@ -4268,6 +4170,7 @@ const ViewDispatchSession = defineComponent({
     }
 
     async function beginAttempt() {
+      if (checking.value || action.value || disposed) return;
       action.value = "begin";
       resetAttempt();
       try {
@@ -4287,28 +4190,31 @@ const ViewDispatchSession = defineComponent({
     }
 
     async function loadStatus(startLoginWhenRequired = false) {
+      if (checking.value || action.value || disposed) return;
+      const isCurrent = statusResponseGuard();
       checking.value = true;
       status.state = "checking";
       status.message = tt("dispatchSession.checkingMessage");
       try {
-        const query = environment.value
-          ? `?environment=${encodeURIComponent(environment.value)}`
-          : "";
-        assignStatus(await requestJson(`/api/rpa/session${query}`));
+        const data = await getPortalSessionStatus(environment.value);
+        if (!isCurrent() || !assignStatus(data)) return;
+        checking.value = false;
         if (startLoginWhenRequired && !status.authenticated && status.configured) {
           await beginAttempt();
         }
       } catch (error) {
+        if (!isCurrent()) return;
         status.state = "unavailable";
         status.authenticated = false;
         status.message = error.message || tt("common.requestFailed");
         showError(error);
       } finally {
-        checking.value = false;
+        if (isCurrent()) checking.value = false;
       }
     }
 
     async function refreshCaptcha() {
+      if (checking.value || action.value || disposed) return;
       if (!attempt.attempt_id) {
         await beginAttempt();
         return;
@@ -4329,6 +4235,7 @@ const ViewDispatchSession = defineComponent({
     }
 
     async function changeMode(value) {
+      if (checking.value || action.value || mode.value === value) return;
       mode.value = value;
       clearSensitiveForm();
       if (status.configured) {
@@ -4337,7 +4244,7 @@ const ViewDispatchSession = defineComponent({
     }
 
     async function changeEnvironment(value) {
-      if (environment.value === value) return;
+      if (checking.value || action.value || environment.value === value) return;
       environment.value = value;
       persistPortalEnvironment(value);
       clearSensitiveForm();
@@ -4353,6 +4260,7 @@ const ViewDispatchSession = defineComponent({
     }
 
     async function requestSmsCode() {
+      if (checking.value || action.value || disposed) return;
       if (!attempt.attempt_id || !requireBaseFields()) return;
       action.value = "sms";
       try {
@@ -4374,11 +4282,13 @@ const ViewDispatchSession = defineComponent({
     }
 
     async function submitLogin() {
+      if (checking.value || action.value || disposed) return;
       if (!canSubmit.value) {
         NocMessage.warning(tt("dispatchSession.completeFields"));
         return;
       }
       action.value = "login";
+      const isCurrent = statusResponseGuard();
       try {
         const path = mode.value === "password"
           ? `/api/rpa/session/attempts/${attempt.attempt_id}/password`
@@ -4390,24 +4300,31 @@ const ViewDispatchSession = defineComponent({
               captcha: form.captcha.trim(),
             }
           : { sms_code: form.sms_code.trim() };
-        assignStatus(await requestJson(path, {
+        const data = await requestJson(path, {
           method: "POST",
           body: JSON.stringify(body),
-        }));
+        });
+        if (!isCurrent() || !assignStatus(data)) return;
         clearSensitiveForm();
         NocMessage.success(tt("dispatchSession.loginSuccess"));
         setStatusKey("dispatchSession.loginSuccess");
       } catch (error) {
+        if (!isCurrent()) return;
         showError(error);
         if (error.code === "LOGIN_FAILED") {
+          action.value = "";
           await refreshCaptcha();
         }
       } finally {
-        action.value = "";
+        if (isCurrent()) {
+          action.value = "";
+          checking.value = false;
+        }
       }
     }
 
     onMounted(() => loadStatus(true));
+    onUnmounted(() => { disposed = true; });
 
     return {
       checking, action, environment, mode, smsRequested, status, attempt, form,
@@ -4429,10 +4346,10 @@ const ViewDispatchSession = defineComponent({
           <p>{{ status.message }}</p>
         </div>
         <div class="dispatch-status-actions">
-          <ui-button :loading="checking" @click="loadStatus(false)">
+          <ui-button :loading="checking" :disabled="action !== ''" @click="loadStatus(false)">
             <ui-icon><Refresh /></ui-icon>{{ $t('dispatchSession.checkNow') }}
           </ui-button>
-          <ui-button type="primary" :loading="action === 'begin'" :disabled="!status.configured" @click="beginAttempt">
+          <ui-button type="primary" :loading="action === 'begin'" :disabled="!status.configured || checking || action !== ''" @click="beginAttempt">
             <ui-icon><Key /></ui-icon>{{ $t('dispatchSession.relogin') }}
           </ui-button>
         </div>
@@ -4462,12 +4379,12 @@ const ViewDispatchSession = defineComponent({
 
           <div class="dispatch-mode-switch" role="radiogroup" :aria-label="$t('dispatchSession.loginMethod')">
             <button type="button" :class="{ 'is-active': mode === 'password' }"
-                    role="radio" :aria-checked="mode === 'password'" :disabled="!status.configured" @click="changeMode('password')">
+                    role="radio" :aria-checked="mode === 'password'" :disabled="!status.configured || checking || action !== ''" @click="changeMode('password')">
               <strong>{{ $t('dispatchSession.mode.password') }}</strong>
               <span>{{ $t('dispatchSession.mode.passwordHint') }}</span>
             </button>
             <button type="button" :class="{ 'is-active': mode === 'mobile' }"
-                    role="radio" :aria-checked="mode === 'mobile'" :disabled="!status.configured" @click="changeMode('mobile')">
+                    role="radio" :aria-checked="mode === 'mobile'" :disabled="!status.configured || checking || action !== ''" @click="changeMode('mobile')">
               <strong>{{ $t('dispatchSession.mode.mobile') }}</strong>
               <span>{{ $t('dispatchSession.mode.mobileHint') }}</span>
             </button>
@@ -4498,7 +4415,7 @@ const ViewDispatchSession = defineComponent({
                 <span>{{ $t('dispatchSession.captcha') }}</span>
                 <div class="dispatch-inline-field">
                   <ui-input v-model="form.captcha" autocomplete="off" :placeholder="$t('dispatchSession.captchaPlaceholder')"></ui-input>
-                  <button class="dispatch-captcha-button" type="button" :disabled="action === 'captcha'" @click="refreshCaptcha">
+                  <button class="dispatch-captcha-button" type="button" :disabled="!status.configured || checking || action !== ''" @click="refreshCaptcha">
                     <img v-if="attempt.captcha_data_url" :src="attempt.captcha_data_url" width="144" height="44"
                          :alt="$t('dispatchSession.captchaAlt')">
                     <span v-else>{{ $t('dispatchSession.loadCaptcha') }}</span>
@@ -4510,7 +4427,7 @@ const ViewDispatchSession = defineComponent({
                 <div class="dispatch-inline-field">
                   <ui-input v-model="form.sms_code" autocomplete="one-time-code" :disabled="!smsRequested"
                             :placeholder="$t('dispatchSession.smsPlaceholder')"></ui-input>
-                  <ui-button class="dispatch-sms-button" type="primary" plain :loading="action === 'sms'" @click="requestSmsCode">
+                  <ui-button class="dispatch-sms-button" type="primary" plain :loading="action === 'sms'" :disabled="checking || action !== ''" @click="requestSmsCode">
                     {{ smsRequested ? $t('dispatchSession.resendSms') : $t('dispatchSession.sendSms') }}
                   </ui-button>
                 </div>
@@ -4518,8 +4435,8 @@ const ViewDispatchSession = defineComponent({
             </div>
             <p class="dispatch-form-note">{{ $t('dispatchSession.captchaHint') }}</p>
             <div class="dispatch-form-actions">
-              <ui-button @click="clearSensitiveForm">{{ $t('dispatchSession.clear') }}</ui-button>
-              <ui-button type="primary" native-type="submit" :loading="action === 'login'" :disabled="!canSubmit">
+              <ui-button :disabled="checking || action !== ''" @click="clearSensitiveForm">{{ $t('dispatchSession.clear') }}</ui-button>
+              <ui-button type="primary" native-type="submit" :loading="action === 'login'" :disabled="!canSubmit || checking || action !== ''">
                 {{ $t('dispatchSession.loginSubmit') }}
               </ui-button>
             </div>

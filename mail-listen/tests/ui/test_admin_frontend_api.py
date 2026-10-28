@@ -1,5 +1,6 @@
 import importlib
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -31,6 +32,7 @@ class AdminFrontendApiTest(unittest.TestCase):
         self.assertIn('/static/vendor/naive-ui.js', html)
         self.assertIn('/static/admin-shared.js?v=', html)
         self.assertIn('/static/admin-views.js?v=', html)
+        self.assertIn('/static/admin-supplier-review.js?v=', html)
         self.assertIn('/static/admin.js?v=', html)
 
     def test_dispatch_session_page_is_served(self):
@@ -139,11 +141,15 @@ class AdminFrontendApiTest(unittest.TestCase):
         source = (
             Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
         ).read_text(encoding="utf-8")
+        review_source = (
+            Path(__file__).resolve().parents[2] / "static" / "admin-supplier-review.js"
+        ).read_text(encoding="utf-8")
 
         self.assertIn('reply_email: ""', source)
         self.assertIn('reply_email: form.reply_email.trim()', source)
-        self.assertIn("supplierForm.replyEmailLabel", source)
+        self.assertIn("supplierForm.replyEmailLabel", review_source)
         self.assertNotIn("can_reply_directly", source)
+        self.assertNotIn("can_reply_directly", review_source)
         self.assertNotIn("supplierForm.canReplyDirectly", source)
 
     def test_reply_task_exposes_editable_cc_recipients(self):
@@ -151,8 +157,12 @@ class AdminFrontendApiTest(unittest.TestCase):
             Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
         ).read_text(encoding="utf-8")
 
+        source += (Path(__file__).resolve().parents[2] / "static" / "admin-cutover-detail.js").read_text()
         self.assertIn('v-model="replyCcRecipients"', source)
-        self.assertIn('v-model="replyCcRecipients" multiple filterable allow-create clearable', source)
+        cc_control = re.search(r'<ui-select\b[^>]*v-model="replyCcRecipients"[^>]*>', source)
+        self.assertIsNotNone(cc_control)
+        for attribute in ('multiple', 'filterable', 'allow-create', 'clearable'):
+            self.assertIn(attribute, cc_control.group(0))
         self.assertIn("cc_recipients: ccRecipients", source)
         self.assertIn("cutover.detail.replyCcPlaceholder", source)
 
@@ -227,6 +237,7 @@ class AdminFrontendApiTest(unittest.TestCase):
         source = (
             Path(__file__).resolve().parents[2] / "static" / "admin-views.js"
         ).read_text(encoding="utf-8")
+        source += (Path(__file__).resolve().parents[2] / "static" / "admin-cutover-detail.js").read_text()
         styles = (
             Path(__file__).resolve().parents[2] / "static" / "admin.css"
         ).read_text(encoding="utf-8")
@@ -255,6 +266,7 @@ class AdminFrontendApiTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         # When / Then
+        source += (Path(__file__).resolve().parents[2] / "static" / "admin-cutover-detail.js").read_text()
         self.assertIn("line.task_generation_blocked", source)
         self.assertIn("row.line_status", source)
         self.assertIn("$t('circuits.lineType')", source)

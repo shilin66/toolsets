@@ -91,7 +91,8 @@ class MailAccountsApiTest(unittest.TestCase):
     def test_create_duplicate_address_rejected(self):
         self.assertEqual(self._create_account().status_code, 201)
         response = self._create_account(address='NOC@example.com')  # 大小写不同也视为重复
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('已配置', response.get_json()['message'])
 
     def test_update_empty_password_keeps_existing(self):
         account_id = self._create_account().get_json()['data']['id']

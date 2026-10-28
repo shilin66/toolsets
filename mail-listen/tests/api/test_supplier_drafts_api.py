@@ -186,7 +186,7 @@ class SupplierDraftApiTest(fixture.UnconfiguredFlowTest):
         draft = self.client.get(url, headers=self.headers).get_json()['data']
         draft = self.review_supplier_name(draft)
         sample = draft['draft']['config']['email_type_samples']['割接通知']
-        self.assertEqual(sample, {'subject': email.subject, 'content': html, 'content_in_attachment': True})
+        self.assertEqual(sample, {'subject': email.subject, 'content': html, 'content_in_attachment': True, 'source_email_records_id': email_id})
         sample['content'] += '\n人工确认保留的备注'
         saved = self.client.put(url, headers=self.headers, json={'revision': draft['revision'],
             'config': draft['draft']['config']}).get_json()['data']

@@ -127,21 +127,27 @@ def save_attachment(
     return attachment_path.relative_to(DATA_DIR).as_posix()
 
 
-def save_preview_attachment(filename: str, content: bytes, *, charset: str | None = None) -> str:
+def save_preview_attachment(filename: str, content: bytes, *, charset: str | None = None, owner_key: str | None = None) -> str:
     """保存提取预览上传的附件，与监听邮件附件使用相同的存储结构。"""
     preview_dir = get_attachment_dir() / "preview-extract"
+    if owner_key is not None:
+        preview_dir /= owner_key
     preview_dir.mkdir(parents=True, exist_ok=True)
     safe_name = sanitize_attachment_filename(filename)
     attachment_path = preview_dir / f"{uuid.uuid4().hex}-{safe_name}"
-    attachment_path.write_bytes(normalize_text_attachment(safe_name, content or b"", charset=charset))
+    write_private_bytes(DATA_DIR, attachment_path, normalize_text_attachment(safe_name, content or b"", charset=charset))
     return attachment_path.relative_to(DATA_DIR).as_posix()
 
 
-def build_attachment_url(relative_path: str) -> str:
+def build_attachment_url(relative_path: str, *, signed: bool = False) -> str:
     base_url = (settings.fe_domain or settings.api_public_base_url).strip().rstrip("/")
     if not base_url:
         base_url = f"http://localhost:{settings.api_port}"
-    return f"{base_url}{ATTACHMENT_URL_PREFIX}/{quote(relative_path, safe='/')}"
+    url = f"{base_url}{ATTACHMENT_URL_PREFIX}/{quote(relative_path, safe='/')}"
+    if signed:
+        from artifact_access import sign_artifact_url
+        return sign_artifact_url(url)
+    return url
 
 
 def attachment_path_from_relative(

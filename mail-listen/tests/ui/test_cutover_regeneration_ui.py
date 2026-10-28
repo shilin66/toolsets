@@ -50,9 +50,10 @@ class CutoverRegenerationUiTest(unittest.TestCase):
         self.requests = []
         self.page.on("request", lambda request: self.requests.append(request.url) if request.method == "POST" and request.url.endswith("/tasks/generate") else None)
         self.page.goto(f"http://127.0.0.1:{self.server.server_port}/admin/cutover-emails/{self.api.email_records_id}")
+        self.page.get_by_role('button', name='管理员登录', exact=True).click()
         self.page.get_by_role("textbox", name="API Key").fill("test-key")
         self.page.get_by_role("button", name="登录", exact=True).click()
-        self.page.locator(".email-content-collapse .n-collapse-item__header").filter(has_text="提取解析结果").click()
+        self.page.locator(".cw-advanced-toggle > summary").click()
         self.editor = self.page.locator(".extraction-editor textarea")
         expect(self.editor).to_be_visible()
 
@@ -99,6 +100,7 @@ class CutoverRegenerationUiTest(unittest.TestCase):
         payload = json.loads(self.editor.input_value())
         payload["cutover_reason"] = "尚未保存的原因"
         self.editor.fill(json.dumps(payload, ensure_ascii=False))
+        self.page.get_by_role("tab", name="线路确认", exact=True).click()
         self.page.get_by_role("button", name="重新生成割接任务", exact=True).click()
         expect(self.page.locator(".n-message").filter(has_text="未保存")).to_be_visible()
         self.assertEqual(self.requests, [])
@@ -106,6 +108,7 @@ class CutoverRegenerationUiTest(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
     def test_matching_regeneration_keeps_binding_and_config_personnel(self):
+        self.page.get_by_role("tab", name="线路确认", exact=True).click()
         self.page.get_by_role("button", name="重新生成割接任务", exact=True).click()
         self.page.locator(".n-dialog").get_by_role("button", name="重新生成", exact=True).click()
         expect(self.page.locator(".n-message").filter(has_text="割接任务已生成")).to_be_visible()
@@ -116,6 +119,7 @@ class CutoverRegenerationUiTest(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
     def test_unsaved_manual_binding_cannot_regenerate(self):
+        self.page.get_by_role("tab", name="线路确认", exact=True).click()
         before = self.api.db.get_cutover_task(self.task_id)
         self.page.locator('.line-binding-controls input[aria-label="Circuit ID"]').fill("unsaved-circuit")
         self.page.get_by_role("button", name="重新生成割接任务", exact=True).click()

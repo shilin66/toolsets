@@ -540,6 +540,15 @@ class CutoverDeletionApiTest(unittest.TestCase):
         self.assertEqual(self.sql('SELECT count(*) FROM mail_deletions')[0][0], 1)
         self.assertIsNone(self.db.get_email_record_by_id(self.email_id))
 
+    def test_delete_removes_pending_sample_cleanup(self):
+        with self.db.get_connection() as conn:
+            conn.execute('INSERT INTO unconfigured_sample_cleanup VALUES (?)', (self.email_id,))
+            conn.commit()
+        response = self.client.delete(self.url, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.get_json())
+        with self.db.get_connection() as conn:
+            self.assertIsNone(conn.execute('SELECT 1 FROM unconfigured_sample_cleanup WHERE email_records_id=?', (self.email_id,)).fetchone())
+
 
 if __name__ == '__main__':
     unittest.main()

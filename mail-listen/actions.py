@@ -267,7 +267,7 @@ class APIForwardAction(BaseAction):
             "content": email.html_content or email.content,
             "attachments": attachments,
             "attachment_urls": [
-                build_attachment_url(relative_path)
+                build_attachment_url(relative_path, signed=True)
                 for relative_path in attachments
             ],
             "supplier_name": None,
@@ -290,7 +290,8 @@ class APIForwardAction(BaseAction):
             content_dict["category"] = category
 
         if email.image_url:
-            content_dict["image_url"] = email.image_url
+            from artifact_access import sign_artifact_url
+            content_dict["image_url"] = sign_artifact_url(email.image_url)
 
         # 将字典转换为 JSON 字符串
         return json.dumps(content_dict, ensure_ascii=False, indent=2)

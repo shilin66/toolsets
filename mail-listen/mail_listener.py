@@ -264,7 +264,28 @@ class MailListener:
         repo = UnconfiguredMailRepository(email_db)
         try:
             info = client.client.folder_status('INBOX', ['UIDVALIDITY', 'UIDNEXT'])
-            validity, upper = int(info[b'UIDVALIDITY']), int(info[b'UIDNEXT'])
+            required = (b'UIDVALIDITY', b'UIDNEXT')
+            missing = [key.decode('ascii') for key in required if key not in info]
+            if missing:
+                logger.debug('INBOX STATUS 缺少 {}；通过 SELECT 重新获取增量边界', ', '.join(missing))
+                # 使用同一次 SELECT 的完整边界，避免混用邮箱重建前后的 UIDVALIDITY。
+                info = client.client.select_folder('INBOX')
+                if b'UIDVALIDITY' not in info:
+                    raise RuntimeError('INBOX SELECT 仍缺少 UIDVALIDITY，无法确定增量边界')
+            try:
+                validity = int(info[b'UIDVALIDITY'])
+                if b'UIDNEXT' in info:
+                    upper = int(info[b'UIDNEXT'])
+                else:
+                    # UID SEARCH UID * 只取当前最大 UID（空邮箱返回空列表）。
+                    # 这是本轮扫描上界，不假定等于服务器实际的下一个 UID。
+                    latest_uids = client.client.search(['UID', '*'])
+                    upper = max(latest_uids, default=0) + 1
+                    logger.debug('INBOX 未返回 UIDNEXT；按最大现存 UID 确定本轮扫描上界：{}', upper)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError('INBOX UIDVALIDITY/UIDNEXT 必须为正整数') from exc
+            if validity <= 0 or upper <= 0:
+                raise RuntimeError('INBOX UIDVALIDITY/UIDNEXT 必须为正整数')
             lower = repo.cursor(self.account.email_address, 'INBOX', validity, upper)
             if lower >= upper:
                 return

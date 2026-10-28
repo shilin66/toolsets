@@ -56,7 +56,7 @@ class UnconfiguredFlowTest(unittest.TestCase):
         self.assertEqual(next_time['email_records_id'], third)
         with self.db.get_connection() as conn:
             self.assertEqual(conn.execute('SELECT count(*) FROM supplier_drafts').fetchone()[0], 1)
-            self.assertEqual(conn.execute('SELECT count(*) FROM supplier_draft_samples').fetchone()[0], 3)
+            self.assertEqual(conn.execute('SELECT count(*) FROM supplier_draft_samples').fetchone()[0], 2)
             saved = json.loads(conn.execute('SELECT draft_json FROM supplier_drafts').fetchone()[0])
             self.assertEqual(saved['config']['email'], 'noc@example.com')
 

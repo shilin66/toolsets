@@ -1,13 +1,14 @@
 import json
 from functools import wraps
 
-from flask import jsonify, request
+from flask import g, jsonify, request
 from pydantic import ValidationError
 
 from fastgpt_contracts import validate_draft_config
 from mail_preview import build_mail_preview
 from supplier_config import SupplierConfigCreate, SupplierConfigRepository
 from unconfigured_mail_repository import ResultConflict, UnconfiguredMailRepository
+from user_access import UserAccessRepository
 
 
 def draft_validation_message(error):
@@ -42,8 +43,12 @@ def draft_validation_message(error):
 
 
 class SupplierDraftRepository:
-    def __init__(self, db):
+    def __init__(self, db, principal=None):
         self.db = db
+        self.principal = principal
+
+    def scope(self, *, operate=False):
+        return UserAccessRepository.draft_scope(self.principal, operate=operate)
 
     @staticmethod
     def serialize(row):
@@ -56,19 +61,22 @@ class SupplierDraftRepository:
         if status not in ('unpublished', 'published'):
             raise ValueError('草稿筛选状态必须为 unpublished 或 published')
         condition = "d.status = 'published'" if status == 'published' else "d.status != 'published'"
+        scope, params = self.scope()
+        condition += f' AND ({scope})'
         with self.db.get_connection() as conn:
-            total = conn.execute(f'SELECT count(*) FROM supplier_drafts d WHERE {condition}').fetchone()[0]
+            total = conn.execute(f'SELECT count(*) FROM supplier_drafts d WHERE {condition}', params).fetchone()[0]
             rows = conn.execute(f'''SELECT d.*, count(s.email_records_id) AS sample_count
                 FROM supplier_drafts d LEFT JOIN supplier_draft_samples s ON s.draft_id=d.id
                 WHERE {condition}
                 GROUP BY d.id ORDER BY d.update_time DESC, d.id DESC LIMIT ? OFFSET ?''',
-                (page_size, (page - 1) * page_size)).fetchall()
+                [*params, page_size, (page - 1) * page_size]).fetchall()
             return {'items': [self.serialize(row) for row in rows], 'total': total,
                     'page': page, 'pageSize': page_size}
 
     def get(self, draft_id, page=1, page_size=20):
+        scope, params = self.scope()
         with self.db.get_connection() as conn:
-            row = conn.execute('SELECT * FROM supplier_drafts WHERE id=?', (draft_id,)).fetchone()
+            row = conn.execute(f'SELECT d.* FROM supplier_drafts d WHERE d.id=? AND {scope}', [draft_id, *params]).fetchone()
             if not row:
                 raise LookupError('供应商草稿不存在')
             item = self.serialize(row)
@@ -89,9 +97,10 @@ class SupplierDraftRepository:
         if type(revision) is not int or not isinstance(config, dict):
             raise ValueError('必须提供 revision 和配置对象 config')
         validate_draft_config(config)
+        scope, params = self.scope(operate=True)
         with self.db.get_connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            row = conn.execute('SELECT * FROM supplier_drafts WHERE id=?', (draft_id,)).fetchone()
+            row = conn.execute(f'SELECT d.* FROM supplier_drafts d WHERE d.id=? AND {scope}', [draft_id, *params]).fetchone()
             if not row:
                 raise LookupError('供应商草稿不存在')
             if row['status'] != 'review' or row['revision'] != revision:
@@ -106,9 +115,10 @@ class SupplierDraftRepository:
     def delete(self, draft_id, revision):
         if type(revision) is not int:
             raise ValueError('必须提供整数 revision')
+        scope, params = self.scope(operate=True)
         with self.db.get_connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            row = conn.execute('SELECT revision FROM supplier_drafts WHERE id=?', (draft_id,)).fetchone()
+            row = conn.execute(f'SELECT d.revision FROM supplier_drafts d WHERE d.id=? AND {scope}', [draft_id, *params]).fetchone()
             if not row:
                 raise LookupError('供应商草稿不存在')
             if row['revision'] != revision:
@@ -125,9 +135,10 @@ class SupplierDraftRepository:
         if type(revision) is not int:
             raise ValueError('必须提供整数 revision')
         SupplierConfigRepository(self.db)
+        scope, params = self.scope(operate=True)
         with self.db.get_connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            row = conn.execute('SELECT * FROM supplier_drafts WHERE id=?', (draft_id,)).fetchone()
+            row = conn.execute(f'SELECT d.* FROM supplier_drafts d WHERE d.id=? AND {scope}', [draft_id, *params]).fetchone()
             if not row:
                 raise LookupError('供应商草稿不存在')
             if row['revision'] != revision:
@@ -158,6 +169,12 @@ class SupplierDraftRepository:
             inserted = conn.execute(f'''INSERT INTO supplier_configs ({columns}, create_time, update_time)
                 VALUES ({placeholders}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''', list(values.values()))
             supplier_id = inserted.lastrowid
+            sources = {sample[0] for sample in conn.execute(
+                'SELECT email_records_id FROM supplier_draft_samples WHERE draft_id=?', (draft_id,))}
+            if row['source_email_records_id'] is not None:
+                sources.add(row['source_email_records_id'])
+            conn.execute('INSERT INTO supplier_sample_access VALUES (?,NULL,?)',
+                         (supplier_id, json.dumps(sorted(sources))))
             conn.execute('''UPDATE supplier_drafts SET status='published', published_supplier_id=?,
                 update_time=CURRENT_TIMESTAMP WHERE id=?''', (supplier_id, draft_id))
             conn.commit()
@@ -193,13 +210,13 @@ def register_routes(app, get_db, require_api_key):
     @require_api_key
     @handle_errors
     def list_supplier_drafts():
-        return SupplierDraftRepository(get_db()).list(*pagination(), status=request.args.get('status', 'unpublished'))
+        return SupplierDraftRepository(get_db(), g.principal).list(*pagination(), status=request.args.get('status', 'unpublished'))
 
     @app.route('/api/supplier-drafts/<int:draft_id>', methods=['GET', 'PUT', 'DELETE'])
     @require_api_key
     @handle_errors
     def supplier_draft_detail(draft_id):
-        repo = SupplierDraftRepository(get_db())
+        repo = SupplierDraftRepository(get_db(), g.principal)
         if request.method == 'GET':
             return repo.get(draft_id, *pagination())
         data = body()
@@ -211,18 +228,18 @@ def register_routes(app, get_db, require_api_key):
     @require_api_key
     @handle_errors
     def publish_supplier_draft(draft_id):
-        return SupplierDraftRepository(get_db()).publish(draft_id, body().get('revision'))
+        return SupplierDraftRepository(get_db(), g.principal).publish(draft_id, body().get('revision'))
 
     @app.route('/api/supplier-drafts/<int:draft_id>/retry', methods=['POST'])
     @require_api_key
     @handle_errors
     def retry_supplier_draft(draft_id):
         db = get_db()
-        draft = SupplierDraftRepository(db).get(draft_id)
+        draft = SupplierDraftRepository(db, g.principal).get(draft_id)
         if draft['status'] != 'generation_failed':
             raise ResultConflict('只允许重试生成失败的草稿')
         UnconfiguredMailRepository(db).retry(draft['source_email_records_id'], 'supplier_config_draft')
-        return SupplierDraftRepository(db).get(draft_id)
+        return SupplierDraftRepository(db, g.principal).get(draft_id)
 
     @app.route('/api/unconfigured-mail/results', methods=['POST'])
     @require_api_key
@@ -250,6 +267,41 @@ def register_routes(app, get_db, require_api_key):
         if not record:
             raise LookupError('邮件不存在')
         return UnconfiguredMailRepository(db).projection(email_id)
+
+    @app.route('/api/suppliers/sample-attachment-source', methods=['POST'])
+    @require_api_key
+    @handle_errors
+    def supplier_sample_attachment_source():
+        """Resolve configured samples, including old configs without a source ID."""
+        from email_attachments import build_attachment_url
+
+        data = body()
+        source_id = data.get('source_email_records_id')
+        if source_id is not None and (type(source_id) is not int or source_id <= 0):
+            raise ValueError('样本来源邮件编号无效')
+        db = get_db()
+        scope, params = UserAccessRepository.email_scope(g.principal)
+        with db.get_connection() as conn:
+            if source_id is not None:
+                row = conn.execute(f'SELECT id,attachments FROM email_records WHERE id=? AND {scope}', [source_id, *params]).fetchone()
+                if not row:
+                    raise LookupError('来源邮件不存在或未获授权')
+            else:
+                subject, content = data.get('subject'), data.get('content')
+                if not isinstance(subject, str) or not isinstance(content, str):
+                    raise ValueError('样本主题和正文必须是文本')
+                if not subject.strip() and not content.strip():
+                    return None
+                rows = conn.execute(f"""SELECT id,attachments FROM email_records
+                    WHERE trim(subject, char(9)||char(10)||char(13)||' ')=?
+                    AND trim(coalesce(nullif(html_content,''),content,''), char(9)||char(10)||char(13)||' ')=?
+                    AND {scope} ORDER BY id LIMIT 2""", [subject.strip(), content.strip(), *params]).fetchall()
+                # Never guess between identical bodies with different attachments.
+                if len(rows) != 1:
+                    return None
+                row = rows[0]
+        return {'id': row['id'], 'attachment_urls': [build_attachment_url(path)
+            for path in db.deserialize_attachments(row['attachments'])]}
 
     @app.route('/api/emails/<int:email_id>/source', methods=['GET'])
     @require_api_key

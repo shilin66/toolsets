@@ -13,7 +13,13 @@ const portalDefaultEnvironment = (
 );
 
 const appStore = Vue.reactive({
-  apiKey: localStorage.getItem("mailListenApiKey") || "",
+  apiKey: "", // Compatibility flag for mounted views; never contains a credential.
+  user: null,
+  csrfToken: "",
+  authVersion: 0,
+  authLoading: true,
+  portalStatus: null,
+  mailboxGrants: [],
   portalEnvironment: localStorage.getItem("mailListenPortalEnvironment") || portalDefaultEnvironment,
   menuCollapsed: localStorage.getItem("mailListenMenuCollapsed") === "1",
   statusText: "",
@@ -54,25 +60,120 @@ function renderStatusText(text) {
 
 function apiHeaders() {
   return {
-    Authorization: `Bearer ${appStore.apiKey}`,
+    "X-CSRF-Token": appStore.csrfToken,
     "Content-Type": "application/json",
   };
 }
 
-// ---------- 登录态：密码即 API Key，仅存于浏览器 localStorage ----------
-function persistApiKey(key) {
-  appStore.apiKey = key;
-  localStorage.setItem("mailListenApiKey", key);
+// Credentials stay in the HttpOnly session cookie. Memory caches follow identity.
+function setPrincipal(user) {
+  appStore.authVersion += 1;
+  appStore.user = user;
+  appStore.csrfToken = user?.csrf_token || "";
+  appStore.apiKey = user ? "session" : "";
+  appStore.portalStatus = null;
+  appStore.mailboxGrants = [];
+  mailAccountOptionsCache = null;
+  mailAccountOptionsPromise = null;
+  appStore.operationsSummaryLoaded = false;
+  Object.assign(appStore.operationsSummary, {pending_tasks: 0, failed_tasks: 0, today_emails: 0, last_email_at: null});
+  localStorage.removeItem("mailListenApiKey");
 }
 
 function logout() {
-  appStore.apiKey = "";
-  localStorage.removeItem("mailListenApiKey");
-  appStore.operationsSummaryLoaded = false;
+  setPrincipal(null);
   setStatusKey("common.statusLoading");
 }
 
+async function endSession() {
+  await requestFull('/api/auth/logout', {method: 'POST'});
+  logout();
+  localStorage.setItem('mailListenAuthChanged', String(Date.now()));
+}
+
+async function loginSession(credentials) {
+  const response = await fetch('/api/auth/login', {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify(credentials)});
+  const payload = await response.json();
+  if (!response.ok || !payload.success) {
+    const error = new Error(payload.message || '登录失败');
+    error.status = response.status;
+    throw error;
+  }
+  setPrincipal(payload.data);
+  localStorage.setItem('mailListenAuthChanged', String(Date.now()));
+}
+
+async function restoreSession() {
+  try {
+    const response = await fetch('/api/auth/session');
+    const user = response.ok ? (await response.json()).data : null;
+    if (user) setPrincipal(user);
+    else {
+      const legacyKey = localStorage.getItem('mailListenApiKey');
+      if (legacyKey) await loginSession({mode: 'admin', api_key: legacyKey});
+    }
+  } catch (_) { logout(); }
+  finally { appStore.authLoading = false; }
+}
+
+window.addEventListener('storage', (event) => {
+  if (event.key === 'mailListenAuthChanged') window.location.reload();
+});
+
+let portalStatusRequest = 0;
+let portalStatusInFlight = null;
+function getPortalSessionStatus(environment) {
+  const authVersion = appStore.authVersion;
+  if (portalStatusInFlight?.environment === environment && portalStatusInFlight.authVersion === authVersion) {
+    return portalStatusInFlight.promise;
+  }
+  const check = { environment, authVersion };
+  const query = environment ? `?environment=${encodeURIComponent(environment)}` : '';
+  check.promise = requestJson(`/api/rpa/session${query}`).finally(() => {
+    if (portalStatusInFlight === check) portalStatusInFlight = null;
+  });
+  portalStatusInFlight = check;
+  return check.promise;
+}
+
+async function refreshPortalStatus() {
+  if (!appStore.user || appStore.user.is_admin) return;
+  const environment = appStore.portalEnvironment;
+  const authVersion = appStore.authVersion;
+  const requestId = ++portalStatusRequest;
+  const isCurrent = () => requestId === portalStatusRequest
+    && authVersion === appStore.authVersion && environment === appStore.portalEnvironment;
+  try {
+    const status = await getPortalSessionStatus(environment);
+    if (isCurrent()) appStore.portalStatus = status;
+  } catch (error) {
+    if (isCurrent()) appStore.portalStatus = {
+      authenticated: false, state: error.code === 'RPA_BUSY' ? 'busy' : 'unavailable',
+      portal_username: appStore.portalStatus?.portal_username, message: error.message};
+  }
+}
+
+function portalSessionPresentation(status) {
+  const account = status?.portal_username || '';
+  let label;
+  if (!status) label = '未检查';
+  else if (status.reporting) label = '执行中';
+  else if (status.state === 'busy') label = '账号忙碌';
+  else if (status.authenticated) label = '已登录';
+  else if (status.configured === false) label = '未配置';
+  else if (status.state === 'login_required') label = account ? '登录失效' : '未登录';
+  else label = '检查失败';
+  return {account, label};
+}
+
+function canOperateMailbox(address) {
+  return Boolean(appStore.user?.is_admin || appStore.mailboxGrants.some(
+    grant => grant.email_address.toLowerCase() === String(address || '').trim().toLowerCase() && grant.can_operate));
+}
+
 function persistPortalEnvironment(environment) {
+  appStore.portalStatus = null;
   appStore.portalEnvironment = environment;
   localStorage.setItem("mailListenPortalEnvironment", environment);
 }
@@ -84,24 +185,22 @@ function persistMenuCollapsed(collapsed) {
 }
 
 async function checkApiKey(key) {
-  const response = await fetch("/api/auth/check", {
-    headers: { Authorization: `Bearer ${key}` },
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload.success === false) {
-    throw new Error(response.status === 401 ? tt("login.keyInvalid") : (payload.message || tt("common.requestFailed")));
-  }
+  await loginSession({mode: 'admin', api_key: key});
 }
 
 async function requestJson(path, options = {}) {
+  const version = appStore.authVersion;
   if (!appStore.apiKey) {
     throw new Error(tt("common.apiKeyRequired"));
   }
+  const headers = apiHeaders();
+  if (options.body instanceof FormData) delete headers['Content-Type'];
   const response = await fetch(path, {
     ...options,
-    headers: apiHeaders(),
+    headers,
   });
   const payload = await response.json();
+  if (version !== appStore.authVersion) throw new Error('登录用户已变更，请刷新');
   if (response.status === 401) {
     // 登录态失效（如后端更换 API Key）：清除凭据回到登录页
     logout();
@@ -118,10 +217,12 @@ async function requestJson(path, options = {}) {
 }
 
 async function requestBlobUrl(path) {
+  const version = appStore.authVersion;
   if (!appStore.apiKey) {
     throw new Error(tt("common.apiKeyRequired"));
   }
   const response = await fetch(path, { headers: apiHeaders() });
+  if (version !== appStore.authVersion) throw new Error('登录用户已变更，请刷新');
   if (response.status === 401) {
     logout();
     throw new Error(tt("login.keyExpired"));
@@ -134,6 +235,7 @@ async function requestBlobUrl(path) {
 }
 
 async function requestFull(path, options = {}) {
+  const version = appStore.authVersion;
   if (!appStore.apiKey) {
     throw new Error(tt("common.apiKeyRequired"));
   }
@@ -142,6 +244,7 @@ async function requestFull(path, options = {}) {
     headers: apiHeaders(),
   });
   const payload = await response.json();
+  if (version !== appStore.authVersion) throw new Error('登录用户已变更，请刷新');
   if (response.status === 401) {
     logout();
     throw new Error(tt("login.keyExpired"));
@@ -266,7 +369,8 @@ async function loadMailAccountOptions(force = false) {
   }
   mailAccountOptionsPromise = (async () => {
     try {
-      const accounts = await requestJson("/api/system/mail-accounts");
+      const accounts = await requestJson("/api/me/mailboxes");
+      appStore.mailboxGrants = accounts || [];
       mailAccountOptionsCache = (accounts || []).map((account) => ({
         value: account.email_address,
         label: account.name ? `${account.name}（${account.email_address}）` : account.email_address,

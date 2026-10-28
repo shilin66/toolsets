@@ -40,7 +40,7 @@ CUTOVER_LINE_TYPE_LABELS = {
 
 # 割接场景：FastGPT 判定后回写邮件记录。
 # emergency/major_event/in_window 为已回复拒绝割接（回复经人工确认发送后写入），
-# 其中紧急割接仍会调用 /api/cutover/tasks/generate 生成上报任务；
+# 其中紧急割接、重保期割接仍会调用 /api/cutover/tasks/generate 生成上报任务；
 # rule_skipped 为命中供应商特殊规则（由 /api/cutover/scene 写入），不生成任务。
 CUTOVER_SCENE_NORMAL = 'normal'
 CUTOVER_SCENE_EMERGENCY = 'emergency'
@@ -206,6 +206,7 @@ def get_cutover_task_detail(task_id):
             'id': email_record.get('id'),
             'email_id': email_record.get('email_id'),
             'sender': email_record.get('sender'),
+            'receiver': email_record.get('receiver'),
             'subject': email_record.get('subject'),
             'create_time': str(email_record.get('create_time') or ''),
             'api_forward': {

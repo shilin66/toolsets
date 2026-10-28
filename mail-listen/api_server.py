@@ -2,7 +2,7 @@
 """
 邮件监听系统 API 服务
 """
-from flask import Flask, request, jsonify, send_file, url_for
+from flask import Flask, request, jsonify, send_file, url_for, g, has_request_context
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from loguru import logger
@@ -42,6 +42,7 @@ except ModuleNotFoundError:
     load_workbook = None
 
 from database import email_db
+from user_access import Principal, UserAccessRepository
 from cutover_deletion import DeletionConflict, DeletionNotFound, delete_cutover_email
 from actions import (
     APIForwardAction,
@@ -138,21 +139,23 @@ DEFAULT_LINE_QUERY_KEYWORDS = ('CircuitID', 'OrderNumber', 'InternationalId', 'C
 MOMENTARY_INTERRUPTION_LIMIT_MINUTES: Final = 5
 VALID_EMAIL_READ_STATUSES: Final[frozenset[str]] = frozenset({'read', 'unread'})
 _portal_session_service = None
+_portal_registry_lock = Lock()
 _cutover_report_executor = ThreadPoolExecutor(
-    max_workers=1,
+    max_workers=4,
     thread_name_prefix='cutover-report',
 )
 _cutover_report_activity_lock = Lock()
 _cutover_report_activity_count = 0
 
 
-def get_portal_session_service():
+def get_portal_session_service(principal=None):
     global _portal_session_service
-    if _portal_session_service is None:
-        _portal_session_service = PortalSessionService(
-            keepalive_allowed=is_cutover_report_idle,
-        )
-    return _portal_session_service
+    from rpa.user_sessions import PortalSessionRegistry
+    with _portal_registry_lock:
+        if _portal_session_service is None:
+            _portal_session_service = PortalSessionRegistry(email_db, DATA_DIR)
+    principal = principal or (g.principal if has_request_context() else Principal.admin())
+    return _portal_session_service.for_principal(principal)
 
 
 def _close_portal_session_service():
@@ -225,35 +228,9 @@ def ensure_source_email_archived(
     return archive_path
 
 def require_api_key(f):
-    """API Key 校验装饰器"""
+    """Authentication is centralized; preserve the existing mail mutation guard."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # 获取 Authorization 头
-        auth_header = request.headers.get('Authorization')
-        
-        if not auth_header:
-            return jsonify({
-                'success': False,
-                'message': '缺少 Authorization 头'
-            }), 401
-        
-        # 检查 Bearer 格式
-        if not auth_header.startswith('Bearer '):
-            return jsonify({
-                'success': False,
-                'message': 'Authorization 头格式错误，应为: Bearer <api_key>'
-            }), 401
-        
-        # 提取 API Key
-        provided_key = auth_header[7:]  # 去掉 "Bearer " 前缀
-        
-        if provided_key != API_KEY:
-            logger.warning("API Key 校验失败")
-            return jsonify({
-                'success': False,
-                'message': 'API Key 无效'
-            }), 401
-        
         from mail_operation_guard import (
             MailOperationConflict, guard_mail_operation, request_email_record_id,
         )
@@ -276,7 +253,7 @@ def get_supplier_config_repository() -> SupplierConfigRepository:
 
 
 def get_record_query_repository() -> RecordQueryRepository:
-    return RecordQueryRepository(email_db)
+    return RecordQueryRepository(email_db, getattr(g, 'principal', None))
 
 
 def validation_error_message(error: ValidationError) -> str:
@@ -306,6 +283,9 @@ def _session_status_data(status):
         'password_login_url': status.password_login_url,
         'mobile_login_url': status.mobile_login_url,
         'state_path': str(status.state_path),
+        'portal_username': getattr(status, 'portal_username', None),
+        'session_version': getattr(status, 'session_version', None),
+        'reporting': getattr(status, 'reporting', False),
     }
     keepalive = status.keepalive
     if keepalive is not None:
@@ -350,6 +330,12 @@ def _portal_session_error_response(error):
         'LOGIN_FAILED': 422,
         'RPA_UNAVAILABLE': 503,
         'ENVIRONMENT_NOT_CONFIGURED': 503,
+        'RPA_BUSY': 409,
+        'ACCOUNT_IN_USE': 409,
+        'TASK_BUSY': 409,
+        'ACCESS_DENIED': 403,
+        'LOGIN_REQUIRED': 409,
+        'SESSION_CHANGED': 409,
     }.get(error.code, 400)
     return jsonify({
         'success': False,
@@ -1627,7 +1613,12 @@ def confirm_cutover_reply():
             }), 500
 
         record_id = email_record['id']
-        if not email_db.mark_reply_sent(record_id, datetime.now().strftime('%Y-%m-%d %H:%M:%S')):
+        if not email_db.mark_reply_sent(record_id, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), snapshot={
+            'recipients': final_recipients,
+            'cc_recipients': cc_recipients,
+            'content': final_content,
+            'scene': email_record.get('pending_reply_scene') or '',
+        }):
             logger.warning(f"回复状态标记失败：email_records_id={record_id}")
 
         pending_scene = email_record.get('pending_reply_scene') or ''
@@ -1827,6 +1818,28 @@ def update_cutover_scene():
         }), 500
 
 
+@app.route('/api/cutover/emails/<int:email_records_id>/attachments/<int:attachment_index>/preview', methods=['GET'])
+def preview_cutover_attachment(email_records_id, attachment_index):
+    """Read-only preview, scoped to this email by the shared authorization guard."""
+    from attachment_preview import PreviewError, build_attachment_preview
+
+    record = email_db.get_email_record_by_id(email_records_id)
+    attachments = email_db.deserialize_attachments((record or {}).get('attachments'))
+    if not record or attachment_index >= len(attachments):
+        return jsonify(success=False, message='附件不存在'), 404
+    path = attachment_path_from_relative(attachments[attachment_index], data_dir=DATA_DIR)
+    if not path or not path.is_file():
+        return jsonify(success=False, message='附件不存在'), 404
+    try:
+        return jsonify(success=True, data=build_attachment_preview(path))
+    except PreviewError as error:
+        return jsonify(success=False, message=str(error)), 422
+    except Exception as error:
+        logger.warning('附件预览失败 email_records_id={} attachment_index={} error={}',
+                       email_records_id, attachment_index, type(error).__name__)
+        return jsonify(success=False, message='附件无法预览，文件可能损坏或格式不受支持。请下载查看原文件。'), 422
+
+
 @app.route('/api/email/attachments/<path:relative_path>', methods=['GET'])
 def download_email_attachment(relative_path):
     try:
@@ -1859,8 +1872,9 @@ def render_admin_page():
     for name in (
         'vendor/vue.global.prod.js', 'vendor/naive-ui.js',
         'admin-naive.js', 'admin-naive-controls.js', 'admin-naive-display.js',
-        'admin.css', 'admin-shared.js', 'admin-i18n.js',
-        'admin-views.js', 'admin-discovery.js', 'admin.js',
+        'admin.css', 'admin-operations.css', 'admin-operations.js', 'admin-shared.js', 'admin-i18n.js',
+        'admin-supplier-review.js', 'admin-attachment-preview.js', 'admin-cutover-detail.js', 'admin-cutover-detail.css',
+        'admin-views.js', 'admin-users.js', 'admin-discovery.js', 'admin.js',
     ):
         path = BASE_DIR / 'static' / name
         version = path.stat().st_mtime_ns
@@ -1938,6 +1952,8 @@ def get_dashboard_summary():
 def list_supplier_configs():
     try:
         records = get_supplier_config_repository().list()
+        access = UserAccessRepository(email_db)
+        records = [access.supplier_for_principal(g.principal, record) for record in records]
         return jsonify({
             'success': True,
             'message': '供应商配置查询成功',
@@ -1957,6 +1973,10 @@ def create_supplier_config():
     try:
         payload = SupplierConfigCreate.model_validate(request.get_json(silent=True) or {})
         record = get_supplier_config_repository().create(payload)
+        with email_db.get_connection() as conn:
+            conn.execute('INSERT INTO supplier_sample_access(supplier_id,owner_user_id) VALUES (?,?)',
+                         (record['id'], g.principal.user_id))
+            conn.commit()
         return jsonify({
             'success': True,
             'message': '供应商配置创建成功',
@@ -2002,6 +2022,35 @@ def list_supplier_field_defaults():
     }), 200
 
 
+@app.route('/api/suppliers/import-eml', methods=['POST'])
+@require_api_key
+def import_supplier_eml():
+    from supplier_eml import MAX_EML_BYTES, parse_supplier_eml
+    if request.content_length and request.content_length > MAX_EML_BYTES + 1024 * 1024:
+        return jsonify(success=False, message='邮件文件不能超过 20 MB'), 400
+    uploaded = request.files.get('file')
+    if uploaded is None or not (uploaded.filename or '').lower().endswith('.eml'):
+        return jsonify(success=False, message='请选择 .eml 邮件文件'), 400
+    try:
+        result = parse_supplier_eml(uploaded.read(MAX_EML_BYTES + 1))
+        return jsonify(success=True, data=result), 200
+    except (ValueError, TypeError, IndexError, RecursionError) as error:
+        return jsonify(success=False, message=str(error) if isinstance(error, ValueError) else '邮件格式异常，无法解析'), 400
+
+
+@app.route('/api/suppliers/sample-preview', methods=['POST'])
+@require_api_key
+def preview_supplier_sample():
+    """Render caller-provided mail markup offline; no storage or external requests."""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get('content'), str):
+        return jsonify(success=False, message='请提供邮件正文文本'), 400
+    if len(body['content'].encode('utf-8', errors='replace')) > 2 * 1024 * 1024:
+        return jsonify(success=False, message='邮件正文超过预览大小限制（2 MB）'), 400
+    from mail_preview import build_mail_preview
+    return jsonify(success=True, data={'preview_html': build_mail_preview(body['content']) or ''}), 200
+
+
 @app.route('/api/suppliers/preview-prompt', methods=['POST'])
 @require_api_key
 def preview_supplier_prompt():
@@ -2038,6 +2087,34 @@ def preview_supplier_prompt():
         }), 500
 
 
+@app.route('/api/suppliers/preview-attachment-content', methods=['POST'])
+@require_api_key
+def preview_supplier_attachment_content():
+    """Preview a local sample file without persisting it or calling AI."""
+    import tempfile
+    from attachment_preview import PreviewError, build_attachment_preview, MAX_FILE_BYTES
+    from email_attachments import sanitize_attachment_filename, normalize_text_attachment
+
+    request.max_content_length = MAX_FILE_BYTES + 1024 * 1024
+    uploaded = request.files.get('file')
+    if not uploaded or not uploaded.filename:
+        return jsonify(success=False, message='未接收到附件文件'), 400
+    if is_calendar_attachment(uploaded.filename, uploaded.mimetype):
+        return jsonify(success=False, message='ICS 日历附件不参与预览或提取'), 400
+    content = uploaded.read(MAX_FILE_BYTES + 1)
+    if len(content) > MAX_FILE_BYTES:
+        return jsonify(success=False, message='附件超过 20 MB，请在本地查看'), 413
+    try:
+        with tempfile.TemporaryDirectory(prefix='supplier-preview-') as directory:
+            path = Path(directory) / sanitize_attachment_filename(uploaded.filename)
+            path.write_bytes(normalize_text_attachment(path.name, content, charset=uploaded.mimetype_params.get('charset')))
+            return jsonify(success=True, data=build_attachment_preview(path))
+    except PreviewError as error:
+        return jsonify(success=False, message=str(error)), 422
+    except Exception:
+        return jsonify(success=False, message='附件无法预览，文件可能损坏或格式不受支持。请下载查看原文件。'), 422
+
+
 @app.route('/api/suppliers/preview-attachments', methods=['POST'])
 @require_api_key
 def upload_supplier_preview_attachment():
@@ -2057,6 +2134,7 @@ def upload_supplier_preview_attachment():
         relative_path = save_preview_attachment(
             uploaded_file.filename, uploaded_file.read(),
             charset=uploaded_file.mimetype_params.get('charset'),
+            owner_key=None if g.principal.is_admin else g.principal.key,
         )
         return jsonify({
             'success': True,
@@ -2088,6 +2166,11 @@ def preview_supplier_extract():
         for relative_path in body.get('attachments') or []:
             if is_calendar_attachment(relative_path):
                 continue
+            if not g.principal.is_admin:
+                from access_artifacts import can_access_artifact
+                if not can_access_artifact(email_db, g.principal, 'download_email_attachment',
+                                           {'relative_path': relative_path}, DATA_DIR):
+                    return jsonify(success=False, message='附件不存在或未获授权'), 404
             if attachment_path_from_relative(relative_path) is None:
                 return jsonify({
                     'success': False,
@@ -2103,7 +2186,7 @@ def preview_supplier_extract():
             'content': body.get('content') or '',
             'attachments': attachments,
             'attachment_urls': [
-                build_attachment_url(relative_path)
+                build_attachment_url(relative_path, signed=True)
                 for relative_path in attachments
             ],
             'supplier_name': body.get('supplier_name') or None,
@@ -2167,6 +2250,7 @@ def get_supplier_config(supplier_id):
                 'success': False,
                 'message': f'供应商配置不存在：id={supplier_id}'
             }), 404
+        record = UserAccessRepository(email_db).supplier_for_principal(g.principal, record)
         return jsonify({
             'success': True,
             'message': '供应商配置查询成功',
@@ -2184,13 +2268,19 @@ def get_supplier_config(supplier_id):
 @require_api_key
 def update_supplier_config(supplier_id):
     try:
-        payload = SupplierConfigUpdate.model_validate(request.get_json(silent=True) or {})
+        body = request.get_json(silent=True) or {}
+        access = UserAccessRepository(email_db)
+        if isinstance(body, dict) and 'email_type_samples' in body and not access.can_access_supplier_samples(
+                g.principal, supplier_id, operate=True):
+            return jsonify(success=False, message='邮件样本来源邮箱未授予操作权限，其他配置字段仍可修改'), 403
+        payload = SupplierConfigUpdate.model_validate(body)
         record = get_supplier_config_repository().update(supplier_id, payload)
         if record is None:
             return jsonify({
                 'success': False,
                 'message': f'供应商配置不存在：id={supplier_id}'
             }), 404
+        record = access.supplier_for_principal(g.principal, record)
         return jsonify({
             'success': True,
             'message': '供应商配置更新成功',
@@ -2321,6 +2411,9 @@ def create_ticket():
             cut_start_time=cut_start_time,
             cut_end_time=cut_end_time,
         )
+        if duplicate_ticket_record and not UserAccessRepository(email_db).can_access_email(
+                g.principal, duplicate_ticket_record['email_records_id']):
+            duplicate_ticket_record = None
 
         ticket_id = email_db.add_ticket_record(
             email_records_id=email_records_id,
@@ -2676,10 +2769,14 @@ def generate_template_xlsx():
         if payload and payload.get('filename'):
             filename = payload['filename']
 
-        output_path = save_workbook_output(output, filename)
+        if g.principal.is_admin:
+            output_path = save_workbook_output(output, filename)
+        else:
+            output_path = DATA_DIR / 'users' / g.principal.key / 'templates' / normalize_xlsx_filename(filename)
+            write_private_bytes(DATA_DIR, output_path, output.getvalue())
         download_url = url_for(
             'download_template_xlsx',
-            filename=output_path.name,
+            filename=output_path.relative_to(DATA_DIR).as_posix(),
             _external=True
         )
 
@@ -2967,6 +3064,12 @@ def download_template_xlsx(filename):
     try:
         safe_filename = normalize_xlsx_filename(filename)
         file_path = DATA_DIR / safe_filename
+        parts = Path(filename).parts
+        if parts and parts[0] == 'users':
+            if not (len(parts) == 4 and parts[2] == 'templates'
+                    and re.fullmatch(r'user-[1-9][0-9]*', parts[1]) and parts[3] == safe_filename):
+                return jsonify(success=False, message='个人模板文件路径无效'), 404
+            file_path = DATA_DIR / filename
 
         if not file_path.exists() or not file_path.is_file():
             return jsonify({
@@ -3440,6 +3543,62 @@ def get_rpa_session_status():
         return _portal_session_error_response(error)
 
 
+@app.delete('/api/rpa/session')
+def logout_rpa_session():
+    try:
+        get_portal_session_service().logout()
+        return jsonify(success=True)
+    except PortalSessionError as error:
+        return _portal_session_error_response(error)
+
+
+@app.delete('/api/users/<int:user_id>/portal-session')
+def release_user_portal_session(user_id):
+    with email_db.get_connection() as conn:
+        row = conn.execute('SELECT username,display_name FROM app_users WHERE id=?', (user_id,)).fetchone()
+    if not row:
+        return jsonify(success=False, message='用户不存在'), 404
+    try:
+        get_portal_session_service(Principal(user_id, row['username'], row['display_name'])).logout()
+        return jsonify(success=True)
+    except PortalSessionError as error:
+        return _portal_session_error_response(error)
+
+
+@app.post('/api/cutover/reports/<int:report_id>/resolve')
+def resolve_interrupted_report(report_id):
+    from rpa.report_jobs import get_job, identity
+    from rpa.isolation import session_lock
+    body = request.get_json(silent=True) or {}
+    if (not isinstance(body, dict) or body.get('resolution') not in ('success', 'failed')
+            or not isinstance(body.get('note'), str) or not body['note'].strip()):
+        return jsonify(success=False, message='请提供核对结果（success/failed）和综调核对说明'), 400
+    job = get_job(email_db, report_id)
+    if not job:
+        return jsonify(success=False, message='该记录不是多用户上报任务'), 404
+    try:
+        config = PortalSessionSettings.model_validate_json(job['settings_json'])
+        with session_lock(config.session_lock_path):
+            with email_db.get_connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                report = conn.execute('SELECT * FROM cutover_reports WHERE id=?', (report_id,)).fetchone()
+                if not report or report['status'] not in ('pending', 'running', 'interrupted'):
+                    return jsonify(success=False, message='仅未结束或中断的任务可以核对处理'), 409
+                resolution = body['resolution']
+                result = {**(json.loads(report['result']) if report['result'] else {}), 'phase': resolution,
+                    'note': '人工核对：' + body['note'].strip(), 'resolved_by': g.principal.username,
+                    'resolved_at': datetime.now().astimezone().isoformat(), 'execution_identity': identity(job)}
+                conn.execute('UPDATE cutover_reports SET status=?, result=? WHERE id=?',
+                             (resolution, json.dumps(result, ensure_ascii=False), report_id))
+                conn.execute('UPDATE cutover_tasks SET status=? WHERE id=?',
+                             ('reported' if resolution == 'success' else 'report_failed', report['task_id']))
+                conn.execute('UPDATE rpa_report_jobs SET status=? WHERE report_id=?', (resolution, report_id))
+                conn.commit()
+        return jsonify(success=True)
+    except PortalSessionError as error:
+        return _portal_session_error_response(error)
+
+
 @app.route('/api/rpa/report-artifacts/<path:filename>', methods=['GET'])
 @require_api_key
 def get_rpa_report_artifact(filename):
@@ -3657,6 +3816,7 @@ def _execute_cutover_report_job(
     report_id: int,
     report_type: str,
     environment: PortalEnvironment,
+    *, task_snapshot=None, session_settings=None,
 ) -> None:
     _persist_cutover_report_progress(report_id, {
         'phase': 'preparing',
@@ -3671,7 +3831,7 @@ def _execute_cutover_report_job(
         report_id,
     )
     try:
-        task = email_db.get_cutover_task(task_id)
+        task = task_snapshot or email_db.get_cutover_task(task_id)
         if not task:
             raise CutoverReportError(f'割接任务不存在：id={task_id}')
         email_record = email_db.get_email_record_by_id(
@@ -3697,6 +3857,7 @@ def _execute_cutover_report_job(
             environment=environment,
             data_dir=DATA_DIR,
             report_id=report_id,
+            **({'session_settings': session_settings} if session_settings is not None else {}),
             progress_callback=lambda progress: _persist_cutover_report_progress(
                 report_id,
                 progress,
@@ -3822,32 +3983,16 @@ def report_cutover_task_route(task_id):
         except ValueError as error:
             return jsonify({'success': False, 'message': str(error)}), 400
 
-        report_id = email_db.add_cutover_report(
-            task_id,
-            report_type=report_type,
-            status='pending',
-            result={
-                'phase': 'queued',
-                'current_step': 'queued',
-                'current_step_label': '已进入上报队列',
-                'note': '已进入上报队列',
-                'operation_log': [],
-            },
-        )
-        if not report_id:
-            return jsonify({
-                'success': False,
-                'message': '新增上报记录失败'
-            }), 500
+        from rpa.report_jobs import claim_report, run_report_process, finish_job
         try:
-            email_db.update_cutover_task(task_id, status='reporting')
-            submit_cutover_report_job(lambda: _execute_cutover_report_job(
-                task_id,
-                report_id,
-                report_type,
-                environment,
-            ))
+            report_id, queued_result = claim_report(email_db, g.principal,
+                get_portal_session_service(), task_id, environment, DATA_DIR, data.get('session_version'))
+        except PortalSessionError as error:
+            return _portal_session_error_response(error)
+        try:
+            submit_cutover_report_job(lambda: run_report_process(email_db, DATA_DIR, report_id))
         except RuntimeError as error:
+            finish_job(email_db, report_id, 'failed')
             _finish_cutover_report_failure(task_id, report_id, {
                 'error': f'上报任务启动失败：{error}',
                 'note': '上报任务启动失败',
@@ -3864,13 +4009,7 @@ def report_cutover_task_route(task_id):
                 'report_id': report_id,
                 'report_status': 'pending',
                 'task_status': 'reporting',
-                'result': {
-                    'phase': 'queued',
-                    'current_step': 'queued',
-                    'current_step_label': '已进入上报队列',
-                    'note': '已进入上报队列',
-                    'operation_log': [],
-                },
+                'result': queued_result,
             },
         }), 202
     except Exception as e:
@@ -3918,7 +4057,8 @@ def download_cutover_task_excel(task_id):
                 file_path = None
         if file_path is None:
             legacy_path = DATA_DIR / safe_filename
-            if legacy_path.is_file():
+            from access_artifacts import legacy_excel_unambiguous
+            if legacy_path.is_file() and (g.principal.is_admin or legacy_excel_unambiguous(email_db, task)):
                 file_path = legacy_path
         if file_path is None:
             return jsonify({
@@ -4164,6 +4304,15 @@ def create_mail_account_api():
         if error:
             return jsonify({'success': False, 'message': error}), 400
 
+        existing = email_db.get_mail_account_by_address(fields['email_address'])
+        if existing:
+            with email_db.get_connection() as conn:
+                names = [row['display_name'] for row in conn.execute('''SELECT u.display_name
+                    FROM user_mailbox_grants g JOIN app_users u ON u.id=g.user_id WHERE g.account_id=?''', (existing['id'],))]
+            message = f"邮箱 {existing['email_address']} 已配置"
+            message += f"，已授权给：{'、'.join(names)}" if names else '，尚未授权给普通用户'
+            return jsonify(success=False, message=message + '。请联系管理员调整邮箱授权。'), 409
+
         account_id = email_db.add_mail_account(fields)
         if account_id is None:
             return jsonify({
@@ -4198,6 +4347,13 @@ def update_mail_account_api(account_id):
             return jsonify({'success': False, 'message': error}), 400
         if not fields:
             return jsonify({'success': False, 'message': '未提供可更新的字段'}), 400
+
+        if fields.get('email_address', existing['email_address']).casefold() != existing['email_address'].casefold():
+            with email_db.get_connection() as conn:
+                used = conn.execute('SELECT 1 FROM email_records WHERE receiver=? COLLATE NOCASE LIMIT 1', (existing['email_address'],)).fetchone()
+                granted = conn.execute('SELECT 1 FROM user_mailbox_grants WHERE account_id=? LIMIT 1', (account_id,)).fetchone()
+            if used or granted:
+                return jsonify(success=False, message='该邮箱已有历史邮件或用户授权，不能更改邮箱地址。请新建邮箱并重新授权。'), 409
 
         if not email_db.update_mail_account(account_id, fields):
             return jsonify({
@@ -4336,6 +4492,12 @@ def test_mail_account_api(account_id):
 
 from supplier_drafts import register_routes as register_supplier_draft_routes
 register_supplier_draft_routes(app, lambda: email_db, require_api_key)
+
+from access_http import register_access_routes
+register_access_routes(app, lambda: email_db, lambda: API_KEY, lambda: DATA_DIR)
+
+from operations_api import register_operations_routes
+register_operations_routes(app, lambda: email_db)
 
 
 if __name__ == '__main__':

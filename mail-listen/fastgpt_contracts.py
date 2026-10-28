@@ -43,6 +43,9 @@ def validate_draft_config(config):
             any(not isinstance(sample.get(key, ''), str) for key in ('subject', 'content')) or \
             type(sample.get('content_in_attachment', False)) is not bool:
             raise ValueError('草稿邮件类型样本结构无效')
+        source_id = sample.get('source_email_records_id')
+        if source_id is not None and (type(source_id) is not int or source_id <= 0):
+            raise ValueError('样本来源邮件编号无效')
 
 
 def merge_draft_fixed_field_supplements(result):

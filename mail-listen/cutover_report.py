@@ -41,12 +41,13 @@ def report_cutover_task(
     data_dir: Path | None = None,
     report_id: int | None = None,
     progress_callback: Callable[[Mapping[str, object]], None] | None = None,
+    session_settings: PortalSessionSettings | None = None,
 ) -> dict[str, object]:
     task_id = task.get("id")
     line_type = task.get("line_type")
     if line_type not in ("customer", "backbone"):
         raise CutoverReportError(f"不支持的割接任务类型：{line_type}")
-    settings = _load_portal_session_settings()
+    settings = session_settings or _load_portal_session_settings()
     storage_root = (
         data_dir
         if data_dir is not None
@@ -264,6 +265,11 @@ def _resolve_customer_excel(
         if data_dir is not None
         else Path(__file__).resolve().parent / "data"
     ).resolve()
+    if task.get('_report_excel_path'):
+        snapshot = Path(task['_report_excel_path']).resolve()
+        if snapshot.is_relative_to(root / 'mail_store' / 'mailboxes') and snapshot.name == 'customer.xlsx' and snapshot.is_file():
+            return snapshot
+        raise CutoverReportError('上报任务的 Excel 快照不存在或路径无效')
     try:
         canonical_path = customer_excel_path(
             root,

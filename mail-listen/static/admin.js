@@ -8,10 +8,12 @@ const VIEW_ROUTES = {
   suppliers: "/admin/suppliers",
   emails: "/admin/emails",
   cutoverTasks: "/admin/cutover-tasks",
+  operations: "/admin/operations",
   circuits: "/admin/circuits",
   mailAccounts: "/admin/mail-accounts",
   dispatchSession: "/admin/dispatch-session",
   settings: "/admin/settings",
+  users: "/admin/users",
 };
 
 const CUTOVER_EMAIL_DETAIL_ROUTE = /^\/admin\/cutover-emails\/(\d+)$/;
@@ -43,6 +45,11 @@ function parseRoute() {
 }
 
 function applyRoute(route) {
+  if (appStore.user && ((!appStore.user.is_admin && ['users', 'mailAccounts'].includes(route.view))
+      || (appStore.user.is_admin && route.view === 'dispatchSession'))) {
+    route = {view: 'cutoverTasks'};
+    history.replaceState({}, '', VIEW_ROUTES.cutoverTasks);
+  }
   routeState.view = route.view;
   routeState.emailRecordId = route.view === "cutoverEmailDetail" ? route.emailRecordId : null;
   routeState.supplierId = route.view === "supplierForm" ? route.supplierId : null;
@@ -112,10 +119,12 @@ const AdminApp = defineComponent({
       suppliers: ViewSuppliers,
       emails: ViewEmails,
       cutoverTasks: ViewCutoverTasks,
+      operations: ViewOperations,
       circuits: ViewCircuits,
       mailAccounts: ViewMailAccounts,
       dispatchSession: ViewDispatchSession,
       settings: ViewSettings,
+      users: ViewUsers,
     };
 
     // 登录守卫：未登录（无 API Key）时只渲染登录页，登录成功后主壳与各视图重新挂载并自动拉取数据
@@ -134,6 +143,7 @@ const AdminApp = defineComponent({
     ));
     const activeMenu = computed(() => (isDetail.value ? (routeState.view === "supplierForm" ? "suppliers" : "cutoverTasks") : routeState.view));
     const viewTitle = computed(() => {
+      if (routeState.view === 'users') return '用户与邮箱授权';
       if (routeState.view === "supplierForm") {
         return routeState.supplierId == null ? tt("nav.supplierCreate") : tt("nav.supplierEdit");
       }
@@ -141,7 +151,7 @@ const AdminApp = defineComponent({
     });
 
     async function handleLogout() {
-      logout();
+      try { await endSession(); } catch (error) { NocMessage.error(error.message); }
       viewKey.value += 1;
     }
 
@@ -177,8 +187,31 @@ const AdminApp = defineComponent({
       { immediate: true },
     );
 
+    watch(() => appStore.user, (user) => {
+      if (user) {
+        applyRoute(parseRoute());
+        loadMailAccountOptions(true);
+        if (routeState.view !== 'dispatchSession') refreshPortalStatus();
+      }
+    });
+    watch(() => appStore.portalEnvironment, () => {
+      if (routeState.view !== 'dispatchSession') refreshPortalStatus();
+    });
+    const portalIdentity = computed(() => {
+      const session = portalSessionPresentation(appStore.portalStatus);
+      return session.account ? `${session.account} · ${session.label}` : session.label;
+    });
+    let statusTimer;
+    onMounted(() => {
+      restoreSession();
+      statusTimer = setInterval(() => {
+        if (!document.hidden && routeState.view !== 'dispatchSession') refreshPortalStatus();
+      }, 60000);
+    });
+    onUnmounted(() => clearInterval(statusTimer));
+
     return {
-      appStore, routeState, viewKey,
+      appStore, routeState, viewKey, portalIdentity, refreshPortalStatus,
       loggedIn, isDetail, currentComponent, activeMenu, viewTitle, statusDisplay,
       portalEnvironmentTone, portalEnvironmentLabel,
       uiLocale,
@@ -192,7 +225,8 @@ const AdminApp = defineComponent({
   },
   template: `
     <ui-config-provider :locale="uiLocale">
-    <component v-if="!loggedIn" :is="loginComponent"></component>
+    <div v-if="appStore.authLoading" class="login-screen">正在恢复登录…</div>
+    <component v-else-if="!loggedIn" :is="loginComponent"></component>
     <ui-container v-else class="app-shell">
       <ui-aside :width="appStore.menuCollapsed ? '64px' : '224px'" class="sidebar"
                 :class="{ 'is-collapsed': appStore.menuCollapsed }">
@@ -215,17 +249,23 @@ const AdminApp = defineComponent({
             <ui-icon><DocumentChecked></DocumentChecked></ui-icon>
             <span>{{ $t('nav.cutoverTasks') }}</span>
           </ui-menu-item>
+          <ui-menu-item index="operations" :title="appStore.menuCollapsed ? $t('nav.operations') : null">
+            <ui-icon><DataAnalysis /></ui-icon><span>{{ $t('nav.operations') }}</span>
+          </ui-menu-item>
           <ui-menu-item index="circuits" :title="appStore.menuCollapsed ? $t('nav.circuits') : null">
             <ui-icon><share></share></ui-icon>
             <span>{{ $t('nav.circuits') }}</span>
           </ui-menu-item>
-          <ui-menu-item index="mailAccounts" :title="appStore.menuCollapsed ? $t('nav.mailAccounts') : null">
+          <ui-menu-item v-if="appStore.user.is_admin" index="mailAccounts" :title="appStore.menuCollapsed ? $t('nav.mailAccounts') : null">
             <ui-icon><MessageBox /></ui-icon>
             <span>{{ $t('nav.mailAccounts') }}</span>
           </ui-menu-item>
-          <ui-menu-item index="dispatchSession" :title="appStore.menuCollapsed ? $t('nav.dispatchSession') : null">
+          <ui-menu-item v-if="!appStore.user.is_admin" index="dispatchSession" :title="appStore.menuCollapsed ? $t('nav.dispatchSession') : null">
             <ui-icon><Lock /></ui-icon>
             <span>{{ $t('nav.dispatchSession') }}</span>
+          </ui-menu-item>
+          <ui-menu-item v-if="appStore.user.is_admin" index="users" title="用户与邮箱授权">
+            <ui-icon><User /></ui-icon><span>用户与邮箱授权</span>
           </ui-menu-item>
           <ui-menu-item index="settings" :title="appStore.menuCollapsed ? $t('nav.settings') : null">
             <ui-icon><Setting /></ui-icon>
@@ -253,15 +293,16 @@ const AdminApp = defineComponent({
             <h1 class="topbar-title" aria-current="page">{{ viewTitle }}</h1>
           </nav>
           <div class="topbar-user">
-            <div class="rpa-environment-badge" :class="portalEnvironmentTone"
+            <span class="workbench-identity" :title="appStore.user.display_name + ' · ' + appStore.user.username">{{ appStore.user.display_name }} · {{ appStore.user.is_admin ? '管理员' : '普通用户' }}</span>
+            <div v-if="!appStore.user.is_admin" class="rpa-environment-badge" :class="portalEnvironmentTone"
                  role="status" :aria-label="$t('common.rpaEnvironmentLabel', { environment: portalEnvironmentLabel })">
               <ui-icon aria-hidden="true">
                 <WarningFilled v-if="appStore.portalEnvironment === 'production'" />
                 <InfoFilled v-else />
               </ui-icon>
               <span class="rpa-environment-badge__copy">
-                <span>RPA</span>
-                <strong>{{ portalEnvironmentLabel }}</strong>
+                <span>综调 · {{ portalEnvironmentLabel }} · {{ appStore.portalEnvironment === 'production' ? 'PRODUCTION' : 'TEST' }}</span>
+                <strong :title="portalIdentity">{{ portalIdentity }}</strong>
               </span>
             </div>
             <ui-button text class="topbar-logout" @click="handleLogout">
@@ -276,6 +317,7 @@ const AdminApp = defineComponent({
             <div class="operations-summary-intro">
               <div class="operations-summary-heading">
                 <h2 id="operations-summary-title">{{ $t('operations.title') }}</h2>
+                <ui-button text @click="navigateTo('operations')">{{ $t('nav.operations') }} →</ui-button>
               </div>
               <ui-action class="operations-summary-refresh" icon="RefreshRight"
                          :loading="appStore.operationsSummaryLoading"

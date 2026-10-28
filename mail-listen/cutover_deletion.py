@@ -282,9 +282,12 @@ def _reject_active(conn, record):
 
 def _remove_database_records(conn, email_id):
     record = conn.execute('SELECT subject,content FROM email_records WHERE id=?', (email_id,)).fetchone()
+    conn.execute('''DELETE FROM rpa_report_jobs WHERE report_id IN (
+        SELECT r.id FROM cutover_reports r JOIN cutover_tasks t ON t.id=r.task_id WHERE t.email_records_id=?)''', (email_id,))
     conn.execute('DELETE FROM cutover_reports WHERE task_id IN (SELECT id FROM cutover_tasks WHERE email_records_id=?)', (email_id,))
     conn.execute('DELETE FROM cutover_tasks WHERE email_records_id=?', (email_id,))
     conn.execute('DELETE FROM ticket_records WHERE email_records_id=?', (email_id,))
+    conn.execute('DELETE FROM unconfigured_sample_cleanup WHERE email_records_id=?', (email_id,))
     conn.execute('DELETE FROM mail_ai_jobs WHERE email_records_id=?', (email_id,))
     conn.execute('DELETE FROM supplier_draft_samples WHERE email_records_id=?', (email_id,))
     for draft in conn.execute('SELECT id,draft_json FROM supplier_drafts WHERE source_email_records_id=?', (email_id,)).fetchall():

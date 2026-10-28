@@ -65,6 +65,7 @@ class EmailTypeSample(BaseModel):
     subject: str = ""
     content: str = ""
     content_in_attachment: bool = False
+    source_email_records_id: int | None = Field(default=None, gt=0, strict=True)
 
 
 class SupplierConfigCreate(BaseModel):
@@ -171,6 +172,8 @@ class SupplierConfigRepository:
                 )
             ''')
             self._ensure_columns(cursor)
+            from operations_storage import initialize_supplier_evidence
+            initialize_supplier_evidence(cursor)
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_supplier_configs_email
                 ON supplier_configs(email)
@@ -574,6 +577,7 @@ def _normalize_email_type_samples(samples: dict[str, Any]) -> dict[str, dict[str
                 "subject": subject,
                 "content": content,
                 "content_in_attachment": content_in_attachment,
+                **({"source_email_records_id": sample["source_email_records_id"]} if sample.get("source_email_records_id") else {}),
             }
     return normalized
 

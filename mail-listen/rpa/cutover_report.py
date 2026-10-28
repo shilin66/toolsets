@@ -468,12 +468,20 @@ class PortalCutoverReportRpa:
                         if section == "割接对象":
                             self._assert_backbone_basic_info_retained(page, form_data)
                     if filled:
+                        screenshot_focus = None
+                        if section == "关联网络资源变更单":
+                            field_name = fields_to_fill[0][0]
+                            screenshot_focus = self._find_form_item(
+                                page,
+                                self._BACKBONE_LABEL_ALIASES.get(field_name, (field_name,)),
+                            )
                         self._capture_operation_step(
                             page,
                             screenshot_path,
                             operation_log,
                             step,
                             label,
+                            focus=screenshot_focus,
                         )
 
                 self._assert_backbone_basic_info_retained(page, form_data)
@@ -488,6 +496,7 @@ class PortalCutoverReportRpa:
                         operation_log,
                         "backbone_attachments_uploaded",
                         f"已上传 {len(uploaded_filenames)} 个割接方案附件",
+                        focus=self._backbone_attachment_screenshot_target(page),
                     )
 
                 if not submit:
@@ -1124,15 +1133,9 @@ class PortalCutoverReportRpa:
             page.wait_for_timeout(200)
         raise CutoverReportRpaError(f"骨干线路表单未找到确认项：{aliases[0]}")
 
-    def _upload_backbone_attachments(
-        self,
-        page: Page,
-        attachment_paths: tuple[Path, ...],
-    ) -> tuple[str, ...]:
-        if not attachment_paths:
-            return ()
+    def _find_backbone_attachment_input(self, page: Page) -> Locator:
         try:
-            attachment_item = self._find_form_item(page, ("割接方案",))
+            attachment_item = self._find_form_item(page, ("割接方案", "割接方案附件"))
             file_input = attachment_item.locator('input[type="file"]').first
             if file_input.count() == 0:
                 raise CutoverReportRpaError("骨干线路表单未找到附件上传控件")
@@ -1141,6 +1144,33 @@ class PortalCutoverReportRpa:
                 page,
                 self._settings.report_backbone_attachment_selector,
             )
+        return file_input
+
+    def _backbone_attachment_screenshot_target(self, page: Page) -> Locator:
+        file_input = self._find_backbone_attachment_input(page)
+        form_item = file_input.locator(
+            "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' el-form-item ')][1]"
+        )
+        if form_item.count() and form_item.is_visible():
+            return form_item
+        # Native upload inputs are often hidden; use their visible surrounding UI.
+        if file_input.is_visible():
+            return file_input
+        ancestors = file_input.locator("xpath=ancestor::*")
+        for index in reversed(range(ancestors.count())):
+            target = ancestors.nth(index)
+            if target.is_visible():
+                return target
+        raise CutoverReportRpaError("无法定位可见的割接方案附件区域")
+
+    def _upload_backbone_attachments(
+        self,
+        page: Page,
+        attachment_paths: tuple[Path, ...],
+    ) -> tuple[str, ...]:
+        if not attachment_paths:
+            return ()
+        file_input = self._find_backbone_attachment_input(page)
         file_input.set_input_files([str(path) for path in attachment_paths])
         self._wait_for_page_settled(page)
         return tuple(path.name for path in attachment_paths)
@@ -1581,8 +1611,17 @@ class PortalCutoverReportRpa:
         operation_log: list[CutoverReportOperationStep],
         step: str,
         label: str,
+        *,
+        focus: Locator | None = None,
     ) -> CutoverReportOperationStep:
         self._wait_for_page_settled(page)
+        if focus is not None:
+            focus.scroll_into_view_if_needed(timeout=self._settings.timeout_ms)
+            # Center inside scroll containers/iframes, away from fixed headers and footers.
+            focus.evaluate(
+                "element => element.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'})"
+            )
+            self._wait_for_page_settled(page)
         step_path = final_path.with_name(
             f"{final_path.stem}-{len(operation_log) + 1:02d}-{step}{final_path.suffix}"
         )

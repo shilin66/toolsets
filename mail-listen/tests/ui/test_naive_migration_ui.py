@@ -49,7 +49,12 @@ class NaiveMigrationUiTest(unittest.TestCase):
                 route.continue_()
         self.page.route('**/*', local_only)
         self.page.goto(self.base + '/admin/suppliers')
-        self.page.get_by_role('textbox', name='API Key').fill('test-key')
+        if getattr(self, 'use_user_login', False):
+            self.page.get_by_role('textbox', name='用户名', exact=True).fill('operator')
+            self.page.get_by_role('textbox', name='密码', exact=True).fill('operator-password')
+        else:
+            self.page.get_by_role('button', name='管理员登录', exact=True).click()
+            self.page.get_by_role('textbox', name='API Key').fill('test-key')
         self.page.get_by_role('button', name='登录', exact=True).click()
         expect(self.page.locator('.view-body')).to_be_visible()
         self.evidence = Path(__file__).resolve().parents[2] / '.qa' / 'naive-migration'
@@ -63,7 +68,7 @@ class NaiveMigrationUiTest(unittest.TestCase):
     def test_all_desktop_routes_use_native_naive_and_same_service(self):
         routes = ['suppliers', 'emails', 'cutover-tasks', 'circuits', 'mail-accounts',
                   'settings', 'suppliers/new', f'suppliers/{self.api.supplier_config["id"]}',
-                  f'cutover-emails/{self.api.email_records_id}', 'dispatch-session']
+                  f'cutover-emails/{self.api.email_records_id}']
         for route in routes:
             with self.subTest(route=route):
                 self.page.goto(self.base + '/admin/' + route)
@@ -94,6 +99,7 @@ class NaiveMigrationUiTest(unittest.TestCase):
         expect(self.page.locator('html')).to_have_attribute('lang', 'en')
         self.page.reload()
         expect(self.page.locator('html')).to_have_attribute('lang', 'en')
+        self.page.get_by_role('button', name='Administrator sign-in', exact=True).click()
         self.page.get_by_role('textbox', name='API Key').fill('test-key')
         self.page.get_by_role('textbox', name='API Key').press('Enter')
         expect(self.page.locator('.app-shell')).to_be_visible()
@@ -101,6 +107,7 @@ class NaiveMigrationUiTest(unittest.TestCase):
         self.page.locator('.login-lang').click()
         self.page.get_by_text('繁體中文（香港）', exact=True).click()
         expect(self.page.locator('html')).to_have_attribute('lang', 'zh-HK')
+        self.page.get_by_role('button', name='管理員登入', exact=True).click()
         self.page.get_by_role('textbox', name='API Key').fill('test-key')
         self.page.get_by_role('textbox', name='API Key').press('Enter')
         expect(self.page.locator('.app-shell')).to_be_visible()
@@ -110,9 +117,11 @@ class NaiveMigrationUiTest(unittest.TestCase):
     def test_supplier_create_edit_persists_to_database(self):
         self.page.goto(self.base + '/admin/suppliers/new')
         self.page.get_by_placeholder('例如 RT', exact=True).fill('Naive smoke supplier')
-        self.page.locator('.supplier-section--basic input[type=email]').first.fill('naive@example.com')
+        self.page.get_by_role('textbox', name='来信发件地址', exact=True).fill('naive@example.com')
         self.page.get_by_role('textbox', name='割接通知主题样本', exact=True).fill('维护通知')
         self.page.get_by_role('textbox', name='割接通知正文样本', exact=True).fill('线路维护，2026 年 10 月 25 日 02:00 至 04:00。')
+        self.page.get_by_role('button', name='进入邮件核对', exact=True).click()
+        self.page.get_by_role('button', name='高级配置', exact=True).click()
         attachment = self.page.locator('.mail-type-attachment-flag')
         expect(attachment).not_to_be_checked()
         attachment.click()
@@ -126,6 +135,7 @@ class NaiveMigrationUiTest(unittest.TestCase):
         self.assertEqual(supplier['email'], 'naive@example.com')
         self.page.goto(self.base + f'/admin/suppliers/{supplier["id"]}')
         expect(self.page.get_by_placeholder('例如 RT', exact=True)).to_have_value('Naive smoke supplier')
+        self.page.get_by_role('button', name='高级配置', exact=True).click()
         expect(attachment).to_be_checked()
         attachment.click()
         expect(attachment).not_to_be_checked()
@@ -138,13 +148,14 @@ class NaiveMigrationUiTest(unittest.TestCase):
         self.assert_clean()
 
     def test_mail_form_validation_and_save_uses_native_dialog(self):
+        original = self.api.db.list_mail_accounts()
         self.page.goto(self.base + '/admin/mail-accounts')
         self.page.get_by_role('button', name='新增邮箱', exact=True).click()
         dialog = self.page.get_by_role('dialog')
         expect(dialog).to_be_visible()
         dialog.get_by_role('button', name='保存', exact=True).click()
         expect(dialog).to_contain_text('请填写名称')
-        self.assertEqual(self.api.db.list_mail_accounts(), [])
+        self.assertEqual(self.api.db.list_mail_accounts(), original)
         dialog.get_by_placeholder('如：NOC 值班邮箱', exact=True).fill('Naive mailbox')
         dialog.locator('.n-form-item').filter(has=self.page.get_by_text('邮箱地址', exact=True)).locator('input').fill('naive@example.com')
         dialog.get_by_placeholder('请输入密码或授权码', exact=True).fill('test-only-password')
@@ -152,8 +163,8 @@ class NaiveMigrationUiTest(unittest.TestCase):
         dialog.get_by_role('button', name='保存', exact=True).click()
         expect(dialog).not_to_be_visible()
         rows = self.api.db.list_mail_accounts()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]['email_address'], 'naive@example.com')
+        self.assertEqual(len(rows), len(original) + 1)
+        self.assertIn('naive@example.com', [row['email_address'] for row in rows])
         self.assert_clean()
 
     def test_circuit_upload_preview_cancel_and_confirm_replace(self):

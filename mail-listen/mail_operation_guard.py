@@ -61,8 +61,19 @@ def guard_mail_operation(db, record_id, *, deleting=False, forwarding=False):
     if not lock.acquire(blocking=False):
         raise MailOperationConflict('该邮件正在处理，请稍后重试')
     try:
-        if not deleting and db.get_mail_deletion(record_id):
-            raise MailOperationConflict('该邮件正在删除或已删除，无法继续处理')
-        yield
+        from rpa.isolation import session_lock
+        from rpa.session_models import PortalSessionError
+        lock_path = Path(db.db_path).resolve().parent / (Path(db.db_path).name + '.locks') / f'mail-{record_id}.lock'
+        try:
+            with session_lock(lock_path):
+                if not deleting and db.get_mail_deletion(record_id):
+                    raise MailOperationConflict('该邮件正在删除或已删除，无法继续处理')
+                with db.get_connection() as conn:
+                    busy = conn.execute("SELECT 1 FROM cutover_tasks WHERE email_records_id=? AND status='reporting'", (record_id,)).fetchone()
+                if busy and not deleting:
+                    raise MailOperationConflict('该邮件存在正在上报或待核对的任务，暂时不能修改')
+                yield
+        except PortalSessionError as error:
+            raise MailOperationConflict('该邮件正在处理，请稍后重试') from error
     finally:
         lock.release()

@@ -1,11 +1,15 @@
 import unittest
 import importlib
+import tempfile
+from pathlib import Path
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from flask.testing import FlaskClient
+from database import EmailDatabase
+from user_access import UserAccessRepository
 
 from rpa.session_models import (
     PortalEnvironment,
@@ -106,6 +110,10 @@ class RpaSessionApiTest(unittest.TestCase):
     def setUp(self):
         self.service = FakePortalSessionService()
         self.patch_stack = ExitStack()
+        temp = self.patch_stack.enter_context(tempfile.TemporaryDirectory())
+        db = EmailDatabase(str(Path(temp) / 'test.db'))
+        self.patch_stack.enter_context(patch.object(api_server, 'email_db', db))
+        self.patch_stack.enter_context(patch.object(api_server, 'API_KEY', 'test-key'))
         self.patch_stack.enter_context(
             patch.object(
                 api_server,
@@ -115,7 +123,11 @@ class RpaSessionApiTest(unittest.TestCase):
             )
         )
         self.client = api_server.app.test_client()
-        self.headers = {"Authorization": "Bearer test-key"}
+        repo = UserAccessRepository(db)
+        user = repo.create_user('operator', 'operator-password')
+        token, csrf = repo.create_session(repo.get_principal(user['id']), 'test-key')
+        self.client.set_cookie('noc_session', token)
+        self.headers = {'X-CSRF-Token': csrf}
 
     def tearDown(self):
         self.patch_stack.close()

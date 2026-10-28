@@ -61,7 +61,8 @@
           size: size(p.size), disabled: p.disabled, type: ['password', 'textarea'].includes(p.type) ? p.type : 'text',
           rows: p.rows == null ? undefined : Number(p.rows), showPasswordOn: p.showPassword ? 'click' : undefined,
           inputProps: { id: p.id, autocomplete: p.autocomplete, spellcheck: p.spellcheck,
-            type: p.type === 'email' ? 'email' : undefined,
+            // Omit type for passwords: Naive UI owns it while toggling visibility.
+            ...(p.type === 'email' ? { type: 'email' } : {}),
             'aria-label': attrs['aria-label'], 'aria-invalid': attrs['aria-invalid'],
             'aria-describedby': attrs['aria-describedby'] },
           'onUpdate:value': (value) => update(emit, value),
@@ -98,7 +99,7 @@
             value: empty ? null : map(p.modelValue ?? (p.multiple ? [] : null), encode),
             options: options.map((option) => ({ ...option, value: encode(option.value) })),
             'onUpdate:value': (value) => update(emit, value == null && !p.multiple ? '' : map(value, decode)),
-          });
+          }, { action: slots.action });
         };
       },
     });

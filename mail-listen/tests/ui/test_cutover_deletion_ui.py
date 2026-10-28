@@ -85,6 +85,7 @@ class CutoverDeletionUiTest(unittest.TestCase):
                      if request.method == "DELETE" and "/api/cutover/emails/" in request.url else None)
         self.base = f"http://127.0.0.1:{self.server.server_port}"
         self.page.goto(self.base + "/admin/cutover-tasks")
+        self.page.get_by_role('button', name='管理员登录', exact=True).click()
         self.page.get_by_role("textbox", name="API Key").fill("test-key")
         self.page.get_by_role("button", name="登录", exact=True).click()
         expect(self.list_panel()).to_be_visible()

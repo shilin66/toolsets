@@ -51,6 +51,7 @@ class ActionLayoutUiTest(unittest.TestCase):
         value = self.page.locator('.operations-metric strong').first
         expect(value).to_have_text('0')
         self.page.get_by_role('button', name='退出登录', exact=True).click()
+        self.page.get_by_role('button', name='管理员登录', exact=True).click()
         self.page.get_by_role('textbox', name='API Key').fill('test-key')
         self.page.get_by_role('button', name='登录', exact=True).click()
         expect(value).to_have_text('0')
@@ -96,7 +97,7 @@ class ActionLayoutUiTest(unittest.TestCase):
 
     def test_list_actions_spacing_tooltips_and_dialog_footer(self):
         result = self.api.client.post('/api/system/mail-accounts', headers=self.api.headers, json={
-            'name': 'NOC test mailbox', 'email_address': 'noc@example.com',
+            'name': 'NOC test mailbox', 'email_address': 'actions@example.com',
             'email_password': 'test-only', 'imap_server': 'imap.example.com',
             'imap_port': 993, 'imap_use_ssl': True, 'enabled': False,
         })

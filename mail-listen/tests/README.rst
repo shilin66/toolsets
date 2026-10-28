@@ -19,7 +19,7 @@
 .. code-block:: bash
 
    # 全量测试
-   API_KEY=test-key python -m unittest discover -s tests -t .
+   API_KEY=test-key MAIL_DATABASE_PATH=/tmp/mail-listen-test-bootstrap.db python -m unittest discover -s tests -t .
 
    # 按模块运行
    API_KEY=test-key python -m unittest discover -s tests/api -t .

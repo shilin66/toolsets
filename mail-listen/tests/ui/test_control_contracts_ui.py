@@ -82,7 +82,8 @@ class ControlContractsUiTest(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 201)
         self.page.goto(self.base + '/admin/mail-accounts')
-        self.page.get_by_role('button', name='编辑', exact=True).click()
+        row = self.page.get_by_role('row').filter(has_text='controls@example.com')
+        row.get_by_role('button', name='编辑', exact=True).click()
         dialog = self.page.get_by_role('dialog', name='编辑邮箱', exact=True)
         switches = dialog.get_by_role('switch')
         for index, checked in enumerate((True, True, False)):
@@ -94,21 +95,22 @@ class ControlContractsUiTest(unittest.TestCase):
             ports.nth(index).press('Tab')
         dialog.get_by_role('button', name='保存', exact=True).click()
         expect(dialog).not_to_be_visible()
-        saved = self.api.db.list_mail_accounts()[0]
+        saved = next(item for item in self.api.db.list_mail_accounts() if item['email_address'] == 'controls@example.com')
         self.assertEqual((saved['imap_port'], saved['smtp_port']), (143, 587))
         self.assertEqual(tuple(bool(saved[key]) for key in ('imap_use_ssl', 'smtp_use_ssl', 'smtp_use_tls')), (False, False, True))
-        self.page.get_by_role('button', name='编辑', exact=True).click()
+        row.get_by_role('button', name='编辑', exact=True).click()
         for index, checked in enumerate((False, False, True)):
             expect(switches.nth(index)).to_be_checked(checked=checked)
         expect(ports.nth(0)).to_have_value('143')
         expect(ports.nth(1)).to_have_value('587')
         dialog.get_by_role('button', name='取消', exact=True).click()
         expect(dialog).not_to_be_visible()
-        toggle = self.page.locator('.noc-data-table').get_by_role('switch')
+        toggle = row.get_by_role('switch')
         expect(toggle).not_to_be_checked()
         toggle.click()
         expect(toggle).to_be_checked()
-        self.assertTrue(self.api.db.list_mail_accounts()[0]['enabled'])
+        saved = next(item for item in self.api.db.list_mail_accounts() if item['email_address'] == 'controls@example.com')
+        self.assertTrue(saved['enabled'])
         self.assert_clean()
 
     def test_date_filters_apply_and_reset_without_changing_date_format(self):
