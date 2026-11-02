@@ -187,8 +187,6 @@ class PersonalPortalSession:
             lambda service: service.login_with_password(attempt_id, username, password, captcha))
 
     def request_sms(self, attempt_id, phone, password, captcha):
-        if phone.strip().casefold() not in {key.strip().casefold() for key in self.registry.settings.account_aliases}:
-            raise PortalSessionError('ACCOUNT_MAPPING_REQUIRED', '手机号登录需管理员先配置手机号与综调用户名映射，避免同一账号被重复绑定')
         with session_lock(self.lock_path):
             self._assert_idle()
             service = self._pending(attempt_id)

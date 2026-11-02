@@ -27,9 +27,10 @@ class TaskDetailLayoutUiTest(unittest.TestCase):
                 self.page.wait_for_function("document.getAnimations().every(a => a.playState !== 'running' || a.effect.getTiming().iterations === Infinity)")
                 with self.subTest(width=width, collapsed=collapsed, backbone=backbone):
                     metrics = self.panel.evaluate('''el => {
-                        const viewport = el.closest('.noc-data-table').getBoundingClientRect();
+                        const viewport = el.closest('.cw-selected-task').getBoundingClientRect();
                         const panel = el.getBoundingClientRect();
-                        const controls = [...el.querySelectorAll('.panel-heading-tools button, .block-head button, .backbone-card-tools button, .task-type-switch, .backbone-field-grid > label, .task-meta-item')];
+                        // The editor is now a standalone panel. Hidden accordion actions have no layout box.
+                        const controls = [...el.querySelectorAll('.panel-heading-tools button, .block-head button, .backbone-card-tools button, .task-type-switch, .backbone-field-grid > label, .task-meta-item')].filter(e => e.getClientRects().length);
                         return {panelRight:panel.right, panelLeft:panel.left,
                             viewportRight:viewport.right, viewportLeft:viewport.left,
                             overflow:el.scrollWidth-el.clientWidth,

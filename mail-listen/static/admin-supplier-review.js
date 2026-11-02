@@ -70,6 +70,12 @@ Object.assign(supplierReviewMessages.en, {importEml:'Import EML email', importHi
 Object.assign(supplierReviewMessages['zh-CN'], {lineRules:'每条线路的识别方式', lineRulesHint:'修改下面的规则后重新识别，核对每条线路的结果，再保存配置。', editLineRule:'修改识别方式', manualLineRule:'使用完整手写规则；可补充该字段的识别要求。', currentFullRule:'查看当前完整规则'});
 Object.assign(supplierReviewMessages['zh-HK'], {lineRules:'每條線路的識別方式', lineRulesHint:'修改下方規則後重新識別，核對每條線路的結果，再儲存配置。', editLineRule:'修改識別方式', manualLineRule:'使用完整手寫規則；可補充此欄位的識別要求。', currentFullRule:'查看目前完整規則'});
 Object.assign(supplierReviewMessages.en, {lineRules:'How each circuit is identified', lineRulesHint:'After changing a rule, analyze again and review each circuit before saving.', editLineRule:'Edit extraction rule', manualLineRule:'Uses the full manual prompt. Add instructions for this field.', currentFullRule:'View current full prompt'});
+const fieldReviewCopy = {
+  'zh-CN': {manualHint:'当前使用已有手写规则。展开字段后可编辑完整提示词；修改会影响所有字段，应用后请重新识别。', results:'识别结果与提取规则', rule:'提取规则', editRule:'查看 / 编辑规则', collapseRule:'收起规则', expandRule:'展开', ruleEditor:'提取规则 · 可直接修改完整提示词', applyRule:'应用修改', ruleHint:'应用后重新识别，核对规则效果', confirmQuestion:'确认无误', confirmedQuestion:'已确认 · 此项核实无误', reopenQuestion:'重新核实', pendingQuestions:'{count} 项待核实', allConfirmed:'核实事项已处理', changedRule:'待重新识别', discardRule:'当前规则尚未应用，是否放弃修改？', discardTitle:'未应用的规则', discardAction:'放弃修改', keepEditing:'继续编辑', manualRule:'当前使用完整手写提示词，展开后编辑实际生效的规则。', manualEditor:'完整手写提示词 · 修改会影响所有字段', noRule:'尚未配置提取规则', lineRuleValue:'查看上方每条线路的识别结果', generalRuleValue:'补充所有线路的提取要求', queryField:'用于查询内部线路'},
+  'zh-HK': {manualHint:'目前使用已有手寫規則。展開欄位後可編輯完整提示詞；修改會影響所有欄位，套用後請重新識別。', results:'識別結果與提取規則', rule:'提取規則', editRule:'查看 / 編輯規則', collapseRule:'收起規則', expandRule:'展開', ruleEditor:'提取規則 · 可直接修改完整提示詞', applyRule:'套用修改', ruleHint:'套用後重新識別，核對規則效果', confirmQuestion:'確認無誤', confirmedQuestion:'已確認 · 此項核實無誤', reopenQuestion:'重新核實', pendingQuestions:'{count} 項待核實', allConfirmed:'核實事項已處理', changedRule:'待重新識別', discardRule:'目前規則尚未套用，是否放棄修改？', discardTitle:'未套用的規則', discardAction:'放棄修改', keepEditing:'繼續編輯', manualRule:'目前使用完整手寫提示詞，展開後編輯實際生效的規則。', manualEditor:'完整手寫提示詞 · 修改會影響所有欄位', noRule:'尚未配置提取規則', lineRuleValue:'查看上方每條線路的識別結果', generalRuleValue:'補充所有線路的提取要求', queryField:'用於查詢內部線路'},
+  en: {manualHint:'Uses an existing manual prompt. Expand a field to edit the complete prompt; changes affect every field. Analyze again after applying.', results:'Results and extraction rules', rule:'Extraction rule', editRule:'View / edit rule', collapseRule:'Collapse rule', expandRule:'Expand', ruleEditor:'Extraction rule · edit the complete prompt', applyRule:'Apply changes', ruleHint:'Analyze again after applying and check the results', confirmQuestion:'Confirm correct', confirmedQuestion:'Confirmed correct', reopenQuestion:'Review again', pendingQuestions:'{count} items to verify', allConfirmed:'All items reviewed', changedRule:'Analyze again', discardRule:'This rule has unapplied edits. Discard them?', discardTitle:'Unapplied rule', discardAction:'Discard edits', keepEditing:'Keep editing', manualRule:'Uses a full manual prompt. Expand to edit the actual active rule.', manualEditor:'Full manual prompt · affects every field', noRule:'No extraction rule configured', lineRuleValue:'See each circuit’s results above', generalRuleValue:'Additional instructions for all circuits', queryField:'Use to find internal circuits'}
+};
+for (const [locale, messages] of Object.entries(fieldReviewCopy)) Object.assign(supplierReviewMessages[locale], messages);
 for (const [locale, messages] of Object.entries(supplierReviewMessages)) i18n.global.mergeLocaleMessage(locale, {supplierReview:messages});
 
 // Static assets can update before the running Python service reloads. Keep a safe
@@ -104,8 +110,9 @@ function buildLocalSupplierPreview(content) {
 
 function useSupplierDraftReview(ctx) {
   const {ref, computed, watch, onUnmounted} = Vue;
-  const {draftRecord, draftReadOnly, mailTypes, fixedFields, lineFields, topCustomFields, extractFiles, supplierFieldLabel} = ctx;
-  const sampleMode = ref('configured'), collectedPage = ref(1), collectedRequestedPage = ref(1), collectedMails = ref([]);
+  const {draftRecord, draftReadOnly, mailTypes, fixedFields, lineFields, topCustomFields, extractFiles, supplierFieldLabel, reviewMetadata} = ctx;
+  const sampleMode = ctx.reviewSampleMode || ref('configured');
+  const collectedPage = ref(1), collectedRequestedPage = ref(1), collectedMails = ref([]);
   const sourceMail = ref(null), sourceMailId = ref(null), sourceBusy = ref(false), sourceError = ref('');
   const collectedBusy = ref(false), collectedError = ref('');
   let sourceRequest = 0, listRequest = 0;
@@ -152,7 +159,7 @@ function useSupplierDraftReview(ctx) {
     if (collectedPage.value === 1 && Array.isArray(samples)) collectedMails.value = samples;
   });
   onUnmounted(() => { ++sourceRequest; ++listRequest; });
-  const canUseCollectedSample = computed(() => !draftReadOnly.value && sourceMail.value
+  const canUseCollectedSample = computed(() => !draftReadOnly.value && !ctx.samplesReadOnly.value && sourceMail.value
     && mailTypes.value.some(sample => sample.name === sourceMail.value.mail_type));
   function useCollectedSample() {
     if (!canUseCollectedSample.value) return;
@@ -167,14 +174,14 @@ function useSupplierDraftReview(ctx) {
       {name:'reply_email'}, {name:'name'}, {name:'line_array'}, {name:'line_query_keywords'}];
     const label = name => ({reply_email:tt('supplierForm.replyEmailLabel'), name:tt('suppliers.name'),
       line_array:tt('supplierReview.lineInfo'), line_query_keywords:tt('supplierReview.query')})[name] || supplierFieldLabel(name);
-    return (draftRecord.value?.draft?.unresolved_questions || []).map(text => {
+    return (reviewMetadata.value.questions || []).map(text => {
       const raw = String(text), prefix = raw.split(/[|｜:：]/, 1)[0].trim();
       const target = fields.find(field => field.name && (field.name.toLowerCase() === prefix.toLowerCase() || label(field.name) === prefix));
       let content = target ? raw.slice(prefix.length).replace(/^[\s|｜:：]+/, '') : raw;
       for (const field of fields.filter(f => f.name).sort((a,b) => b.name.length-a.name.length)) {
         if (field.name !== 'name') content = content.split(field.name).join(label(field.name));
       }
-      return {key:target?.name || '', text:content.replace(/\s*[|｜]\s*/g, '；')};
+      return {raw, key:target?.name || '', text:content.replace(/\s*[|｜]\s*/g, '；')};
     });
   });
   const questionsFor = key => reviewQuestions.value.filter(question => question.key === key);
@@ -182,13 +189,52 @@ function useSupplierDraftReview(ctx) {
   const lineQuestions = computed(() => reviewQuestions.value.filter(question => ['line_array','line_query_keywords'].includes(question.key)));
   return {sampleMode, collectedMails, collectedPage, collectedRequestedPage, collectedBusy, collectedError, loadCollectedPage,
     sourceMail, sourceMailId, sourceBusy, sourceError, selectCollectedMail, changeSampleMode,
-    canUseCollectedSample, useCollectedSample, questionsFor, generalQuestions, lineQuestions};
+    canUseCollectedSample, useCollectedSample, reviewQuestions, questionsFor, generalQuestions, lineQuestions};
+}
+
+// SHA-256 fallback keeps review confirmations available on internal HTTP sites.
+// Digests are change detectors, never credentials or authorization tokens.
+function supplierReviewDigest(text) {
+  const bytes = new TextEncoder().encode(text);
+  const words = new Uint32Array(((bytes.length + 9 + 63) >>> 6) * 16);
+  bytes.forEach((byte, i) => { words[i >>> 2] |= byte << (24 - (i % 4) * 8); });
+  words[bytes.length >>> 2] |= 0x80 << (24 - (bytes.length % 4) * 8);
+  words[words.length - 2] = Math.floor(bytes.length / 0x20000000);
+  words[words.length - 1] = bytes.length * 8;
+  const k = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+  const state = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+  const rotate = (x,n) => (x >>> n) | (x << (32-n));
+  const w = new Uint32Array(64);
+  for (let offset=0; offset<words.length; offset+=16) {
+    for (let i=0; i<64; i++) {
+      if (i<16) w[i]=words[offset+i];
+      else {
+        const x=w[i-15], y=w[i-2];
+        w[i]=(rotate(x,7)^rotate(x,18)^(x>>>3)) + w[i-16] + w[i-7] + (rotate(y,17)^rotate(y,19)^(y>>>10));
+      }
+    }
+    let [a,b,c,d,e,f,g,h]=state;
+    for (let i=0; i<64; i++) {
+      const t1=(h+(rotate(e,6)^rotate(e,11)^rotate(e,25))+((e&f)^(~e&g))+k[i]+w[i])|0;
+      const t2=((rotate(a,2)^rotate(a,13)^rotate(a,22))+((a&b)^(a&c)^(b&c)))|0;
+      h=g; g=f; f=e; e=(d+t1)|0; d=c; c=b; b=a; a=(t1+t2)|0;
+    }
+    [a,b,c,d,e,f,g,h].forEach((value,i) => { state[i]=(state[i]+value)>>>0; });
+  }
+  return state.map(value => value.toString(16).padStart(8,'0')).join('');
 }
 
 function useSupplierReview(ctx) {
   const {ref, reactive, computed, watch, onUnmounted} = Vue;
   const {form, isDraft, isEdit, mailTypes, fixedFields, lineFields, topCustomFields, legacyPrompt,
-    usesManualPrompt, extractFiles, extractPreview, extractPreviewView, samplesRestricted, supplierFieldLabel} = ctx;
+    usesManualPrompt, extractFiles, extractPreview, extractPreviewView, samplesRestricted, supplierFieldLabel, reviewMetadata} = ctx;
   const reviewStage = ref(isDraft.value || isEdit.value ? 'review' : 'intro');
   const showAdvanced = ref(false);
   const emlInput = ref(null), emlBusy = ref(false), emlError = ref('');
@@ -300,14 +346,19 @@ function useSupplierReview(ctx) {
   const reviewFields = computed(() => {
     const extracted = extractPreviewView.value.blocks.filter(b => b.kind === 'extract').flatMap(b => b.fields);
     return [...fixedFields.value.filter(f => !f.isLineField), ...topCustomFields.value].map(f => ({
-      key:f.name, label:supplierFieldLabel(f.name), value:extracted.find(v => v.key === f.name)?.value || '',
+      target:f, key:f.name, label:supplierFieldLabel(f.name), value:extracted.find(v => v.key === f.name)?.value || '',
       timeRange:extracted.find(v => v.key === f.name)?.timeRange
     }));
   });
   const reviewLines = computed(() => extractPreviewView.value.blocks.filter(b => b.kind === 'extract').flatMap(b => b.lines));
-  const reviewLineFields = computed(() => fixedFields.value.filter(field => field.isLineField));
+  const reviewLineFields = computed(() => [...lineFields.value.filter(f => f.name.trim()), ...fixedFields.value.filter(field => field.isLineField)]);
   const hasStructuredReview = computed(() => reviewFields.value.some(f => f.value) || reviewLines.value.length > 0);
-  const reviewColumns = computed(() => [...new Set(reviewLines.value.flatMap(row => Object.keys(row)))]);
+  const reviewColumns = computed(() => {
+    const available = new Set(reviewLines.value.flatMap(row => Object.keys(row)));
+    const fixed = fixedFields.value.filter(f => f.isLineField).map(f => f.name);
+    return [...new Set([...lineFields.value.map(f => f.name).filter(k => available.has(k)),
+      ...[...available].filter(k => !fixed.includes(k)), ...fixed.filter(k => available.has(k))])];
+  });
   const configuredIdentifiers = computed(() => lineFields.value.filter(row => row.name.trim()));
   const identifierDialog = ref(false);
   const identifierForm = reactive({name:'', description:'', keyword:true});
@@ -335,21 +386,102 @@ function useSupplierReview(ctx) {
   }
   const correction = ref(null);
   const correctionText = ref('');
-  function correctResult(key) {
-    const target = fixedFields.value.find(f => f.name === key) || lineFields.value.find(f => f.name === key) || topCustomFields.value.find(f => f.name === key);
-    correction.value = {key, label:key ? supplierFieldLabel(key) : tt('supplierReview.generalRule'), target};
-    correctionText.value = usesManualPrompt.value || !target ? '' : (target.value?.trim() ? target.value : target.description || '');
+  const findRuleField = key => [...fixedFields.value, ...lineFields.value, ...topCustomFields.value].find(f => f.name === key);
+  const ruleText = key => {
+    if (usesManualPrompt.value) return legacyPrompt.value;
+    const target = findRuleField(key);
+    return target ? (target.value?.trim() || target.description || '') : form.extra_instructions;
+  };
+  const resultRuleSnapshot = ref({});
+  const ruleSnapshot = () => Object.fromEntries([...fixedFields.value, ...lineFields.value, ...topCustomFields.value].map(f => [f.name, ruleText(f.name)]));
+  const fieldRuleStale = key => hasReviewResult.value && resultRuleSnapshot.value[key] !== ruleText(key);
+  const lineFieldResult = key => [...new Set(reviewLines.value.map(row => row[key]).filter(v => v != null && v !== '').map(String))].join('；');
+  const correctionInitial = ref('');
+  async function closeCorrection() {
+    if (correction.value && correctionText.value !== correctionInitial.value) {
+      try { await NocDialog.confirm(tt('supplierReview.discardRule'), tt('supplierReview.discardTitle'), {
+        type:'warning', confirmButtonText:tt('supplierReview.discardAction'), cancelButtonText:tt('supplierReview.keepEditing')}); }
+      catch { return false; }
+    }
+    correction.value = null;
+    return true;
+  }
+  async function toggleReviewAdvanced() {
+    if (await closeCorrection()) showAdvanced.value = !showAdvanced.value;
+  }
+  function scrollReviewTarget(element) {
+    const pane = element?.closest('.supplier-results-pane');
+    if (!pane) return;
+    const rect = element.getBoundingClientRect(), bounds = pane.getBoundingClientRect();
+    const header = pane.querySelector('.review-pane-head')?.offsetHeight || 0;
+    if (rect.top < bounds.top + header + 12 || rect.bottom > bounds.bottom - 12) {
+      pane.scrollBy({top:rect.top - bounds.top - header - 12, behavior:'smooth'});
+    }
+  }
+  async function correctResult(key) {
+    const closing = correction.value?.key === key;
+    if (!await closeCorrection() || closing) return;
+    correction.value = {key, label:key ? supplierFieldLabel(key) : tt('supplierReview.generalRule'), target:findRuleField(key)};
+    correctionText.value = correctionInitial.value = ruleText(key);
+    await Vue.nextTick();
+    const element = [...document.querySelectorAll('.review-rule-card')].find(el => el.dataset.field === (key || 'line_array'));
+    element?.querySelector('textarea')?.focus({preventScroll:true});
+    scrollReviewTarget(element?.querySelector('.review-inline-editor'));
   }
   function applyCorrection() {
     const text = correctionText.value.trim();
     if (!text || !correction.value) return;
-    const {target,label} = correction.value;
-    if (usesManualPrompt.value) legacyPrompt.value += '\n\n' + label + '：' + text;
+    const {target} = correction.value;
+    if (usesManualPrompt.value) legacyPrompt.value = text;
     else if (target && 'value' in target) target.value = text;
     else if (target) target.description = text;
-    else form.extra_instructions = [form.extra_instructions.trim(), text].filter(Boolean).join('\n');
+    else form.extra_instructions = text;
     correction.value = null;
     NocMessage.success(tt('supplierReview.applied'));
+  }
+  // Persist only SHA-256 context digests, never copies of sample bodies in review metadata.
+  const questionContexts = computed(() => {
+    const sample = activeSample.value || {};
+    const sampleContext = {subject:(sample.subject || '').trim(), content:(sample.content || '').trim(),
+      type:reviewMailType.value, source:draftReview.sampleMode.value === 'collected' ? draftReview.sourceMailId.value : (sample.source_email_records_id || configuredAttachmentMail.value?.id || null), attachments:sampleAttachments.attachments.value.map(a => a.path || [a.name,a.raw?.size,a.raw?.lastModified])};
+    return draftReview.reviewQuestions.value.map(q => [q.raw, JSON.stringify({sample:sampleContext,
+      rule:ruleText(q.key), extra:form.extra_instructions, identity:[form.email,form.reply_email,form.name],
+      ...(q.key === 'line_array' || q.key === 'line_query_keywords' || !q.key ? {rules:ruleSnapshot(), query:lineFields.value.map(f => [f.name,f.keyword])} : {})})]);
+  });
+  const questionDigests = ref({}), contextsReady = ref(false);
+  let digestVersion = 0;
+  watch(() => JSON.stringify(questionContexts.value), async serialized => {
+    const entries = JSON.parse(serialized);
+    const version = ++digestVersion;
+    contextsReady.value = false;
+    try {
+      const values = await Promise.all(entries.map(async ([key, context]) => {
+        if (!globalThis.crypto?.subtle) return [key, supplierReviewDigest(context)];
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(context));
+        return [key, Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2,'0')).join('')];
+      }));
+      if (version === digestVersion) { questionDigests.value = Object.fromEntries(values); contextsReady.value = true; }
+    } catch { if (version === digestVersion) questionDigests.value = {}; }
+  }, {immediate:true, flush:'sync'});
+  onUnmounted(() => { ++digestVersion; });
+  const questionConfirmed = question => contextsReady.value && Boolean(questionDigests.value[question.raw])
+    && reviewMetadata.value.confirmations[question.raw] === questionDigests.value[question.raw];
+  function confirmQuestion(question, confirmed) {
+    if (!contextsReady.value || ctx.samplesReadOnly.value || ctx.draftReadOnly.value) return;
+    const values = {...reviewMetadata.value.confirmations};
+    if (confirmed) values[question.raw] = questionDigests.value[question.raw];
+    else delete values[question.raw];
+    reviewMetadata.value = {...reviewMetadata.value, confirmations:values};
+  }
+  const reviewMetadataPayload = () => ({questions:[...reviewMetadata.value.questions], confirmations:
+    Object.fromEntries(draftReview.reviewQuestions.value.filter(questionConfirmed).map(q => [q.raw,questionDigests.value[q.raw]]))});
+  const pendingQuestions = computed(() => draftReview.reviewQuestions.value.filter(q => !questionConfirmed(q)));
+  async function jumpQuestion() {
+    const q = pendingQuestions.value[0];
+    if (!q) return;
+    await Vue.nextTick();
+    const el = [...document.querySelectorAll('.review-rule-card, .review-question-group')].find(el => el.dataset.field === q.key);
+    scrollReviewTarget(el);
   }
   function startReview() {
     const notice = mailTypes.value.find(item => item.name === '割接通知');
@@ -361,19 +493,47 @@ function useSupplierReview(ctx) {
   return {...draftReview, ...sampleAttachments, configuredAttachmentBusy, configuredAttachmentError, loadConfiguredAttachments, removeSampleAttachment, emlInput, emlBusy, emlError, importEml, reviewStage, showAdvanced, activeSampleName, activeSample, reviewMailType, sampleIsHtml, samplePreview,
     samplePreviewBusy, samplePreviewError, renderSample, reviewFingerprint, resultFingerprint, hasReviewResult,
     reviewError, reviewStale, reviewFields, reviewLineFields, reviewLines, reviewColumns, configuredIdentifiers, hasStructuredReview,
-    correction, correctionText, correctResult, applyCorrection, startReview,
+    correction, correctionText, correctResult, applyCorrection, closeCorrection, toggleReviewAdvanced, startReview, ruleText,
+    ruleSnapshot, resultRuleSnapshot, fieldRuleStale, lineFieldResult, contextsReady, questionConfirmed, confirmQuestion, reviewMetadataPayload, pendingQuestions, jumpQuestion,
     identifierDialog, identifierForm, identifierError, openIdentifierDialog, addReviewIdentifier};
+}
+
+// Both draft review and formal editing render the same field and reminder templates.
+function supplierQuestionsTemplate(expression, editable = true) {
+  return `<div v-for="question in ${expression}" :key="question.raw" class="review-question" :class="{'is-confirmed':questionConfirmed(question)}">
+    <div class="review-question-text"><strong>{{ $t(questionConfirmed(question) ? 'supplierReview.confirmedQuestion' : 'supplierReview.verify') }}</strong><span v-if="!questionConfirmed(question)">{{ question.text }}</span></div>
+    <div class="review-question-actions"><ui-button text size="small" :disabled="!contextsReady || samplesReadOnly || draftReadOnly" @click="confirmQuestion(question,!questionConfirmed(question))">{{ $t(questionConfirmed(question) ? 'supplierReview.reopenQuestion' : 'supplierReview.confirmQuestion') }}</ui-button>
+    ${editable ? `<ui-button v-if="!questionConfirmed(question)" text size="small" @click="correctResult(question.key || null)">{{ $t('supplierReview.editLineRule') }}</ui-button>` : ''}</div>
+  </div>`;
+}
+function supplierRuleBodyTemplate(key) {
+  return `<template v-if="correction && correction.key === ${key}">
+    <div class="review-inline-editor"><label class="form-label" :for="'review-rule-'+(${key} || 'general')">{{ $t(usesManualPrompt ? 'supplierReview.manualEditor' : 'supplierReview.ruleEditor') }}</label>
+      <ui-input :id="'review-rule-'+(${key} || 'general')" v-model="correctionText" type="textarea" :rows="6" :aria-label="$t('supplierReview.ruleEditor')"></ui-input>
+      <div class="review-inline-footer"><span>{{ $t('supplierReview.ruleHint') }}</span><div><ui-button size="small" @click="closeCorrection">{{ $t('common.cancel') }}</ui-button><ui-button type="primary" size="small" :disabled="!correctionText.trim()" @click="applyCorrection">{{ $t('supplierReview.applyRule') }}</ui-button></div></div>
+    </div>
+  </template><div v-else class="review-rule-preview"><span>{{ $t('supplierReview.rule') }}</span><p>{{ usesManualPrompt ? $t('supplierReview.manualRule') : (ruleText(${key}) || $t('supplierReview.noRule')) }}</p></div>`;
+}
+function supplierFieldCardTemplate(line = false) {
+  const key = line ? 'field.name' : 'field.key';
+  return `<article v-for="field in ${line ? 'reviewLineFields' : 'reviewFields'}" :key="${key}" class="review-rule-card ${line ? 'review-line-rule' : 'review-result-row'}" :class="{'is-expanded':correction && correction.key === ${key}}" :data-field="${key}">
+    <div class="review-rule-card-head"><h3>{{ supplierFieldLabel(${key}) }} <code v-if="supplierFieldLabel(${key}) !== ${key}">{{ ${key} }}</code><small v-if="fieldRuleStale(${key})" class="review-rule-stale">{{ $t('supplierReview.changedRule') }}</small></h3>
+    <ui-button text size="small" :aria-label="$t('supplierReview.editRule')+'：'+supplierFieldLabel(${key})" :aria-expanded="!!correction && correction.key === ${key}" @click="correctResult(${key})">{{ $t(correction && correction.key === ${key} ? 'supplierReview.collapseRule' : 'supplierReview.editRule') }}</ui-button></div>
+    ${line ? `<p class="review-field-value" :class="{'review-value-empty':!hasReviewResult || !lineFieldResult(field.name)}">{{ hasReviewResult ? (lineFieldResult(field.name) || $t('supplierReview.missing')) : $t('supplierReview.waiting') }}</p>` : `<p v-if="hasReviewResult && field.timeRange" class="review-field-value review-time-range"><span>{{ $t('supplierForm.timeStart',{time:field.timeRange.startTime}) }}</span><span>{{ $t('supplierForm.timeEnd',{time:field.timeRange.endTime}) }}</span></p><p v-else class="review-field-value" :class="{'review-value-empty':!hasReviewResult || !field.value}">{{ hasReviewResult ? (field.value || $t('supplierReview.missing')) : $t('supplierReview.waiting') }}</p>`}
+    ${supplierRuleBodyTemplate(key)}
+    ${supplierQuestionsTemplate('questionsFor('+key+')')}
+  </article>`;
 }
 
 const SUPPLIER_REVIEW_TEMPLATE = `
   <section v-if="!loadFailed && (!draftReadOnly || draftRecord?.draft?.config)" class="supplier-identity" :aria-label="$t('supplierReview.editIdentity')">
     <div class="form-field"><label class="form-label">{{ $t('suppliers.name') }} <span class="required-mark">*</span></label>
-      <ui-input ref="supplierNameInput" v-model="form.name" :disabled="draftReadOnly" :aria-label="$t('suppliers.name')" :placeholder="$t('supplierForm.namePlaceholder')"></ui-input><p v-for="(question,index) in questionsFor('name')" :key="index" class="review-field-question">{{ question.text }}</p></div>
+      <ui-input ref="supplierNameInput" v-model="form.name" :disabled="draftReadOnly" :aria-label="$t('suppliers.name')" :placeholder="$t('supplierForm.namePlaceholder')"></ui-input>${supplierQuestionsTemplate("questionsFor('name')", false)}</div>
     <div class="form-field"><label class="form-label">{{ $t('draftReview.senderLabel') }} <span class="required-mark">*</span></label>
       <ui-input v-model="form.email" :aria-label="$t('draftReview.senderLabel')" type="email" :disabled="isDraft" :placeholder="$t('supplierForm.emailPlaceholder')"></ui-input></div>
     <div class="form-field"><label class="form-label">{{ $t('supplierForm.replyEmailLabel') }}</label>
       <ui-input v-model="form.reply_email" :disabled="draftReadOnly" :aria-label="$t('supplierForm.replyEmailLabel')" type="email" :placeholder="$t('supplierForm.replyEmailPlaceholder')"></ui-input>
-      <p v-for="(question,index) in questionsFor('reply_email')" :key="index" class="review-field-question"><strong>{{ $t('supplierReview.verify') }} · </strong>{{ question.text }}</p></div>
+      ${supplierQuestionsTemplate("questionsFor('reply_email')", false)}</div>
     <p class="supplier-identity-hint">{{ $t('draftReview.replyHint') }}</p>
   </section>
   <section v-if="reviewStage === 'intro' && !loadFailed && activeSample" class="supplier-start">
@@ -444,7 +604,7 @@ const SUPPLIER_REVIEW_TEMPLATE = `
       </div>
       <template v-else>
       <p class="review-pane-hint">{{ $t('supplierReview.resultHint') }}</p>
-      <section v-if="generalQuestions.length" class="review-general-questions"><h3>{{ $t('supplierReview.generalQuestions') }}</h3><p>{{ $t('supplierReview.questionsHint') }}</p><ul><li v-for="(question,index) in generalQuestions" :key="index">{{ question.text }}</li></ul></section>
+      <section v-if="generalQuestions.length" class="review-general-questions"><h3>{{ $t('supplierReview.generalQuestions') }}</h3><p>{{ $t('supplierReview.questionsHint') }}</p><div class="review-question-group" data-field="">${supplierQuestionsTemplate("generalQuestions")}</div></section>
       <p v-if="samplesRestricted" class="review-state-message">{{ $t('supplierOperator.testRestricted') }}</p>
       <p v-else-if="reviewMailType!=='割接通知'" class="review-state-message">{{ $t('supplierReview.noticeOnly') }}</p>
       <template v-else>
@@ -453,27 +613,23 @@ const SUPPLIER_REVIEW_TEMPLATE = `
         <p v-if="hasReviewResult" class="review-result-status" :class="{'review-warning':reviewStale}" role="status">{{ $t(reviewStale ? 'supplierReview.stale' : 'supplierReview.current') }}</p>
         <p v-if="hasReviewResult && !hasStructuredReview" class="review-warning">{{ $t('supplierReview.emptyResult') }}</p>
         <p v-if="usesManualPrompt" class="review-warning">{{ $t('supplierReview.manualHint') }}</p>
-        <div class="review-field-results">
-          <article v-for="field in reviewFields" :key="field.key" class="review-result-row" :data-field="field.key">
-            <div><h3>{{ field.label }}</h3><p v-if="hasReviewResult && field.timeRange" class="review-time-range"><span>{{ $t('supplierForm.timeStart',{time:field.timeRange.startTime}) }}</span><span>{{ $t('supplierForm.timeEnd',{time:field.timeRange.endTime}) }}</span></p><p v-else :class="{'review-value-empty':!field.value}">{{ hasReviewResult ? (field.value || $t('supplierReview.missing')) : $t('supplierReview.waiting') }}</p><p v-for="(question,index) in questionsFor(field.key)" :key="index" class="review-field-question"><strong>{{ $t('supplierReview.verify') }} · </strong>{{ question.text }}</p></div>
-            <ui-button text size="small" :aria-label="$t('supplierReview.correct')+'：'+field.label" @click="correctResult(field.key)">{{ $t('supplierReview.correct') }}</ui-button>
-          </article>
-        </div>
-        <div class="review-lines-head"><h3>{{ $t('supplierReview.lineInfo') }} <small v-if="hasReviewResult">{{ $t('supplierReview.lineCount',{count:reviewLines.length}) }}</small></h3><ui-button text size="small" @click="correctResult(null)">{{ $t('supplierReview.fixLines') }}</ui-button></div>
-        <p v-for="(question,index) in lineQuestions" :key="index" class="review-field-question review-line-question"><strong>{{ $t('supplierReview.verify') }} · </strong>{{ question.text }}</p>
+        <div v-if="reviewQuestions.length" class="review-questions-summary"><ui-button text size="small" @click="jumpQuestion">{{ $t(pendingQuestions.length ? 'supplierReview.pendingQuestions' : 'supplierReview.allConfirmed',{count:pendingQuestions.length}) }}</ui-button></div>
+        <div class="review-field-results">${supplierFieldCardTemplate()}</div>
+        <div class="review-lines-head"><h3>{{ $t('supplierReview.lineInfo') }} <small v-if="hasReviewResult">{{ $t('supplierReview.lineCount',{count:reviewLines.length}) }}</small></h3></div>
+        <div v-if="reviewLines.length && hasReviewResult" class="review-lines-scroll"><table class="review-lines-table"><thead><tr><th v-for="col in reviewColumns" :key="col"><ui-button v-if="reviewLineFields.some(f=>f.name===col)" text size="small" @click="correctResult(col)">{{ supplierFieldLabel(col) }} ↗</ui-button><template v-else>{{ supplierFieldLabel(col) }}</template></th></tr></thead><tbody><tr v-for="(row,index) in reviewLines" :key="index"><td v-for="col in reviewColumns" :key="col">{{ row[col] == null || row[col] === '' ? '—' : row[col] }}</td></tr></tbody></table></div>
+        <p v-else class="review-pane-hint">{{ $t(hasReviewResult ? 'supplierReview.noLines' : 'supplierReview.waiting') }}</p>
+        <section class="review-query-options"><h3>{{ $t('supplierReview.query') }}</h3><p>{{ $t('supplierReview.queryHint') }}</p>
+          <div v-for="row in configuredIdentifiers" :key="row.name" class="review-query-row"><ui-checkbox v-model="row.keyword">{{ row.name }}</ui-checkbox></div>
+          <ui-button v-if="!usesManualPrompt" class="review-add-identifier" size="small" :icon="icons.Plus" @click="openIdentifierDialog">{{ $t('supplierReview.identifiers') }}</ui-button>
+        </section>
         <section class="review-line-rules" :aria-label="$t('supplierReview.lineRules')">
           <header><h4>{{ $t('supplierReview.lineRules') }}</h4><p>{{ $t('supplierReview.lineRulesHint') }}</p></header>
-          <article v-for="field in reviewLineFields" :key="field.name" class="review-line-rule" :data-field="field.name">
-            <div class="review-line-rule-head"><h4>{{ supplierFieldLabel(field.name) }}</h4><ui-button text size="small" :aria-label="$t('supplierReview.editLineRule')+'：'+supplierFieldLabel(field.name)" @click="correctResult(field.name)">{{ $t('supplierReview.editLineRule') }}</ui-button></div>
-            <p class="review-line-rule-summary">{{ usesManualPrompt ? $t('supplierReview.manualLineRule') : (field.value.trim() || field.description) }}</p>
-            <p v-for="(question,index) in questionsFor(field.name)" :key="index" class="review-field-question"><strong>{{ $t('supplierReview.verify') }} · </strong>{{ question.text }}</p>
+          ${supplierFieldCardTemplate(true)}
+          <article class="review-rule-card review-general-rule" data-field="line_array" :class="{'is-expanded':correction && correction.key === null}">
+            <div class="review-rule-card-head"><h3>{{ $t('supplierReview.generalRule') }}</h3><ui-button text size="small" @click="correctResult(null)">{{ $t(correction && correction.key === null ? 'supplierReview.collapseRule' : 'supplierReview.editRule') }}</ui-button></div>
+            ${supplierRuleBodyTemplate('null')}
+            ${supplierQuestionsTemplate('lineQuestions')}
           </article>
-        </section>
-        <div v-if="reviewLines.length && hasReviewResult" class="review-lines-scroll"><table class="review-lines-table"><thead><tr><th v-for="col in reviewColumns" :key="col">{{ supplierFieldLabel(col) }}</th></tr></thead><tbody><tr v-for="(row,index) in reviewLines" :key="index"><td v-for="col in reviewColumns" :key="col">{{ row[col] == null || row[col] === '' ? '—' : row[col] }}</td></tr></tbody></table></div>
-        <p v-else-if="hasReviewResult" class="review-pane-hint">{{ $t('supplierReview.noLines') }}</p>
-        <section class="review-query-options"><h3>{{ $t('supplierReview.query') }}</h3><p>{{ $t('supplierReview.queryHint') }}</p>
-          <div v-for="row in configuredIdentifiers" :key="row.name" class="review-query-row"><div><ui-checkbox v-model="row.keyword">{{ supplierFieldLabel(row.name) }}</ui-checkbox><p v-for="(question,index) in questionsFor(row.name)" :key="index" class="review-field-question">{{ question.text }}</p></div><ui-button text size="small" :aria-label="$t('supplierReview.correct')+'：'+supplierFieldLabel(row.name)" @click="correctResult(row.name)">{{ $t('supplierReview.correct') }}</ui-button></div>
-          <ui-button v-if="!usesManualPrompt" class="review-add-identifier" size="small" :icon="icons.Plus" @click="openIdentifierDialog">{{ $t('supplierReview.identifiers') }}</ui-button>
         </section>
         <details v-if="hasReviewResult" class="review-raw-result"><summary>{{ $t('supplierReview.raw') }}</summary><pre>{{ extractPreview }}</pre></details>
       </template>
@@ -490,10 +646,5 @@ const SUPPLIER_REVIEW_TEMPLATE = `
     <p v-if="identifierError" role="alert" class="review-identifier-error">{{ identifierError }}</p>
     <template #footer><ui-button @click="identifierDialog=false">{{ $t('common.cancel') }}</ui-button><ui-button type="primary" :disabled="!identifierForm.name.trim() || !identifierForm.description.trim()" @click="addReviewIdentifier">{{ $t('supplierReview.identifierAdd') }}</ui-button></template>
   </ui-dialog>
-  <ui-dialog :model-value="!!correction" :title="correction ? $t('supplierReview.correctionTitle',{label:correction.label}) : ''" width="640px" class="review-correction-dialog" @close="correction=null">
-    <p class="field-hint">{{ $t('supplierReview.correctionHint') }}</p>
-    <details v-if="usesManualPrompt && correction?.target?.isLineField" class="review-manual-line-rule"><summary>{{ $t('supplierReview.currentFullRule') }}</summary><pre>{{ legacyPrompt }}</pre><p class="field-hint">{{ $t('supplierReview.manualLineRule') }}</p></details>
-    <ui-input v-model="correctionText" type="textarea" :rows="7" :aria-label="$t('supplierReview.correct')" :placeholder="$t('supplierReview.correctionPlaceholder')"></ui-input>
-    <template #footer><ui-button @click="correction=null">{{ $t('common.cancel') }}</ui-button><ui-button type="primary" :disabled="!correctionText.trim()" @click="applyCorrection">{{ $t('supplierReview.apply') }}</ui-button></template>
-  </ui-dialog>
+
 `;

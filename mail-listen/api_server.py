@@ -2270,7 +2270,7 @@ def update_supplier_config(supplier_id):
     try:
         body = request.get_json(silent=True) or {}
         access = UserAccessRepository(email_db)
-        if isinstance(body, dict) and 'email_type_samples' in body and not access.can_access_supplier_samples(
+        if isinstance(body, dict) and {'email_type_samples', 'review_metadata'}.intersection(body) and not access.can_access_supplier_samples(
                 g.principal, supplier_id, operate=True):
             return jsonify(success=False, message='邮件样本来源邮箱未授予操作权限，其他配置字段仍可修改'), 403
         payload = SupplierConfigUpdate.model_validate(body)
@@ -4491,7 +4491,7 @@ def test_mail_account_api(account_id):
 
 
 from supplier_drafts import register_routes as register_supplier_draft_routes
-register_supplier_draft_routes(app, lambda: email_db, require_api_key)
+register_supplier_draft_routes(app, lambda: email_db, require_api_key, lambda: DATA_DIR)
 
 from access_http import register_access_routes
 register_access_routes(app, lambda: email_db, lambda: API_KEY, lambda: DATA_DIR)

@@ -184,13 +184,41 @@ class UserPortalSessionsTest(unittest.TestCase):
         self.assertNotEqual(old.state_path, new.state_path)
         self.assertEqual(old.state_path.read_bytes(), old_data)
 
-    def test_mobile_login_requires_canonical_account_mapping(self):
+    def test_mobile_login_without_mapping_uses_phone_and_prevents_duplicate_binding(self):
+        from unittest.mock import patch
         from rpa.session_models import PortalSessionError
+        phone = '13800000000'
+        service = self.registry.for_principal(self.alice)
+        attempt = service.begin(LoginMode.MOBILE, PortalEnvironment.TEST)
+        pending = service.pending
+        with patch.object(pending, 'request_sms', return_value='sent', create=True) as send:
+            self.assertEqual(service.request_sms(attempt.attempt_id, phone, 'password', '42'), 'sent')
+            send.assert_called_once_with(attempt.attempt_id, phone, 'password', '42')
+        with patch.object(pending, 'verify_sms', create=True,
+                          side_effect=lambda attempt_id, code: pending.login_with_password(attempt_id, phone, 'password', '42')):
+            status = service.verify_sms(attempt.attempt_id, '123456')
+        self.assertTrue(status.authenticated)
+        self.assertEqual(status.portal_username, phone)
+        other = self.registry.for_principal(self.bob)
+        other_attempt = other.begin(LoginMode.MOBILE, PortalEnvironment.TEST)
+        with patch.object(other.pending, 'request_sms', create=True) as send:
+            with self.assertRaises(PortalSessionError) as error:
+                other.request_sms(other_attempt.attempt_id, phone, 'password', '42')
+            send.assert_not_called()
+        self.assertEqual(error.exception.code, 'ACCOUNT_IN_USE')
+
+    def test_mobile_login_with_optional_mapping_still_checks_canonical_account(self):
+        from unittest.mock import patch
+        from rpa.session_models import PortalSessionError
+        self.registry.settings = self.settings.model_copy(update={'account_aliases': {'13800000000': 'portal-a'}})
+        self.login(self.alice, 'portal-a')
         service = self.registry.for_principal(self.bob)
         attempt = service.begin(LoginMode.MOBILE, PortalEnvironment.TEST)
-        with self.assertRaises(PortalSessionError) as error:
-            service.request_sms(attempt.attempt_id, '13800000000', 'password', '42')
-        self.assertEqual(error.exception.code, 'ACCOUNT_MAPPING_REQUIRED')
+        with patch.object(service.pending, 'request_sms', create=True) as send:
+            with self.assertRaises(PortalSessionError) as error:
+                service.request_sms(attempt.attempt_id, '13800000000', 'password', '42')
+            send.assert_not_called()
+        self.assertEqual(error.exception.code, 'ACCOUNT_IN_USE')
 
     def test_alias_cannot_bypass_duplicate_account_check(self):
         from rpa.session_models import PortalSessionError

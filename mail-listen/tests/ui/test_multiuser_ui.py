@@ -1,3 +1,4 @@
+import json
 import threading
 import unittest
 from pathlib import Path
@@ -122,6 +123,42 @@ class MultiuserUiTest(unittest.TestCase):
             expect(page.locator('.mail-accounts-panel')).to_have_count(0)
         self.assertEqual(failures, [])
         self.assertEqual(self.errors, [])
+
+    def test_shared_draft_is_editable_while_ungranted_source_sample_stays_hidden(self):
+        draft, config = self.fixture.make_access_draft('shared-ui', self.fixture.emails, self.fixture.emails[1])
+        config['email'] = 'shared-ui@example.com'
+        config['email_type_samples']['割接通知'].update(
+            content='B邮箱私有邮件正文', source_email_records_id=self.fixture.emails[1])
+        with self.fixture.db.get_connection() as conn:
+            conn.execute('UPDATE supplier_drafts SET draft_json=? WHERE id=?', (json.dumps({'config': config}), draft))
+            conn.execute("UPDATE email_records SET mail_type='割接通知'")
+            conn.execute("UPDATE email_records SET content='A邮箱可见维护邮件' WHERE id=?", (self.fixture.emails[0],))
+            conn.commit()
+        page = self.page(1440)
+        failures = []
+        page.on('response', lambda response: failures.append((response.url, response.status))
+                if '/api/' in response.url and response.status >= 400 else None)
+        self.login_user(page, 'alice', 'a-secure-password')
+        page.goto(self.base + f'/admin/suppliers?draft={draft}')
+        expect(page.locator('.supplier-form')).to_be_visible()
+        expect(page.locator('.supplier-mail-pane .n-alert')).to_be_visible()
+        expect(page.locator('body')).not_to_contain_text('B邮箱私有邮件正文')
+        page.get_by_role('button', name='已收集的邮件（1）', exact=True).click()
+        expect(page.locator('.review-mail-body')).to_contain_text('A邮箱可见维护邮件')
+        expect(page.get_by_role('button', name='识别这封邮件', exact=True)).to_be_enabled()
+        expect(page.get_by_role('button', name='设为此分类样本', exact=True)).to_have_count(0)
+        page.get_by_role('textbox', name='供应商名称', exact=True).fill('共享草稿规则已修改')
+        page.get_by_role('button', name='保存草稿', exact=True).click()
+        expect(page.locator('.n-message').filter(has_text='草稿已保存')).to_be_visible()
+        with self.fixture.db.get_connection() as conn:
+            stored = json.loads(conn.execute('SELECT draft_json FROM supplier_drafts WHERE id=?', (draft,)).fetchone()[0])
+        self.assertEqual(stored['config']['name'], '共享草稿规则已修改')
+        self.assertEqual(stored['config']['email_type_samples'], config['email_type_samples'])
+        self.assertEqual(failures, [])
+        self.assertEqual(self.errors, [])
+        target = Path('.qa/multiuser')
+        target.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(target / 'shared-draft-mailbox-access-1440.png'), full_page=True)
 
     def test_admin_can_create_user_and_grant_existing_mailbox_from_page(self):
         page = self.page()

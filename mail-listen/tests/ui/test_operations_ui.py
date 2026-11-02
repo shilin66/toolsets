@@ -99,6 +99,7 @@ class OperationsUiTest(unittest.TestCase):
         expect(page.locator('.stats-card').filter(has_text='已接入运营商').locator('strong')).to_have_text('1')
 
     def test_legacy_successes_show_numbers_in_overview_and_details(self):
+        self.fixture.add_mail(3, 'one@example.com', 'CT-1', ['PENDING'])
         with self.fixture.db.get_connection() as c:
             c.execute("UPDATE cutover_reports SET statistics_snapshot=NULL,completed_at=NULL,result=?",
                 ('{"updated_at":"2026-10-27T10:00:00+08:00"}',))
@@ -108,6 +109,10 @@ class OperationsUiTest(unittest.TestCase):
             expect(page.locator('.stats-card').filter(has_text=title).locator('strong')).to_have_text(count)
         expect(page.locator('.stats-overview')).to_be_visible()
         self.screenshot(page, 'legacy-counts-1280.png')
+        page.locator('.stats-card').filter(has_text='上报工单').click()
+        expect(page.locator('.stats-table tbody tr')).to_have_count(1)
+        expect(page.locator('.stats-table tbody tr')).to_contain_text('2 / 3')
+        page.get_by_role('tab', name='运营概览').click()
         page.locator('.stats-card').filter(has_text='上报线路').click()
         expect(page.locator('.stats-table tbody tr')).to_have_count(5)
         expect(page.locator('.stats-table')).to_contain_text('CT-1')

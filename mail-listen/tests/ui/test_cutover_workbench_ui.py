@@ -68,10 +68,45 @@ class CutoverWorkbenchUiTest(unittest.TestCase):
         for width in (1280, 1440, 1920):
             self.page.set_viewport_size({'width':width, 'height':1000})
             self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth - innerWidth'), 1)
+            source = self.page.locator('.cw-compare > .cw-source').bounding_box()
+            results = self.page.locator('.cw-compare > .cw-results').bounding_box()
+            self.assertAlmostEqual(source['height'], results['height'], delta=1)
+            self.assertAlmostEqual(source['y'], results['y'], delta=1)
+            metadata = self.page.locator('.cw-source .cw-mail-metadata > div')
+            expect(metadata).to_have_count(3)
+            boxes = [item.bounding_box() for item in metadata.all()]
+            self.assertLessEqual(max(box['y'] for box in boxes) - min(box['y'] for box in boxes), 1)
+            for before, after in zip(boxes, boxes[1:]):
+                self.assertLess(before['x'] + before['width'], after['x'])
+            actions = self.page.locator('.cw-header-actions').bounding_box()
+            heading = self.page.locator('.cw-heading > div').first.bounding_box()
+            self.assertLess(heading['x'] + heading['width'], actions['x'])
         self.evidence = Path('.qa/cutover-workbench')
         self.evidence.mkdir(parents=True, exist_ok=True)
         self.page.set_viewport_size({'width':1440, 'height':1000})
         self.page.screenshot(path=str(self.evidence / 'review-1440.png'), full_page=True)
+        self.assertEqual(self.errors, [])
+
+    def test_review_long_mail_scrolls_inside_equal_cards(self):
+        content = '\n'.join(f'线路 {i}: HKG / LON maintenance details' for i in range(200))
+        with self.api.db.get_connection() as conn:
+            conn.execute('UPDATE email_records SET content=?, html_content=NULL, mail_type=? WHERE id=?',
+                         (content, '割接通知', self.api.email_records_id))
+            conn.commit()
+        self.page.reload()
+        body = self.page.locator('.cw-source .email-content-block')
+        expect(body).to_contain_text('线路 199:')
+        for width in (1280, 1440, 1920):
+            self.page.set_viewport_size({'width': width, 'height': 1000})
+            source = self.page.locator('.cw-compare > .cw-source').bounding_box()
+            results = self.page.locator('.cw-compare > .cw-results').bounding_box()
+            self.assertAlmostEqual(source['height'], results['height'], delta=1)
+            self.assertTrue(body.evaluate('el => el.scrollHeight > el.clientHeight'))
+            self.assertLessEqual(body.bounding_box()['height'], source['height'])
+        self.page.set_viewport_size({'width': 1440, 'height': 1000})
+        evidence = Path('.qa/cutover-workbench')
+        evidence.mkdir(parents=True, exist_ok=True)
+        self.page.screenshot(path=str(evidence / 'long-mail-review-1440.png'), full_page=True)
         self.assertEqual(self.errors, [])
 
     def test_business_correction_preserves_structure_and_regenerates_only_explicitly(self):
@@ -331,6 +366,9 @@ class CutoverWorkbenchUiTest(unittest.TestCase):
         expect(frame.get_by_text('Start time', exact=True)).to_be_visible()
         self.assertIsNone(self.page.evaluate('window.hacked'))
         expect(self.page.locator('.cw-source iframe')).to_have_attribute('sandbox', '')
+        source = self.page.locator('.cw-compare > .cw-source').bounding_box()
+        results = self.page.locator('.cw-compare > .cw-results').bounding_box()
+        self.assertAlmostEqual(source['height'], results['height'], delta=1)
         evidence = Path('.qa/cutover-workbench')
         evidence.mkdir(parents=True, exist_ok=True)
         self.page.screenshot(path=str(evidence / 'html-review-1440.png'), full_page=True)

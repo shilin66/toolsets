@@ -263,15 +263,14 @@ class UserAccessRepository:
         if principal is None or principal.is_admin:
             return '1=1', []
         scope, params = cls.email_scope(principal, 'e', operate=operate)
-        # A generated draft can contain information from all its source mails.
-        # Require access to the entire source set, including its generation source.
-        return (f'''EXISTS (SELECT 1 FROM supplier_draft_samples s WHERE s.draft_id={alias}.id)
-            AND NOT EXISTS (SELECT 1 FROM supplier_draft_samples s
-                LEFT JOIN email_records e ON e.id=s.email_records_id
-                WHERE s.draft_id={alias}.id AND NOT ({scope}))
-            AND ({alias}.source_email_records_id IS NULL OR EXISTS
-                (SELECT 1 FROM email_records e WHERE e.id={alias}.source_email_records_id AND {scope}))''',
-                [*params, *params])
+        # Supplier drafts are shared by recipients. Collected samples are capped,
+        # so receiving another mail from the sender also grants draft access.
+        # Raw mail and attachments still use their own per-mailbox scope.
+        return (f'''EXISTS (SELECT 1 FROM email_records e WHERE ({scope}) AND (
+            e.sender = {alias}.sender COLLATE NOCASE
+            OR e.id = {alias}.source_email_records_id
+            OR EXISTS (SELECT 1 FROM supplier_draft_samples s
+                WHERE s.draft_id={alias}.id AND s.email_records_id=e.id)))''', params)
 
     def can_access_draft(self, principal, draft_id, *, operate=False):
         scope, params = self.draft_scope(principal, operate=operate)
@@ -296,5 +295,5 @@ class UserAccessRepository:
             if self.can_access_supplier_samples(principal, record['id'], operate=True):
                 return record
             return {**record, 'samples_read_only': True}
-        return {**record, 'email_type_samples': {}, 'supplier_mail_classify_prompt': '',
+        return {**record, 'email_type_samples': {}, 'supplier_mail_classify_prompt': '', 'review_metadata': {},
                 'samples_restricted': True, 'samples_read_only': True}

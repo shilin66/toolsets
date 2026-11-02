@@ -68,6 +68,20 @@ class EmailTypeSample(BaseModel):
     source_email_records_id: int | None = Field(default=None, gt=0, strict=True)
 
 
+class SupplierReviewMetadata(BaseModel):
+    """Human review notes only; never included in extraction prompts."""
+
+    questions: list[str] = Field(default_factory=list, max_length=200)
+    confirmations: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator('confirmations')
+    @classmethod
+    def check_confirmations(cls, value):
+        if len(value) > 200 or any(len(v) != 64 or any(c not in '0123456789abcdef' for c in v) for v in value.values()):
+            raise ValueError('核实记录格式无效')
+        return value
+
+
 class SupplierConfigCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -82,6 +96,7 @@ class SupplierConfigCreate(BaseModel):
     custom_fields: list[LineCustomField] = Field(default_factory=list)
     email_type_samples: dict[str, EmailTypeSample] = Field(default_factory=dict)
     extra_instructions: str = ""
+    review_metadata: SupplierReviewMetadata = Field(default_factory=SupplierReviewMetadata)
 
     @field_validator("email_type_samples", mode="before")
     @classmethod
@@ -113,6 +128,7 @@ class SupplierConfigUpdate(BaseModel):
     custom_fields: list[LineCustomField] | None = None
     email_type_samples: dict[str, EmailTypeSample] | None = None
     extra_instructions: str | None = None
+    review_metadata: SupplierReviewMetadata = Field(default_factory=SupplierReviewMetadata)
 
     @field_validator("email_type_samples", mode="before")
     @classmethod
@@ -133,6 +149,7 @@ class SupplierConfigRecord(TypedDict):
     custom_fields: list[dict[str, Any]]
     email_type_samples: dict[str, dict[str, Any]]
     extra_instructions: str
+    review_metadata: dict[str, Any]
     create_time: str
     update_time: str
     supplier_mail_classify_prompt: str
@@ -202,6 +219,7 @@ class SupplierConfigRepository:
             "custom_fields": "TEXT NOT NULL DEFAULT '[]'",
             "email_type_samples": "TEXT NOT NULL DEFAULT '{}'",
             "extra_instructions": "TEXT NOT NULL DEFAULT ''",
+            "review_metadata": "TEXT NOT NULL DEFAULT '{}'",
         }
         for column_name, column_def in required_columns.items():
             if column_name not in existing_columns:
@@ -225,10 +243,10 @@ class SupplierConfigRepository:
                         name, email, reply_email, prompt_mode,
                         cutover_extract_prompt, line_custom_fields,
                         line_query_keywords, fixed_field_rules,
-                        custom_fields, email_type_samples, extra_instructions,
+                        custom_fields, email_type_samples, extra_instructions, review_metadata,
                         create_time, update_time
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     payload.name,
                     str(payload.email),
@@ -253,6 +271,7 @@ class SupplierConfigRepository:
                         ensure_ascii=False,
                     ),
                     payload.extra_instructions,
+                    json.dumps(payload.review_metadata.model_dump(), ensure_ascii=False),
                     now,
                     now,
                 ))
@@ -341,7 +360,7 @@ class SupplierConfigRepository:
                 values.append(json.dumps(field_value, ensure_ascii=False))
             elif field_name == "custom_fields":
                 values.append(json.dumps(field_value, ensure_ascii=False))
-            elif field_name == "email_type_samples":
+            elif field_name in ("email_type_samples", "review_metadata"):
                 values.append(json.dumps(field_value, ensure_ascii=False))
             else:
                 values.append(str(field_value))
@@ -433,6 +452,7 @@ def _row_to_record(row: sqlite3.Row) -> SupplierConfigRecord:
         "custom_fields": custom_fields,
         "email_type_samples": email_type_samples,
         "extra_instructions": extra_instructions,
+        "review_metadata": _parse_json_dict(row["review_metadata"]),
         "create_time": row["create_time"],
         "update_time": row["update_time"],
         "supplier_mail_classify_prompt": build_mail_classify_prompt(

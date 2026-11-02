@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from fastgpt_contracts import validate_draft_config
 from mail_preview import build_mail_preview
-from supplier_config import SupplierConfigCreate, SupplierConfigRepository
+from supplier_config import SupplierConfigCreate, SupplierConfigRepository, SupplierReviewMetadata
 from unconfigured_mail_repository import ResultConflict, UnconfiguredMailRepository
 from user_access import UserAccessRepository
 
@@ -51,10 +51,42 @@ class SupplierDraftRepository:
         return UserAccessRepository.draft_scope(self.principal, operate=operate)
 
     @staticmethod
-    def serialize(row):
+    def sample_sources(conn, item):
+        sources = {row[0] for row in conn.execute(
+            'SELECT email_records_id FROM supplier_draft_samples WHERE draft_id=?', (item['id'],))}
+        if item['source_email_records_id'] is not None:
+            sources.add(item['source_email_records_id'])
+        for sample in (item.get('draft') or {}).get('config', {}).get('email_type_samples', {}).values():
+            source_id = sample.get('source_email_records_id') or item['source_email_records_id']
+            if source_id is None:
+                return set()  # Legacy copies without provenance stay administrator-only.
+            sources.add(source_id)
+        return sources
+
+    def can_access_samples(self, conn, item, *, operate=False):
+        if self.principal is None or self.principal.is_admin:
+            return True
+        sources = self.sample_sources(conn, item)
+        if not sources:
+            return False
+        scope, params = UserAccessRepository.email_scope(self.principal, 'e', operate=operate)
+        count = conn.execute(f"SELECT count(*) FROM email_records e WHERE e.id IN ({','.join('?' for _ in sources)}) AND ({scope})",
+                             [*sources, *params]).fetchone()[0]
+        return count == len(sources)  # Deleted sources never make a retained copy public.
+
+    def serialize(self, row, conn):
         item = dict(row)
         item['draft'] = json.loads(item.pop('draft_json')) if item.get('draft_json') else None
         item.pop('draft_json', None)
+        if item['draft']:
+            config = item['draft']['config']
+            if not self.can_access_samples(conn, item):
+                config.update(email_type_samples={}, review_metadata={}, supplier_mail_classify_prompt='',
+                              samples_restricted=True, samples_read_only=True)
+                item['draft']['evidence'] = []
+                item['draft']['unresolved_questions'] = []
+            elif not self.can_access_samples(conn, item, operate=True):
+                config['samples_read_only'] = True
         return item
 
     def list(self, page=1, page_size=20, status='unpublished'):
@@ -62,32 +94,36 @@ class SupplierDraftRepository:
             raise ValueError('草稿筛选状态必须为 unpublished 或 published')
         condition = "d.status = 'published'" if status == 'published' else "d.status != 'published'"
         scope, params = self.scope()
+        mail_scope, mail_params = UserAccessRepository.email_scope(self.principal, 'e')
         condition += f' AND ({scope})'
         with self.db.get_connection() as conn:
             total = conn.execute(f'SELECT count(*) FROM supplier_drafts d WHERE {condition}', params).fetchone()[0]
-            rows = conn.execute(f'''SELECT d.*, count(s.email_records_id) AS sample_count
-                FROM supplier_drafts d LEFT JOIN supplier_draft_samples s ON s.draft_id=d.id
-                WHERE {condition}
-                GROUP BY d.id ORDER BY d.update_time DESC, d.id DESC LIMIT ? OFFSET ?''',
-                [*params, page_size, (page - 1) * page_size]).fetchall()
-            return {'items': [self.serialize(row) for row in rows], 'total': total,
+            rows = conn.execute(f'''SELECT d.*, (SELECT count(*) FROM supplier_draft_samples s
+                JOIN email_records e ON e.id=s.email_records_id
+                WHERE s.draft_id=d.id AND ({mail_scope})) AS sample_count
+                FROM supplier_drafts d WHERE {condition}
+                ORDER BY d.update_time DESC, d.id DESC LIMIT ? OFFSET ?''',
+                [*mail_params, *params, page_size, (page - 1) * page_size]).fetchall()
+            return {'items': [self.serialize(row, conn) for row in rows], 'total': total,
                     'page': page, 'pageSize': page_size}
 
     def get(self, draft_id, page=1, page_size=20):
         scope, params = self.scope()
+        mail_scope, mail_params = UserAccessRepository.email_scope(self.principal, 'e')
         with self.db.get_connection() as conn:
             row = conn.execute(f'SELECT d.* FROM supplier_drafts d WHERE d.id=? AND {scope}', [draft_id, *params]).fetchone()
             if not row:
                 raise LookupError('供应商草稿不存在')
-            item = self.serialize(row)
-            samples = conn.execute('''SELECT e.id, e.subject, e.sender, e.receiver, e.mail_type,
+            item = self.serialize(row, conn)
+            samples = conn.execute(f'''SELECT e.id, e.subject, e.sender, e.receiver, e.mail_type,
                 e.create_time, substr(e.content, 1, 300) AS content_summary
                 FROM supplier_draft_samples s JOIN email_records e ON e.id=s.email_records_id
-                WHERE s.draft_id=? ORDER BY e.id DESC LIMIT ? OFFSET ?''',
-                (draft_id, page_size, (page - 1) * page_size)).fetchall()
-            counts = conn.execute('''SELECT e.mail_type, count(*) AS count FROM supplier_draft_samples s
-                JOIN email_records e ON e.id=s.email_records_id WHERE s.draft_id=? GROUP BY e.mail_type''',
-                (draft_id,)).fetchall()
+                WHERE s.draft_id=? AND ({mail_scope}) ORDER BY e.id DESC LIMIT ? OFFSET ?''',
+                [draft_id, *mail_params, page_size, (page - 1) * page_size]).fetchall()
+            counts = conn.execute(f'''SELECT e.mail_type, count(*) AS count FROM supplier_draft_samples s
+                JOIN email_records e ON e.id=s.email_records_id
+                WHERE s.draft_id=? AND ({mail_scope}) GROUP BY e.mail_type''',
+                [draft_id, *mail_params]).fetchall()
             item.update(samples=[dict(sample) for sample in samples],
                         sample_counts={row['mail_type']: row['count'] for row in counts})
             item['sample_count'] = sum(item['sample_counts'].values())
@@ -97,6 +133,8 @@ class SupplierDraftRepository:
         if type(revision) is not int or not isinstance(config, dict):
             raise ValueError('必须提供 revision 和配置对象 config')
         validate_draft_config(config)
+        if "review_metadata" in config:
+            config = {**config, "review_metadata": SupplierReviewMetadata.model_validate(config["review_metadata"]).model_dump()}
         scope, params = self.scope(operate=True)
         with self.db.get_connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
@@ -106,6 +144,11 @@ class SupplierDraftRepository:
             if row['status'] != 'review' or row['revision'] != revision:
                 raise ResultConflict('草稿状态或版本已变化，请刷新后重试')
             value = json.loads(row['draft_json'])
+            if not self.can_access_samples(conn, {**dict(row), 'draft': value}, operate=True):
+                protected = ('email_type_samples', 'review_metadata', 'supplier_mail_classify_prompt')
+                if any(field in config for field in protected):
+                    raise PermissionError('邮件样本来源邮箱未授予操作权限，其他配置字段仍可修改')
+                config = {**config, **{field: value['config'][field] for field in protected if field in value['config']}}
             value['config'] = {**config, 'email': row['sender']}
             conn.execute('''UPDATE supplier_drafts SET draft_json=?, revision=revision+1,
                 update_time=CURRENT_TIMESTAMP WHERE id=?''', (json.dumps(value, ensure_ascii=False), draft_id))
@@ -131,6 +174,70 @@ class SupplierDraftRepository:
             conn.commit()
         return {'draft_id': draft_id, 'deleted': True}
 
+    def exclude_sender(self, draft_id, revision, *, data_dir=None):
+        from unconfigured_mail import read_settings, normalize_sender, ADDRESS_PATTERN
+        from cutover_deletion import prepare_cutover_email_deletion, DeletionConflict
+        from excluded_sender_cleanup import cleanup_excluded_sender_mail
+        from email_attachments import DATA_DIR
+
+        data_dir = data_dir if data_dir is not None else DATA_DIR
+        SupplierConfigRepository(self.db)
+
+        if type(revision) is not int:
+            raise ValueError('必须提供整数 revision')
+        scope, params = self.scope(operate=True)
+        with self.db.get_connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute(f'SELECT d.* FROM supplier_drafts d WHERE d.id=? AND {scope}',
+                               [draft_id, *params]).fetchone()
+            if not row:
+                raise LookupError('供应商草稿不存在')
+            if row['revision'] != revision:
+                raise ResultConflict('草稿版本已变化，请刷新后重试')
+            sender = normalize_sender(row['sender'])
+            if not ADDRESS_PATTERN.fullmatch(sender):
+                raise ValueError('发件人邮箱格式无效，无法加入排除名单')
+            if row['status'] == 'published' or conn.execute(
+                'SELECT 1 FROM supplier_configs WHERE lower(email)=?', (sender,)).fetchone():
+                raise ResultConflict('该地址已有正式供应商配置，不能通过草稿排除')
+            mail_scope, mail_params = UserAccessRepository.email_scope(self.principal, 'e', operate=True)
+            targets = conn.execute("""SELECT e.id FROM email_records e
+                WHERE e.processing_origin='unconfigured' AND lower(e.sender)=?""", (sender,)).fetchall()
+            if conn.execute(f"""SELECT 1 FROM email_records e WHERE e.processing_origin='unconfigured'
+                AND lower(e.sender)=? AND NOT ({mail_scope})""", [sender, *mail_params]).fetchone():
+                raise ResultConflict('该发件人的历史邮件涉及未获操作授权的邮箱，无法完成此操作')
+            policy = read_settings(self.db, conn)
+            mode = policy['unconfigured_sender_filter_mode']
+            if mode == 'allowlist':
+                raise ResultConflict('当前使用“仅处理指定发件人”，请先在系统配置中调整发件人范围；本次未修改名单或草稿')
+            # In all mode the stored list is inactive and could be an old allowlist.
+            # Do not accidentally activate those entries as exclusions.
+            addresses = list(policy['unconfigured_sender_filter_list']) if mode == 'blocklist' else []
+            if sender not in addresses:
+                addresses.append(sender)
+            for key, value in (('unconfigured_sender_filter_mode', 'blocklist'),
+                               ('unconfigured_sender_filter_list', addresses)):
+                conn.execute('''INSERT INTO system_settings (key,value,update_time) VALUES (?,?,CURRENT_TIMESTAMP)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value,update_time=excluded.update_time''',
+                    (key, json.dumps(value, ensure_ascii=False)))
+            # Invalidate unfinished work too: late AI responses cannot recreate the draft
+            # or produce new replies after this transaction commits.
+            conn.execute('''UPDATE mail_ai_jobs SET status='cancelled',lease_until=NULL,update_time=CURRENT_TIMESTAMP
+                WHERE status IN ('pending','running','failed') AND email_records_id IN (
+                    SELECT id FROM email_records WHERE processing_origin='unconfigured' AND lower(sender)=?)''', (sender,))
+            for target in targets:
+                try:
+                    prepare_cutover_email_deletion(conn, data_dir, target['id'])
+                except DeletionConflict as error:
+                    raise ResultConflict(str(error)) from error
+                conn.execute('INSERT OR IGNORE INTO excluded_sender_mail_cleanup(email_records_id) VALUES (?)', (target['id'],))
+            conn.execute("DELETE FROM mail_ai_jobs WHERE draft_id=? AND task_type='supplier_config_draft'", (draft_id,))
+            conn.execute('DELETE FROM supplier_draft_samples WHERE draft_id=?', (draft_id,))
+            conn.execute('DELETE FROM supplier_drafts WHERE id=?', (draft_id,))
+            conn.commit()
+        cleanup_excluded_sender_mail(self.db, data_dir=data_dir)
+        return {'draft_id': draft_id, 'sender': sender, 'excluded': True}
+
     def publish(self, draft_id, revision):
         if type(revision) is not int:
             raise ValueError('必须提供整数 revision')
@@ -147,7 +254,9 @@ class SupplierDraftRepository:
                 return {'supplier_id': row['published_supplier_id'], 'draft_id': draft_id}
             if row['status'] != 'review':
                 raise ResultConflict('当前草稿尚不可发布')
-            config = json.loads(row['draft_json'])['config']
+            draft = json.loads(row['draft_json'])
+            config = draft['config']
+            config.setdefault('review_metadata', {'questions': draft.get('unresolved_questions', []), 'confirmations': {}})
             config['email'] = row['sender']
             if not isinstance(config.get('name'), str) or not config['name'].strip():
                 raise ValueError('启用前请填写供应商名称')
@@ -162,17 +271,14 @@ class SupplierDraftRepository:
                 raise ResultConflict('供应商邮箱或名称已有正式配置，请人工核对')
             values = payload.model_dump(mode='json')
             values['reply_email'] = values['reply_email'] or values['email']
-            for key in ('line_custom_fields', 'line_query_keywords', 'fixed_field_rules', 'custom_fields', 'email_type_samples'):
+            for key in ('line_custom_fields', 'line_query_keywords', 'fixed_field_rules', 'custom_fields', 'email_type_samples', 'review_metadata'):
                 values[key] = json.dumps(values[key], ensure_ascii=False)
             columns = ', '.join(values)
             placeholders = ', '.join('?' for _ in values)
             inserted = conn.execute(f'''INSERT INTO supplier_configs ({columns}, create_time, update_time)
                 VALUES ({placeholders}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''', list(values.values()))
             supplier_id = inserted.lastrowid
-            sources = {sample[0] for sample in conn.execute(
-                'SELECT email_records_id FROM supplier_draft_samples WHERE draft_id=?', (draft_id,))}
-            if row['source_email_records_id'] is not None:
-                sources.add(row['source_email_records_id'])
+            sources = self.sample_sources(conn, {**dict(row), 'draft': draft})
             conn.execute('INSERT INTO supplier_sample_access VALUES (?,NULL,?)',
                          (supplier_id, json.dumps(sorted(sources))))
             conn.execute('''UPDATE supplier_drafts SET status='published', published_supplier_id=?,
@@ -181,7 +287,7 @@ class SupplierDraftRepository:
             return {'supplier_id': supplier_id, 'draft_id': draft_id}
 
 
-def register_routes(app, get_db, require_api_key):
+def register_routes(app, get_db, require_api_key, get_data_dir=None):
     def handle_errors(func):
         @wraps(func)
         def wrapped(*args, **kwargs):
@@ -191,6 +297,8 @@ def register_routes(app, get_db, require_api_key):
                 return jsonify({'success': False, 'message': str(exc)}), 404
             except ResultConflict as exc:
                 return jsonify({'success': False, 'message': str(exc)}), 409
+            except PermissionError as exc:
+                return jsonify({'success': False, 'message': str(exc)}), 403
             except ValidationError as exc:
                 return jsonify({'success': False, 'message': draft_validation_message(exc)}), 400
             except ValueError as exc:
@@ -224,6 +332,13 @@ def register_routes(app, get_db, require_api_key):
             return repo.delete(draft_id, data.get('revision'))
         return repo.edit(draft_id, data.get('revision'), data.get('config'))
 
+    @app.route('/api/supplier-drafts/<int:draft_id>/exclude-sender', methods=['POST'])
+    @require_api_key
+    @handle_errors
+    def exclude_supplier_draft_sender(draft_id):
+        return SupplierDraftRepository(get_db(), g.principal).exclude_sender(
+            draft_id, body().get('revision'), data_dir=get_data_dir() if get_data_dir else None)
+
     @app.route('/api/supplier-drafts/<int:draft_id>/publish', methods=['POST'])
     @require_api_key
     @handle_errors
@@ -238,7 +353,8 @@ def register_routes(app, get_db, require_api_key):
         draft = SupplierDraftRepository(db, g.principal).get(draft_id)
         if draft['status'] != 'generation_failed':
             raise ResultConflict('只允许重试生成失败的草稿')
-        UnconfiguredMailRepository(db).retry(draft['source_email_records_id'], 'supplier_config_draft')
+        UnconfiguredMailRepository(db).retry(draft['source_email_records_id'], 'supplier_config_draft',
+                                            draft_id=draft_id, principal=g.principal)
         return SupplierDraftRepository(db, g.principal).get(draft_id)
 
     @app.route('/api/unconfigured-mail/results', methods=['POST'])
@@ -255,7 +371,7 @@ def register_routes(app, get_db, require_api_key):
     @handle_errors
     def retry_unconfigured_analysis(email_id):
         repo = UnconfiguredMailRepository(get_db())
-        repo.retry(email_id, body().get('task_type'))
+        repo.retry(email_id, body().get('task_type'), principal=g.principal)
         return repo.projection(email_id)
 
     @app.route('/api/emails/<int:email_id>/analysis', methods=['GET'])

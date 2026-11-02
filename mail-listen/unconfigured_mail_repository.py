@@ -50,6 +50,8 @@ def initialize_storage(cursor):
     ]
     statements.append('''CREATE TABLE IF NOT EXISTS unconfigured_sample_cleanup (
         email_records_id INTEGER PRIMARY KEY REFERENCES email_records(id))''')
+    statements.append('''CREATE TABLE IF NOT EXISTS excluded_sender_mail_cleanup (
+        email_records_id INTEGER PRIMARY KEY, next_run_at REAL NOT NULL DEFAULT 0)''')
     for statement in statements:
         cursor.execute(statement)
     if 'workflow_context' not in {row[1] for row in cursor.execute('PRAGMA table_info(mail_ai_jobs)')}:
@@ -411,7 +413,7 @@ class UnconfiguredMailRepository:
         from sample_retention import cleanup_excess_samples
         cleanup_excess_samples(self.db)
 
-    def retry(self, email_id, task_type):
+    def retry(self, email_id, task_type, *, draft_id=None, principal=None):
         if task_type not in ('unconfigured_mail_analyze', 'cutover_time_extract', 'supplier_config_draft'):
             raise ValueError('任务类型无效')
         with self.db.get_connection() as conn:
@@ -419,10 +421,18 @@ class UnconfiguredMailRepository:
             if conn.execute('SELECT 1 FROM mail_deletions WHERE email_records_id=?',
                             (email_id,)).fetchone():
                 raise ResultConflict('邮件已删除或正在删除，不能重试')
-            row = conn.execute("SELECT * FROM mail_ai_jobs WHERE email_records_id=? AND task_type=? AND status='failed'",
-                               (email_id, task_type)).fetchone()
+            condition = ' AND draft_id=?' if draft_id is not None else ''
+            params = [email_id, task_type, *([draft_id] if draft_id is not None else [])]
+            row = conn.execute(f"SELECT * FROM mail_ai_jobs WHERE email_records_id=? AND task_type=? AND status='failed'{condition}",
+                               params).fetchone()
             if not row:
                 raise ResultConflict('只允许重试实际执行失败的任务')
+            if row['draft_id'] and principal is not None:
+                from user_access import UserAccessRepository
+                scope, scope_params = UserAccessRepository.draft_scope(principal, operate=True)
+                if not conn.execute(f'SELECT 1 FROM supplier_drafts d WHERE d.id=? AND ({scope})',
+                                    [row['draft_id'], *scope_params]).fetchone():
+                    raise LookupError('草稿不存在或来源邮箱未获操作授权')
             conn.execute("UPDATE mail_ai_jobs SET status='pending', attempts=0, attempt_id=NULL, next_run_at=0, last_error='' WHERE id=?", (row['id'],))
             if row['draft_id']:
                 changed = conn.execute("UPDATE supplier_drafts SET status='generating', last_error='' WHERE id=? AND status='generation_failed' AND draft_json IS NULL", (row['draft_id'],))

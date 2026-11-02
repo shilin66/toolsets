@@ -81,6 +81,9 @@ class CutoverAttachmentPreviewUiTest(unittest.TestCase):
         for width in (1280, 1440, 1920):
             self.page.set_viewport_size({'width':width,'height':1000})
             self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth - innerWidth'), 1)
+            source = self.page.locator('.cw-compare > .cw-source').bounding_box()
+            result = self.page.locator('.cw-compare > .cw-results').bounding_box()
+            self.assertAlmostEqual(source['height'], result['height'], delta=1)
         self.page.set_viewport_size({'width':1440,'height':1000})
         self.page.screenshot(path=str(self.evidence/'csv-1440.png'), full_page=True)
         with self.page.expect_download() as download:

@@ -223,7 +223,8 @@ class OperationsRepository:
                 AND s.completed<=:end)),
         order_state AS (
             SELECT grouped.*,m.sender FROM (SELECT ticket,COUNT(DISTINCT sender) suppliers,
-                COUNT(*) tasks,COUNT(completed) done,MAX(completed) completed,MIN(email_id) email_id
+                COUNT(*) tasks,COUNT(completed) done,MAX(completed) completed,
+                MIN(completed) first_reported,MIN(email_id) email_id
                 FROM order_members WHERE COALESCE(ticket,'')!='' GROUP BY ticket) grouped
             JOIN m ON m.id=grouped.email_id),
         line_items AS (
@@ -252,7 +253,7 @@ class OperationsRepository:
         received_agg AS (SELECT sender,COUNT(*) received,SUM(CASE WHEN mail_type='割接通知' THEN 1 ELSE 0 END) cutover
             FROM m WHERE received BETWEEN :start AND :end GROUP BY sender),
         reported_agg AS (SELECT sender,COUNT(*) reported FROM email_state WHERE done=tasks AND completed BETWEEN :start AND :end GROUP BY sender),
-        orders_agg AS (SELECT sender,COUNT(*) orders FROM order_state WHERE done=tasks AND completed BETWEEN :start AND :end GROUP BY sender),
+        orders_agg AS (SELECT sender,COUNT(*) orders FROM order_state WHERE done>0 AND first_reported BETWEEN :start AND :end GROUP BY sender),
         lines_agg AS (SELECT sender,COUNT(*) lines FROM lines WHERE completed BETWEEN :start AND :end GROUP BY sender),
         replies_agg AS (SELECT sender,COUNT(*) replies FROM replies WHERE ops_day(sent_at) BETWEEN :start AND :end GROUP BY sender),
         pending_agg AS (SELECT t.sender,COUNT(*) pending,SUM(CASE WHEN t.status='report_failed' THEN 1 ELSE 0 END) failed
@@ -293,6 +294,7 @@ class OperationsRepository:
         partial = self.query('''SELECT
             (SELECT COUNT(*) FROM email_state WHERE done>0 AND done<tasks AND completed BETWEEN ? AND ?) partial_emails,
             (SELECT COUNT(*) FROM order_state WHERE done>0 AND done<tasks AND completed BETWEEN ? AND ?) partial_orders,
+            (SELECT COUNT(*) FROM order_state WHERE done=tasks AND completed BETWEEN ? AND ?) fully_reported_orders,
             (SELECT COUNT(*) FROM order_state WHERE suppliers>1) conflicting_tickets,
             (SELECT COUNT(*) FROM reports_raw WHERE status='success' AND (completed IS NULL OR completed BETWEEN ? AND ?)
                 AND (?='all' OR environment=? OR environment IS NULL)
@@ -303,11 +305,11 @@ class OperationsRepository:
             (SELECT COUNT(*) FROM line_items WHERE completed BETWEEN ? AND ? AND (ticket='' OR COALESCE(line_id,'')='')) missing_line_ids,
             (SELECT COUNT(*) FROM snapshots WHERE completed BETWEEN ? AND ? AND ticket='') missing_ticket_ids,
             (SELECT COUNT(*) FROM replies WHERE legacy=1) legacy_replies''',
-            [o.start,o.end,o.start,o.end,o.start,o.end,o.environment,o.environment,o.start,o.end,o.start,o.end,o.start,o.end])[0]
+            [o.start,o.end,o.start,o.end,o.start,o.end,o.start,o.end,o.environment,o.environment,o.start,o.end,o.start,o.end,o.start,o.end])[0]
         metrics = {'received_emails':totals['received'],'cutover_emails':totals['cutover'],
                    'reported_emails':totals['reported'],
                    'reported_orders':totals['orders'],
-                   'fully_reported_emails':totals['reported'],'fully_reported_orders':totals['orders'],
+                   'fully_reported_emails':totals['reported'],
                    'reported_lines':totals['lines'],
                    'confirmed_lines':totals['lines'],'reply_emails':totals['replies'],
                    'connected_suppliers':sum(r['configured'] for r in rows),
@@ -346,7 +348,7 @@ class OperationsRepository:
     def details(self):
         o=self.options; params=[o.start,o.end]
         selects={
-            'orders':"SELECT ticket,sender,email_id,tasks,done,completed FROM order_state WHERE done=tasks AND completed BETWEEN ? AND ?",
+            'orders':"SELECT ticket,sender,email_id,tasks,done,first_reported completed FROM order_state WHERE done>0 AND first_reported BETWEEN ? AND ?",
             'lines':"SELECT ticket,line_id,sender,email_id,completed FROM lines WHERE completed BETWEEN ? AND ?",
             'emails':"SELECT m.id email_id,m.subject,m.sender,m.receiver,e.completed FROM email_state e JOIN m ON m.id=e.id WHERE done=tasks AND completed BETWEEN ? AND ?",
             'replies':"SELECT email_records_id email_id,sender,ops_time(sent_at) completed FROM replies WHERE ops_day(sent_at) BETWEEN ? AND ?"}

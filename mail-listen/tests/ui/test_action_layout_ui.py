@@ -34,7 +34,16 @@ class ActionLayoutUiTest(unittest.TestCase):
                 self.page.get_by_role('button', name='收起菜单' if collapsed else '展开菜单', exact=True).click()
                 self.page.mouse.move(500, 20)
                 self.page.wait_for_function("document.getAnimations().every(a => a.playState !== 'running' || a.effect.getTiming().iterations === Infinity)")
-                expect(icons).to_have_count(6)
+                expect(icons).to_have_count(7)  # Admin includes operations and user authorization.
+                if not collapsed:
+                    for item in self.page.locator('.side-menu .n-menu-item-content').all():
+                        icon = item.locator('.n-menu-item-content__icon').bounding_box()
+                        label = item.locator('.n-menu-item-content-header').bounding_box()
+                        box = item.bounding_box()
+                        self.assertLessEqual(icon['y'] + icon['height'], label['y'])
+                        self.assertLessEqual(label['y'] + label['height'], box['y'] + box['height'])
+                        self.assertGreaterEqual(label['x'], box['x'])
+                        self.assertLessEqual(label['x'] + label['width'], box['x'] + box['width'])
                 for ratio in icons.evaluate_all(contrast):
                     self.assertGreaterEqual(ratio, 3, (width, collapsed, ratio))
                 icons.nth(1).hover()

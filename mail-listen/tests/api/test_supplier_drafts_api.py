@@ -873,6 +873,78 @@ class SupplierDraftApiTest(fixture.UnconfiguredFlowTest):
         self.repo.fail(job, 'outer request timed out', transient=True)
         self.assertEqual(self.repo.projection(record_id)['ai_tasks'][-1]['status'], 'succeeded')
 
+    def test_only_reply_required_unconfigured_notices_enter_cutover_tasks(self):
+        record_id = self.mail()
+        self.classify()
+        url = f'/api/cutover/emails/{record_id}'
+        list_url = '/api/cutover/emails?page=1&pageSize=1'
+        hidden = [None,
+            {'analysis_status':'needs_review', 'scene':None, 'reply':None},
+            {'analysis_status':'ready', 'scene':'normal', 'reply':None},
+            {'analysis_status':'ready', 'scene':'emergency', 'reply':None},
+            {'analysis_status':'ready', 'scene':'major_event', 'reply':{'content':'  '}},
+            {'analysis_status':'needs_review', 'scene':'in_window', 'reply':{'content':'invalid'}},
+        ]
+        for result in hidden:
+            with self.subTest(result=result):
+                with self.db.get_connection() as conn:
+                    conn.execute('UPDATE email_records SET unconfigured_analysis_json=? WHERE id=?',
+                                 (json.dumps(result) if result is not None else None, record_id))
+                    conn.commit()
+                data = self.client.get(list_url, headers=self.headers).get_json()['data']
+                self.assertEqual(data['total'], 0)
+                self.assertEqual(data['items'], [])
+                self.assertEqual(self.client.get('/api/cutover/emails/mail-types', headers=self.headers).get_json()['data'], [])
+                self.assertEqual(self.client.get(url, headers=self.headers).status_code, 404)
+                # Hidden from cutover work, still available as a collected sample.
+                self.assertEqual(self.client.get(f'/api/emails/{record_id}/source', headers=self.headers).status_code, 200)
+        for scene in ('major_event','emergency','in_window'):
+            for reply_status in ('pending','sent','cancelled','send_uncertain'):
+                with self.subTest(scene=scene, reply_status=reply_status):
+                    with self.db.get_connection() as conn:
+                        conn.execute('UPDATE email_records SET unconfigured_analysis_json=?,reply_status=? WHERE id=?',
+                            (json.dumps({'analysis_status':'ready','scene':scene,'reply':{'content':'请调整割接窗口'}}), reply_status, record_id))
+                        conn.commit()
+                    data = self.client.get(list_url, headers=self.headers).get_json()['data']
+                    self.assertEqual(data['total'], 1)
+                    self.assertEqual([row['id'] for row in data['items']], [record_id])
+                    self.assertEqual(self.client.get(url, headers=self.headers).status_code, 200)
+        with self.db.get_connection() as conn:
+            conn.execute("UPDATE email_records SET processing_origin='configured',unconfigured_analysis_json=NULL,reply_status='' WHERE id=?", (record_id,))
+            conn.commit()
+        self.assertEqual(self.client.get(list_url, headers=self.headers).get_json()['data']['total'], 1)
+        self.assertEqual(self.client.get(url, headers=self.headers).status_code, 200)
+        normal_id, actionable_id = self.mail(2), self.mail(3)
+        with self.db.get_connection() as conn:
+            for email_id, scene, reply in ((normal_id,'normal',None),(actionable_id,'emergency',{'content':'请调整时间'})):
+                conn.execute("UPDATE email_records SET mail_type='割接通知',unconfigured_analysis_json=? WHERE id=?",
+                    (json.dumps({'analysis_status':'ready','scene':scene,'reply':reply}), email_id))
+            conn.commit()
+        pages = [self.client.get(f'/api/cutover/emails?page={page}&pageSize=1', headers=self.headers).get_json()['data']
+                 for page in (1,2)]
+        self.assertEqual([page['total'] for page in pages], [2,2])
+        self.assertEqual({page['items'][0]['id'] for page in pages}, {record_id, actionable_id})
+        self.assertEqual(self.client.get('/api/cutover/emails?tag=emergency', headers=self.headers).get_json()['data']['total'], 1)
+        self.assertEqual(self.client.get('/api/cutover/emails?status=needs_review', headers=self.headers).get_json()['data']['total'], 0)
+
+    def test_time_analysis_completion_promotes_only_reply_required_notice(self):
+        record_id = self.mail()
+        self.classify()
+        self.repo.claim()  # draft generation remains independent
+        job = self.repo.claim()
+        self.assertEqual(job['task_type'], 'cutover_time_extract')
+        self.assertEqual(self.client.get('/api/cutover/emails', headers=self.headers).get_json()['data']['total'], 0)
+        result = {'analysis_status':'ready', 'scene':'in_window',
+            'cutover_start':'2026-10-12T02:00:00+08:00', 'cutover_end':'2026-10-12T04:00:00+08:00',
+            'assessed_at':'2026-10-13T10:00:00+08:00', 'source_timezone':'Asia/Shanghai',
+            'source_time_text':'北京时间12日2至4点', 'hours_until_start':-32,
+            'reason':'割接已结束，按已开始处理', 'reply':{'content':'请提前发送通知'}}
+        self.complete(job, result)
+        listed = self.client.get('/api/cutover/emails?status=reply_pending&tag=in_window', headers=self.headers).get_json()['data']
+        self.assertEqual(listed['total'], 1)
+        self.assertEqual(listed['items'][0]['id'], record_id)
+        self.assertEqual(self.db.get_email_record_by_id(record_id)['reply_status'], 'pending')
+
     def test_non_notice_stays_out_of_cutover_list_after_publish(self):
         other_id = self.mail(2)
         self.classify('故障邮件')
@@ -883,7 +955,7 @@ class SupplierDraftApiTest(fixture.UnconfiguredFlowTest):
         self.assertEqual(self.client.post(url + '/publish', headers=self.headers,
                                          json={'revision':revision}).status_code, 200)
         result = self.client.get('/api/cutover/emails', headers=self.headers).get_json()['data']
-        self.assertEqual(result['total'], 1)
+        self.assertEqual(result['total'], 0)  # Publishing does not promote unanalyzed historical mail.
         self.assertNotIn(other_id, [row['id'] for row in result['items']])
         self.assertEqual(self.client.get(f'/api/cutover/emails/{other_id}', headers=self.headers).status_code, 404)
         self.assertEqual(self.client.get(f'/api/emails/{other_id}/source', headers=self.headers).status_code, 200)

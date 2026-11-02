@@ -31,7 +31,7 @@
 
 .stats-scope-badge {
   white-space: nowrap;
-  background: #eaf2ed;
+  background: var(--brand-soft);
   color: var(--brand);
   padding: 8px 12px;
   border-radius: 6px;
@@ -99,7 +99,7 @@
 
 .stats-page .stats-primary:hover:not(:disabled) {
   color: white;
-  background: #32644f;
+  background: var(--brand-hover);
 }
 
 .stats-mailbox-filter {
@@ -143,7 +143,7 @@
 .stats-page .stats-card {
   border: 1px solid var(--line);
   background: var(--panel);
-  border-radius: 10px;
+  border-radius: var(--surface-radius);
   padding: 18px 20px;
   text-align: left;
   display: flex;
@@ -175,20 +175,15 @@
   letter-spacing: -.6px;
 }
 
-.stats-card small {
-  color: var(--muted);
-  font-size: 11px;
-}
-
 .stats-coverage {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px 20px;
   padding: 16px 20px;
-  background: #edf4ef;
-  border: 1px solid #d9e7de;
-  border-radius: 10px;
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-line);
+  border-radius: var(--surface-radius);
   margin-top: 14px;
   font-size: 13px;
 }
@@ -242,7 +237,7 @@
 
 .stats-panel {
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--surface-radius);
   background: var(--panel);
   padding: 22px;
   min-width: 0;
@@ -284,7 +279,7 @@
   width: 8px;
   height: 8px;
   margin-right: 5px;
-  background: #b5cdc0;
+  background: var(--chart-secondary);
   border-radius: 2px;
 }
 
@@ -300,7 +295,7 @@
   align-items: flex-end;
   padding: 0 0 8px;
   margin-top: 32px;
-  background: repeating-linear-gradient(to top,transparent 0,transparent 51px,#edf1ed 52px,#edf1ed 53px);
+  background: repeating-linear-gradient(to top,transparent 0,transparent 51px,var(--divider) 52px,var(--divider) 53px);
 }
 
 .stats-week {
@@ -318,7 +313,7 @@
 }
 
 .stats-bars>div {
-  background: #b5cdc0;
+  background: var(--chart-secondary);
   max-width: 22px;
   flex: 1;
   position: relative;
@@ -367,9 +362,9 @@
 }
 
 .stats-page .stats-focus-tabs button[aria-pressed=true] {
-  background: #edf4ef;
+  background: var(--brand-soft);
   color: var(--brand);
-  border-color: #c9dbce;
+  border-color: var(--brand-line);
 }
 
 .stats-focus-row {
@@ -381,7 +376,7 @@
 }
 
 .stats-rank {
-  color: #8a9690;
+  color: var(--muted);
   width: 16px;
   font-size: 10px;
 }
@@ -403,13 +398,13 @@
 
 .stats-meter {
   height: 4px;
-  background: #f0f4f1;
+  background: var(--bg-rail);
   border-radius: 4px;
 }
 
 .stats-meter i {
   display: block;
-  background: #91b8a3;
+  background: var(--chart-secondary);
   height: 100%;
   border-radius: 4px;
 }
@@ -457,7 +452,7 @@
 }
 
 .stats-table th {
-  background: #f5f8f5;
+  background: var(--panel-muted);
   font-weight: 500;
   color: var(--muted);
   white-space: nowrap;

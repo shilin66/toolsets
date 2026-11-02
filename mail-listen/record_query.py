@@ -9,6 +9,20 @@ from email_attachments import build_attachment_url
 from user_access import Principal, UserAccessRepository
 
 
+# Unconfigured notices become cutover work only after analysis requires a reply.
+# Keep completed/cancelled replies visible; reply_status is not an eligibility gate.
+_UNCONFIGURED_ANALYSIS_SQL = "(CASE WHEN json_valid(email_records.unconfigured_analysis_json) THEN email_records.unconfigured_analysis_json ELSE '{}' END)"
+CUTOVER_EMAIL_ELIGIBLE_SQL = f"""(
+    email_records.processing_origin = 'configured'
+    OR (email_records.processing_origin = 'unconfigured'
+        AND email_records.mail_type = '割接通知'
+        AND json_extract({_UNCONFIGURED_ANALYSIS_SQL}, '$.analysis_status') = 'ready'
+        AND json_extract({_UNCONFIGURED_ANALYSIS_SQL}, '$.scene') IN ('major_event', 'emergency', 'in_window')
+        AND json_type({_UNCONFIGURED_ANALYSIS_SQL}, '$.reply.content') = 'text'
+        AND length(trim(json_extract({_UNCONFIGURED_ANALYSIS_SQL}, '$.reply.content'), char(9,10,13,32))) > 0)
+)"""
+
+
 class QueryPage(TypedDict):
     page: int
     page_size: int
@@ -259,7 +273,7 @@ class RecordQueryRepository:
     ) -> CutoverTaskEmailListResult:
         """按邮件维度列出供应商邮件及其割接任务，每封邮件内嵌其割接任务列表。"""
         scope, params = self._scope()
-        conditions = [scope, "(email_records.processing_origin='configured' OR email_records.mail_type='割接通知')"]
+        conditions = [scope, CUTOVER_EMAIL_ELIGIBLE_SQL]
         # 任务级条件（同时作用于内嵌任务列表）与邮件级条件（仅过滤邮件）分开维护
         task_conditions = []
         task_params: list[str | int] = []
@@ -464,7 +478,7 @@ class RecordQueryRepository:
             cursor.execute(
                 "SELECT DISTINCT mail_type FROM email_records "
                 "WHERE mail_type IS NOT NULL AND mail_type != '' "
-                "AND (processing_origin='configured' OR mail_type='割接通知') "
+                f"AND {CUTOVER_EMAIL_ELIGIBLE_SQL} "
                 f"AND {scope} ORDER BY mail_type", params
             )
             return [row["mail_type"] for row in cursor.fetchall()]
@@ -487,7 +501,7 @@ class RecordQueryRepository:
                        reply_to,
                        create_time, update_time
                 FROM email_records
-                WHERE id = ? AND (processing_origin='configured' OR mail_type='割接通知')
+                WHERE id = ? AND {CUTOVER_EMAIL_ELIGIBLE_SQL}
                 """,
                 (email_records_id,),
             )

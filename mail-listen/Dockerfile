@@ -20,11 +20,13 @@ ENV PYTHONUNBUFFERED=1 \
 # 安装系统依赖：
 # - gcc/g++：编译部分 Python 扩展
 # - curl：健康检查
+# - vim-tiny：提供 vi 编辑器
 # - tzdata：时区支持（日志与割接时间使用东八区）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     curl \
+    vim-tiny \
     tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \

@@ -58,6 +58,9 @@ const discoveryHk = {
   guard: '重保視窗', analysisHint: '分析僅針對整體割接時間；回覆需人工審核後傳送。', noLines: '本郵件未生成線路上報任務。供應商規則啟用後，僅後續新郵件進入線路處理。', viewDraft: '查看供應商草稿',
   sent: '回覆已傳送', cancelled: '回覆已取消', sending: '回覆傳送中', send_uncertain: '傳送結果待核對，請先檢查寄件備份',
 };
+Object.assign(discoveryZh, {excludeSender:'不是供应商邮件', excludeTitle:'排除此发件人', excludeConfirm:'将“{sender}”加入系统配置的“排除指定发件人”，并移除此配置草稿？后续来自该地址的未配置供应商邮件不再分类、生成草稿或分析时间。', excludeConfirmButton:'加入排除名单', excluded:'已加入排除指定发件人，并移除草稿'});
+Object.assign(discoveryHk, {excludeSender:'不是供應商郵件', excludeTitle:'排除此寄件人', excludeConfirm:'將「{sender}」加入系統配置的「排除指定寄件人」，並移除此配置草稿？後續來自該地址的未配置供應商郵件不再分類、生成草稿或分析時間。', excludeConfirmButton:'加入排除名單', excluded:'已加入排除指定寄件人，並移除草稿'});
+Object.assign(discoveryEn, {excludeSender:'Not a supplier email', excludeTitle:'Exclude sender', excludeConfirm:'Add “{sender}” to Exclude listed senders in System settings and remove this draft? Future unconfigured mail from this address will not be classified, generate drafts or have its maintenance time analyzed.', excludeConfirmButton:'Exclude sender', excluded:'Sender excluded and draft removed'});
 for (const [locale, messages] of Object.entries({'zh-CN': discoveryZh, en: discoveryEn, 'zh-HK': discoveryHk})) {
   i18n.global.mergeLocaleMessage(locale, {discovery: messages});
 }
@@ -320,6 +323,7 @@ const SupplierDraftsTable = defineComponent({
     const page = ref(1), total = ref(0);
     const editing = ref(false);
     const selectingId = ref(null), deletingId = ref(null), retrying = ref(null);
+    const excluding = ref(false);
     const deletedIds = new Set();
     let listRequest = 0, detailRequest = 0, disposed = false;
 
@@ -409,26 +413,27 @@ const SupplierDraftsTable = defineComponent({
       finally { retrying.value = null; }
     }
 
-    async function removeDraft(row) {
+    async function removeDraft(row, excludeSender = false) {
       if (deletingId.value !== null) return;
       try {
-        await NocDialog.confirm(tt('discovery.deleteConfirm', {supplier:supplierName(row)}), tt('discovery.deleteTitle'), {
-          confirmButtonText:tt('common.confirmDelete'), cancelButtonText:tt('common.cancel'), type:'warning',
+        await NocDialog.confirm(tt(excludeSender ? 'discovery.excludeConfirm' : 'discovery.deleteConfirm', {supplier:supplierName(row), sender:row.sender}), tt(excludeSender ? 'discovery.excludeTitle' : 'discovery.deleteTitle'), {
+          confirmButtonText:tt(excludeSender ? 'discovery.excludeConfirmButton' : 'common.confirmDelete'), cancelButtonText:tt('common.cancel'), type:'warning',
         });
       } catch { return; }
       if (disposed) return;
+      excluding.value = excludeSender;
       deletingId.value = row.id;
       listRequest += 1; detailRequest += 1;
       busy.value = false; selectingId.value = null;
       try {
-        await requestJson(`/api/supplier-drafts/${row.id}`, {method:'DELETE', body:JSON.stringify({revision:row.revision})});
+        await requestJson(`/api/supplier-drafts/${row.id}${excludeSender ? '/exclude-sender' : ''}`, {method:excludeSender ? 'POST' : 'DELETE', body:JSON.stringify({revision:row.revision})});
         if (disposed) return;
         deletedIds.add(row.id);
         items.value = items.value.filter(item => item.id !== row.id);
         total.value = Math.max(0, total.value - 1);
         if (selected.value?.id === row.id || Number(new URLSearchParams(window.location.search).get('draft')) === row.id) clearSelection();
         page.value = Math.min(page.value, Math.max(1, Math.ceil(total.value / 20)));
-        NocMessage.success(tt('discovery.deleted'));
+        NocMessage.success(tt(excludeSender ? 'discovery.excluded' : 'discovery.deleted'));
         await load();
       } catch (exc) {
         if (!disposed) { error.value = exc.message; NocMessage.error(exc.message); }
@@ -454,7 +459,7 @@ const SupplierDraftsTable = defineComponent({
     onUnmounted(() => { disposed = true; listRequest += 1; detailRequest += 1; });
     return {items, selected, busy, error, status, changeStatus, published, page, total, editing, selectingId, deletingId, retrying,
       supplierName, statusTagType, nextAction, timeParts, load, select, retry, closeEditor, clearSelection,
-      changePage, removeDraft, icons:ElementPlusIconsVue};
+      changePage, removeDraft, excluding, icons:ElementPlusIconsVue};
   },
   template: `<div class="supplier-drafts-workspace">
     <supplier-draft-editor v-if="editing && selected" :key="selected.id" :draft-id="selected.id" @close="closeEditor" @published="published"></supplier-draft-editor>
@@ -480,11 +485,12 @@ const SupplierDraftsTable = defineComponent({
           <ui-table-column :label="$t('common.status')" width="200"><template #default="{row}"><ui-tag class="draft-status-badge" effect="light" :type="statusTagType(row.status)">{{ $t('discovery.'+row.status) }}</ui-tag><p class="draft-next-action">{{ nextAction(row.status) }}</p><p v-if="row.last_error" class="draft-row-error" :title="row.last_error">{{ row.last_error }}</p></template></ui-table-column>
           <ui-table-column :label="$t('discovery.count')" width="88" align="center"><template #default="{row}"><span class="draft-sample-number">{{ row.sample_count }}</span></template></ui-table-column>
           <ui-table-column :label="$t('common.updateTime')" width="140"><template #default="{row}"><span class="draft-update-date">{{ timeParts(row.update_time)[0] }}</span><span class="draft-update-clock">{{ timeParts(row.update_time)[1] }}</span></template></ui-table-column>
-          <ui-table-column :label="$t('common.actions')" width="224" align="center" fixed="right">
+          <ui-table-column :label="$t('common.actions')" :width="status==='published' ? 224 : 400" align="center" fixed="right">
             <template #default="{row}"><div class="draft-list-row-actions">
               <ui-button size="small" :type="row.status === 'review' ? 'primary' : 'default'" :loading="selectingId === row.id" :disabled="deletingId !== null || retrying !== null" @click="select(row)">{{ $t(row.status === 'review' ? 'discovery.edit' : row.status === 'published' ? 'supplierReview.viewRecord' : 'supplierReview.viewMails') }}</ui-button>
               <ui-button v-if="row.status === 'generation_failed'" size="small" :loading="retrying === row.id" :disabled="deletingId !== null || (retrying !== null && retrying !== row.id)" @click="retry(row)">{{ $t('discovery.retry') }}</ui-button>
-              <ui-action type="danger" :loading="deletingId === row.id" :disabled="retrying !== null || (deletingId !== null && deletingId !== row.id)" @click="removeDraft(row)" icon="Delete" :label="$t('common.delete')"></ui-action>
+              <ui-button v-if="row.status !== 'published'" size="small" :loading="deletingId === row.id && excluding" :disabled="retrying !== null || deletingId !== null" @click="removeDraft(row,true)">{{ $t('discovery.excludeSender') }}</ui-button>
+              <ui-action type="danger" :loading="deletingId === row.id && !excluding" :disabled="retrying !== null || (deletingId !== null && deletingId !== row.id)" @click="removeDraft(row)" icon="Delete" :label="$t('common.delete')"></ui-action>
             </div></template>
           </ui-table-column>
           <template #empty><div class="drafts-empty-state"><ui-icon :size="28" aria-hidden="true"><component :is="icons.Document"></component></ui-icon><strong>{{ $t(status === 'published' ? 'discovery.historyEmptyTitle' : 'discovery.emptyTitle') }}</strong><p>{{ $t(status === 'published' ? 'discovery.historyEmpty' : 'discovery.empty') }}</p></div></template>

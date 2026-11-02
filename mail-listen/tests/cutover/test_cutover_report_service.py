@@ -247,7 +247,7 @@ class CutoverReportServiceTest(unittest.TestCase):
                 + "/report-success-01-excel_selected.png",
             )
 
-    def test_reports_backbone_form_with_email_attachments(self):
+    def test_reports_backbone_form_with_only_source_eml(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             artifact_root = root / "artifacts"
@@ -313,7 +313,8 @@ class CutoverReportServiceTest(unittest.TestCase):
                 "line_type": "backbone",
                 "fill_result": {"backbone_circuits": [form_data]},
                 "email_attachments": [
-                    attachment_path.relative_to(root).as_posix()
+                    attachment_path.relative_to(root).as_posix(),
+                    "missing-attachment.pdf",
                 ],
                 "source_mailbox_address": "noc@example.com",
                 "source_email_uid": 2519,
@@ -357,7 +358,7 @@ class CutoverReportServiceTest(unittest.TestCase):
             self.assertTrue((root / result["screenshot_path"]).is_file())
             self.assertEqual(
                 result["uploaded_filenames"],
-                ["方案.pdf", "source-email-2519.eml"],
+                ["source-email-2519.eml"],
             )
             rpa.fill_backbone_form.assert_called_once()
             call = rpa.fill_backbone_form.call_args
@@ -365,12 +366,11 @@ class CutoverReportServiceTest(unittest.TestCase):
             self.assertEqual(
                 call.kwargs["attachment_paths"],
                 (
-                    attachment_path.resolve(),
                     source_email_path.resolve(),
                 ),
             )
             self.assertEqual(
-                call.kwargs["attachment_paths"][1].read_bytes(),
+                call.kwargs["attachment_paths"][0].read_bytes(),
                 b"From: noc@example.com\r\n\r\nsource",
             )
 

@@ -10,6 +10,12 @@ const NocUI = (() => {
       borderRadius: '6px', textColorBase: token('ink'),
       textColor1: token('ink'), textColor2: token('text-secondary'), textColor3: token('muted'),
       placeholderColor: token('placeholder'), borderColor: token('line'), dividerColor: token('divider'),
+      bodyColor: token('bg'), cardColor: token('panel'), modalColor: token('panel'),
+      popoverColor: token('panel'), tableColor: token('panel'), inputColor: token('panel'),
+      successColor: token('success'), successColorHover: token('success'), successColorPressed: token('success'),
+      errorColor: token('danger'), errorColorHover: token('danger'), errorColorPressed: token('danger'),
+      warningColor: token('warning-ink'), warningColorHover: token('warning-ink'), warningColorPressed: token('warning-ink'),
+      infoColor: token('brand'), infoColorHover: token('brand-hover'), infoColorPressed: token('brand-pressed'),
       fontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
     },
     DataTable: {
@@ -18,8 +24,22 @@ const NocUI = (() => {
     },
     Card: { borderRadius: token('surface-radius'), titleFontSizeMedium: '16px' },
     Dialog: { borderRadius: token('surface-radius'), titleFontSize: '17px' },
+    Button: {
+      paddingSmall: '0 16px', paddingMedium: '0 22px', paddingLarge: '0 26px',
+    },
+    Tag: {
+      borderRadius: '4px',
+      color: token('tag-neutral-bg'), textColor: token('tag-neutral-ink'),
+      colorPrimary: token('tag-info-bg'), textColorPrimary: token('tag-info-ink'),
+      colorInfo: token('tag-neutral-bg'), textColorInfo: token('tag-neutral-ink'),
+      colorSuccess: token('tag-success-bg'), textColorSuccess: token('tag-success-ink'),
+      colorWarning: token('tag-warning-bg'), textColorWarning: token('tag-warning-ink'),
+      colorError: token('tag-danger-bg'), textColorError: token('tag-danger-ink'),
+    },
     Menu: {
+      borderRadius: '8px',
       itemColorHover: token('nav-hover'), itemColorActive: token('nav-active'), itemColorActiveHover: token('nav-active'),
+      itemColorActiveCollapsed: token('nav-active'),
       itemTextColor: token('nav-text'), itemTextColorHover: token('nav-text-active'),
       itemTextColorActive: token('nav-text-active'), itemTextColorActiveHover: token('nav-text-active'),
       itemIconColor: token('nav-text'), itemIconColorHover: token('nav-text-active'),
@@ -124,7 +144,8 @@ const NocUI = (() => {
             const children = node.children.default?.() || [];
             return {
               key: node.props.index,
-              label: () => children.filter(child => child.type?.name !== 'UiIcon'),
+              label: () => h('span', { title: node.props.title || undefined },
+                children.filter(child => child.type?.name !== 'UiIcon')),
               icon: () => children.filter(child => child.type?.name === 'UiIcon'),
             };
           }),

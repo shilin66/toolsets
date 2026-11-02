@@ -44,7 +44,7 @@ SHARED_CONFIGURATION_ENDPOINTS = frozenset({
     'delete_circuit_admin', 'export_circuits_xlsx', 'import_circuits_xlsx', 'generate_template_xlsx',
     'get_system_settings', 'update_system_settings', 'list_supplier_drafts',
 })
-DRAFT_ENDPOINTS = frozenset({'supplier_draft_detail', 'publish_supplier_draft', 'retry_supplier_draft'})
+DRAFT_ENDPOINTS = frozenset({'exclude_supplier_draft_sender', 'supplier_draft_detail', 'publish_supplier_draft', 'retry_supplier_draft'})
 REPORT_ENDPOINTS = frozenset({'get_cutover_report_route', 'resolve_interrupted_report'})
 EMAIL_ENDPOINTS = frozenset({
     'preview_cutover_attachment',
@@ -158,9 +158,9 @@ def register_access_routes(app, get_db, get_admin_key, get_data_dir):
                 body = request.get_json(silent=True) or {}
                 if isinstance(body, dict) and body.get('task_type') == 'supplier_config_draft':
                     with get_db().get_connection() as conn:
-                        drafts = conn.execute('SELECT draft_id FROM supplier_draft_samples WHERE email_records_id=?', (email_id,)).fetchall()
+                        drafts = conn.execute("SELECT draft_id FROM mail_ai_jobs WHERE email_records_id=? AND task_type='supplier_config_draft' AND status='failed' AND draft_id IS NOT NULL", (email_id,)).fetchall()
                     if any(not repo.can_access_draft(principal, row['draft_id'], operate=True) for row in drafts):
-                        return denied('草稿来源邮箱未完整授予操作权限')
+                        return denied('草稿相关邮箱未授予操作权限')
             return None
         if endpoint in FILE_ENDPOINTS and request.method in SAFE_METHODS:
             from access_artifacts import can_access_artifact

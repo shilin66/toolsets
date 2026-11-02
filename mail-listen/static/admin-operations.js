@@ -89,14 +89,14 @@ const ViewOperations = defineComponent({
     const cards = computed(() => {
       const m = summary.value?.metrics || {};
       return [
-        ['接收邮件', m.received_emails, '按邮件接收日期', null],
-        ['割接通知邮件', m.cutover_emails, '已识别为割接通知', null],
-        ['上报邮件', m.reported_emails, '全部任务上报成功的邮件', 'emails'],
-        ['上报工单', m.reported_orders, '全部任务成功 · 按工单编号去重', 'orders'],
-        ['上报线路', m.reported_lines, '按工单＋线路编号去重', 'lines'],
-        ['回复邮件', m.reply_emails, '成功发送次数', 'replies'],
-        ['已接入运营商', m.connected_suppliers, '当前范围的正式配置', null],
-        ['本期新增接入', m.new_suppliers, '首次发布正式配置', null],
+        ['接收邮件', m.received_emails, null],
+        ['割接通知邮件', m.cutover_emails, null],
+        ['上报邮件', m.reported_emails, 'emails'],
+        ['上报工单', m.reported_orders, 'orders'],
+        ['上报线路', m.reported_lines, 'lines'],
+        ['回复邮件', m.reply_emails, 'replies'],
+        ['已接入运营商', m.connected_suppliers, null],
+        ['本期新增接入', m.new_suppliers, null],
       ];
     });
     const chartMax = computed(() => Math.max(1, ...(summary.value?.trend || []).map(w => Math.max(w.received, w.reported))));
@@ -135,8 +135,8 @@ const ViewOperations = defineComponent({
     <p v-if="loading" class="stats-loading" role="status">正在汇总当前范围的数据…</p>
     <template v-if="summary && !loading">
       <p class="stats-context">{{ applied.start }} 至 {{ applied.end }} · 北京时间 · {{ applied.environment === 'production' ? '生产上报' : applied.environment === 'test' ? '测试上报' : '所有环境上报' }} · {{ 'mailboxes' in applied ? summary.scope.mailbox_count + ' 个监听邮箱' : '全部邮箱（含历史）' }}<span>邮件与回复数量包含所选邮箱全部业务；环境只筛选上报记录。</span></p>
-      <div class="stats-cards"><component :is="card[3] ? 'button' : 'div'" v-for="card in cards" :key="card[0]" class="stats-card" :class="{'is-link': card[3]}" @click="card[3] && openDetails(card[3])">
-        <span class="stats-card-label">{{ card[0] }}<span v-if="card[3]" aria-hidden="true">↗</span></span><strong>{{ number(card[1]) }}</strong><small>{{ card[2] }}</small>
+      <div class="stats-cards"><component :is="card[2] ? 'button' : 'div'" v-for="card in cards" :key="card[0]" class="stats-card" :class="{'is-link': card[2]}" @click="card[2] && openDetails(card[2])">
+        <span class="stats-card-label">{{ card[0] }}<span v-if="card[2]" aria-hidden="true">↗</span></span><strong>{{ number(card[1]) }}</strong>
       </component></div>
       <div class="stats-coverage"><div><strong>本期来件运营商</strong><span>已接入 {{ number(summary.metrics.incoming_suppliers) }} 家 · 未配置发件地址 {{ number(summary.metrics.unmapped_senders) }} 个</span></div>
         <strong v-if="summary.metrics.coverage_percent != null">来件接入率 {{ summary.metrics.coverage_percent }}%</strong></div>
@@ -161,7 +161,7 @@ const ViewOperations = defineComponent({
         <div v-else class="stats-panel-head"><div><h3>{{ detailName }} · 业务明细</h3><p class="muted">点击来源邮件查看割接详情。</p></div><ui-select v-model="kind" @change="changeKind" aria-label="明细类型"><ui-option value="orders" label="上报工单"></ui-option><ui-option value="lines" label="上报线路"></ui-option><ui-option value="emails" label="上报邮件"></ui-option><ui-option value="replies" label="回复邮件"></ui-option></ui-select></div>
         <p v-if="tableLoading" class="stats-loading" role="status">正在查询明细…</p><p v-if="tableError" class="stats-error" role="alert">{{ tableError }} <button @click="loadTable">重试</button></p>
         <div v-if="pageData" class="stats-table-scroll">
-          <table v-if="tab==='suppliers'" class="stats-table"><thead><tr><th>运营商 / 发件地址</th><th>接收</th><th>割接邮件</th><th>完整上报邮件</th><th>完整工单</th><th>线路</th><th>回复</th><th>待处理</th></tr></thead><tbody><tr v-for="row in list.items" :key="row.sender"><td><button class="stats-name-link" @click="openDetails('orders',row)">{{ row.name }}</button><small>{{ row.sender }} · {{ row.configured ? '已接入' : '未配置' }}</small></td><td>{{ number(row.received) }}</td><td>{{ number(row.cutover) }}</td><td><button class="stats-count-link" @click="openDetails('emails',row)">{{ number(row.reported) }}</button></td><td><button class="stats-count-link" @click="openDetails('orders',row)">{{ number(row.orders) }}</button></td><td><button class="stats-count-link" @click="openDetails('lines',row)">{{ number(row.lines) }}</button></td><td><button class="stats-count-link" @click="openDetails('replies',row)">{{ number(row.replies) }}</button></td><td>{{ number(row.pending) }}<small v-if="row.failed" class="stats-error">{{ row.failed }} 失败</small></td></tr></tbody></table>
+          <table v-if="tab==='suppliers'" class="stats-table"><thead><tr><th>运营商 / 发件地址</th><th>接收</th><th>割接邮件</th><th>完整上报邮件</th><th>上报工单</th><th>线路</th><th>回复</th><th>待处理</th></tr></thead><tbody><tr v-for="row in list.items" :key="row.sender"><td><button class="stats-name-link" @click="openDetails('orders',row)">{{ row.name }}</button><small>{{ row.sender }} · {{ row.configured ? '已接入' : '未配置' }}</small></td><td>{{ number(row.received) }}</td><td>{{ number(row.cutover) }}</td><td><button class="stats-count-link" @click="openDetails('emails',row)">{{ number(row.reported) }}</button></td><td><button class="stats-count-link" @click="openDetails('orders',row)">{{ number(row.orders) }}</button></td><td><button class="stats-count-link" @click="openDetails('lines',row)">{{ number(row.lines) }}</button></td><td><button class="stats-count-link" @click="openDetails('replies',row)">{{ number(row.replies) }}</button></td><td>{{ number(row.pending) }}<small v-if="row.failed" class="stats-error">{{ row.failed }} 失败</small></td></tr></tbody></table>
           <table v-else class="stats-table"><thead><tr><th>来源</th><th v-if="kind==='orders' || kind==='lines'">工单编号</th><th v-if="kind==='lines'">线路编号</th><th v-if="kind==='orders'">已成功任务 / 总任务</th><th v-if="kind==='emails'">邮件主题 / 接收邮箱</th><th>统计日期（北京）</th><th>查看</th></tr></thead><tbody><tr v-for="(row,i) in detail.items" :key="i"><td>{{ row.sender }}</td><td v-if="kind==='orders' || kind==='lines'">{{ row.ticket }}</td><td v-if="kind==='lines'">{{ row.line_id }}</td><td v-if="kind==='orders'">{{ row.done }} / {{ row.tasks }}<small>{{ row.done===row.tasks ? '完整成功' : '部分成功' }}</small></td><td v-if="kind==='emails'">{{ row.subject }}<small>{{ row.receiver }}</small></td><td>{{ row.completed }}</td><td><button class="stats-count-link" @click="openCutoverEmailDetail(row.email_id)">来源邮件 ↗</button></td></tr></tbody></table>
           <p v-if="!pageData.items.length" class="stats-empty">当前条件没有数据，请调整周期、邮箱或搜索条件。</p>
         </div>

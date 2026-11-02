@@ -103,6 +103,15 @@ class NaiveMigrationUiTest(unittest.TestCase):
         self.page.get_by_role('textbox', name='API Key').fill('test-key')
         self.page.get_by_role('textbox', name='API Key').press('Enter')
         expect(self.page.locator('.app-shell')).to_be_visible()
+        for item in self.page.locator('.side-menu .n-menu-item-content').all():
+            label = item.locator('.n-menu-item-content-header')
+            bounds, text = item.bounding_box(), label.bounding_box()
+            self.assertLessEqual(text['y'] + text['height'], bounds['y'] + bounds['height'])
+            self.assertTrue(label.evaluate('el => el.scrollWidth <= el.clientWidth + 1'),
+                            label.evaluate('el => ({ text: el.textContent, html: el.innerHTML, width: el.clientWidth, scroll: el.scrollWidth })'))
+        evidence = Path(__file__).resolve().parents[2] / '.qa' / 'sidebar-contrast'
+        evidence.mkdir(parents=True, exist_ok=True)
+        self.page.screenshot(path=str(evidence / 'english-expanded.png'))
         self.page.get_by_role('button', name='Sign out', exact=True).click()
         self.page.locator('.login-lang').click()
         self.page.get_by_text('繁體中文（香港）', exact=True).click()

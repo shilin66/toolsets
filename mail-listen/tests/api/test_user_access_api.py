@@ -131,32 +131,196 @@ class UserAccessApiTest(unittest.TestCase):
         from unconfigured_mail import DISCOVERY
         self.assertEqual(self.client.put('/api/system/settings', headers=headers, json={DISCOVERY: True}).status_code, 200)
 
-    def test_supplier_drafts_require_access_to_all_source_mailboxes(self):
-        headers = self.login()
-        config = {'name': '供应商', 'prompt_mode': 'auto',
-                  'email_type_samples': {'割接通知': {'subject': '维护', 'content': '正文'}}}
+    def make_access_draft(self, name, samples, source=None):
+        config = {'name': name, 'prompt_mode': 'auto',
+                  'email_type_samples': {'割接通知': {'subject': '共享配置样本', 'content': '维护规则'}}}
         with self.db.get_connection() as conn:
-            draft_ids = []
-            for index, samples in enumerate(([self.emails[0]], self.emails)):
-                cursor = conn.execute('''INSERT INTO supplier_drafts
-                    (candidate_key,sender,status,draft_json,revision,source_email_records_id,create_time,update_time)
-                    VALUES (?,?,'review',?,1,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)''',
-                    (f'draft-{index}', f'supplier{index}@example.com', json.dumps({'config': config}), samples[0]))
-                draft_ids.append(cursor.lastrowid)
-                conn.executemany('INSERT INTO supplier_draft_samples VALUES (?,?)', [(cursor.lastrowid, item) for item in samples])
+            draft_id = conn.execute("""INSERT INTO supplier_drafts
+                (candidate_key,sender,status,draft_json,revision,source_email_records_id,create_time,update_time)
+                VALUES (?,?,'review',?,1,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)""",
+                (name, name + '@example.com', json.dumps({'config': config}), source)).lastrowid
+            conn.executemany('INSERT INTO supplier_draft_samples VALUES (?,?)', [(draft_id, item) for item in samples])
             conn.commit()
-        own, mixed = draft_ids
-        result = self.client.get('/api/supplier-drafts?pageSize=1').get_json()['data']
-        self.assertEqual(result['total'], 1)
-        self.assertEqual(result['items'][0]['id'], own)
-        self.assertEqual(self.client.get(f'/api/supplier-drafts/{mixed}').status_code, 404)
-        self.assertEqual(self.client.delete(f'/api/supplier-drafts/{mixed}', headers=headers, json={'revision': 1}).status_code, 404)
-        response = self.client.put(f'/api/supplier-drafts/{own}', headers=headers,
-                                   json={'revision': 1, 'config': {**config, 'name': '普通用户维护'}})
+        return draft_id, config
+
+    def test_any_authorized_source_grants_draft_access_but_original_mails_stay_scoped(self):
+        own, _ = self.make_access_draft('own', [self.emails[0]])
+        mixed, _ = self.make_access_draft('mixed', self.emails, self.emails[1])
+        private, _ = self.make_access_draft('private', [self.emails[1]])
+        empty, _ = self.make_access_draft('empty', [])
+        headers = self.login()
+        pages = [self.client.get(f'/api/supplier-drafts?pageSize=1&page={page}').get_json()['data'] for page in (1, 2)]
+        self.assertEqual([page['total'] for page in pages], [2, 2])
+        self.assertEqual({item['id'] for page in pages for item in page['items']}, {own, mixed})
+        self.assertTrue(all(item['sample_count'] == 1 for page in pages for item in page['items']))
+        detail = self.client.get(f'/api/supplier-drafts/{mixed}?pageSize=1').get_json()['data']
+        self.assertEqual([mail['id'] for mail in detail['samples']], [self.emails[0]])
+        self.assertEqual(detail['sample_count'], 1)
+        self.assertEqual(sum(detail['sample_counts'].values()), 1)
+        self.assertEqual(self.client.get(f'/api/supplier-drafts/{mixed}?pageSize=1&page=2').get_json()['data']['samples'], [])
+        self.assertEqual(detail['draft']['config']['name'], 'mixed')
+        for draft in (private, empty):
+            self.assertEqual(self.client.get(f'/api/supplier-drafts/{draft}').status_code, 404)
+        self.assertEqual(self.client.get(f'/api/emails/{self.emails[1]}/source').status_code, 404)
+        self.assertEqual(self.client.post('/api/suppliers/sample-attachment-source', headers=headers,
+                         json={'source_email_records_id': self.emails[1]}).status_code, 404)
+        admin = self.client.get(f'/api/supplier-drafts/{mixed}', headers=self.admin_headers).get_json()['data']
+        self.assertEqual(admin['sample_count'], 2)
+        self.assertEqual({mail['id'] for mail in admin['samples']}, set(self.emails))
+
+    def test_received_mail_grants_access_even_when_not_selected_as_draft_sample(self):
+        draft, _ = self.make_access_draft('capped', [self.emails[1]], self.emails[1])
+        with self.db.get_connection() as conn:
+            conn.execute("UPDATE email_records SET sender='CAPPED@example.com' WHERE id=?", (self.emails[0],))
+            conn.commit()
+        self.login()
+        detail = self.client.get(f'/api/supplier-drafts/{draft}').get_json()['data']
+        self.assertEqual(detail['id'], draft)
+        self.assertEqual(detail['samples'], [])
+        self.assertEqual(detail['sample_count'], 0)
+        self.repo.set_grants(self.user['id'], [])
+        self.assertEqual(self.client.get(f'/api/supplier-drafts/{draft}').status_code, 404)
+        self.assertEqual(self.client.get('/api/supplier-drafts').get_json()['data']['total'], 0)
+
+    def test_any_operable_source_allows_edit_publish_delete_and_retry_shared_drafts(self):
+        from unconfigured_mail_repository import UnconfiguredMailRepository
+        draft, config = self.make_access_draft('shared', self.emails, self.emails[1])
+        headers = self.login()
+        url = f'/api/supplier-drafts/{draft}'
+        response = self.client.put(url, headers=headers, json={'revision': 1, 'config': {'name': '共享草稿可管理', 'prompt_mode': 'auto'}})
         self.assertEqual(response.status_code, 200, response.get_json())
-        self.repo.set_grants(self.user['id'], [{'account_id': item, 'can_operate': False} for item in self.accounts])
-        self.assertEqual(self.client.get(f'/api/supplier-drafts/{mixed}').status_code, 200)
-        self.assertEqual(self.client.delete(f'/api/supplier-drafts/{mixed}', headers=headers, json={'revision': 1}).status_code, 404)
+        revision = response.get_json()['data']['revision']
+        published = self.client.post(url + '/publish', headers=headers, json={'revision': revision})
+        self.assertEqual(published.status_code, 200, published.get_json())
+        self.assertEqual(self.client.get('/api/supplier-drafts?status=published').get_json()['data']['total'], 1)
+        self.assertEqual(self.client.delete(url, headers=headers, json={'revision': revision}).status_code, 200)
+        self.assertTrue(all(self.db.get_email_record_by_id(email_id) for email_id in self.emails))
+        failed, _ = self.make_access_draft('failed', self.emails, self.emails[1])
+        with self.db.get_connection() as conn:
+            conn.execute("UPDATE supplier_drafts SET status='generation_failed',draft_json=NULL WHERE id=?", (failed,))
+            UnconfiguredMailRepository.enqueue(conn, 'supplier_config_draft', self.emails[1], {}, failed, 1)
+            conn.execute("UPDATE mail_ai_jobs SET status='failed' WHERE draft_id=?", (failed,))
+            conn.commit()
+        response = self.client.post(f'/api/supplier-drafts/{failed}/retry', headers=headers, json={})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()['data']['status'], 'generating')
+
+    def test_shared_draft_hides_ungranted_source_copies_and_preserves_them_on_edit(self):
+        draft, config = self.make_access_draft('private-copies', self.emails, self.emails[1])
+        secret = 'B邮箱未授权的完整邮件正文'
+        config['email_type_samples']['割接通知'].update(content=secret, source_email_records_id=self.emails[1])
+        config['review_metadata'] = {'questions': [secret], 'confirmations': {}}
+        stored = {'config': config, 'evidence': [secret], 'unresolved_questions': [secret]}
+        with self.db.get_connection() as conn:
+            conn.execute('UPDATE supplier_drafts SET draft_json=? WHERE id=?', (json.dumps(stored), draft))
+            conn.commit()
+        headers = self.login()
+        for url in ('/api/supplier-drafts', f'/api/supplier-drafts/{draft}'):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn(secret, response.get_data(as_text=True))
+        url = f'/api/supplier-drafts/{draft}'
+        detail = self.client.get(url).get_json()['data']
+        self.assertTrue(detail['draft']['config']['samples_restricted'])
+        for field, value in (('email_type_samples', {}), ('review_metadata', {})):
+            response = self.client.put(url, headers=headers, json={'revision': 1, 'config': {'name': '共享', field: value}})
+            self.assertEqual(response.status_code, 403, response.get_json())
+        response = self.client.put(url, headers=headers, json={'revision': 1, 'config': {'name': '可修改的规则', 'prompt_mode': 'auto'}})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertNotIn(secret, response.get_data(as_text=True))
+        with self.db.get_connection() as conn:
+            actual = json.loads(conn.execute('SELECT draft_json FROM supplier_drafts WHERE id=?', (draft,)).fetchone()[0])
+        self.assertEqual(actual['config']['email_type_samples'], config['email_type_samples'])
+        self.assertEqual(actual['config']['review_metadata'], config['review_metadata'])
+        self.assertEqual(actual['evidence'], [secret])
+        admin = self.client.get(url, headers=self.admin_headers).get_json()['data']
+        self.assertEqual(admin['draft']['config']['email_type_samples']['割接通知']['content'], secret)
+        published = self.client.post(url + '/publish', headers=headers, json={'revision': 2})
+        self.assertEqual(published.status_code, 200, published.get_json())
+        supplier_id = published.get_json()['data']['supplier_id']
+        for path in (url, '/api/supplier-drafts?status=published', f'/api/suppliers/{supplier_id}'):
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn(secret, response.get_data(as_text=True))
+
+    def test_deleted_source_does_not_make_retained_html_sample_public(self):
+        from cutover_deletion import _remove_database_records
+        draft, config = self.make_access_draft('deleted-source', self.emails, self.emails[1])
+        secret = '<p>B邮箱 HTML 私有样本</p>'
+        config['email_type_samples']['割接通知'].update(
+            subject='B来源', content=secret, source_email_records_id=self.emails[1])
+        with self.db.get_connection() as conn:
+            conn.execute("UPDATE email_records SET subject='B来源',content='不同的纯文本',html_content=? WHERE id=?", (secret, self.emails[1]))
+            conn.execute('UPDATE supplier_drafts SET draft_json=? WHERE id=?', (json.dumps({'config': config}), draft))
+            _remove_database_records(conn, self.emails[1])
+            conn.commit()
+        headers = self.login()
+        url = f'/api/supplier-drafts/{draft}'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(secret, response.get_data(as_text=True))
+        self.assertTrue(response.get_json()['data']['draft']['config']['samples_restricted'])
+        revision = response.get_json()['data']['revision']
+        published = self.client.post(url + '/publish', headers=headers, json={'revision': revision})
+        self.assertEqual(published.status_code, 200, published.get_json())
+        supplier = self.client.get('/api/suppliers/' + str(published.get_json()['data']['supplier_id'])).get_json()['data']
+        self.assertTrue(supplier['samples_restricted'])
+
+    def test_all_source_grants_allow_editing_draft_samples(self):
+        draft, config = self.make_access_draft('all-sources', self.emails, self.emails[1])
+        self.repo.set_grants(self.user['id'], [{'account_id': account, 'can_operate': True} for account in self.accounts])
+        headers = self.login()
+        url = f'/api/supplier-drafts/{draft}'
+        detail = self.client.get(url).get_json()['data']
+        self.assertEqual(detail['draft']['config']['email_type_samples'], config['email_type_samples'])
+        config['email_type_samples']['割接通知']['content'] = '已审核的样本'
+        response = self.client.put(url, headers=headers, json={'revision': 1, 'config': config})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()['data']['draft']['config']['email_type_samples'], config['email_type_samples'])
+
+    def test_read_only_draft_access_does_not_grant_modification(self):
+        draft, config = self.make_access_draft('readonly', self.emails, self.emails[1])
+        self.repo.set_grants(self.user['id'], [{'account_id': self.accounts[0], 'can_operate': False}])
+        headers = self.login()
+        url = f'/api/supplier-drafts/{draft}'
+        self.assertEqual(self.client.get(url).status_code, 200)
+        for method, path, body in [('PUT', url, {'revision': 1, 'config': config}),
+                                   ('DELETE', url, {'revision': 1}),
+                                   ('POST', url + '/publish', {'revision': 1}),
+                                   ('POST', url + '/retry', {})]:
+            with self.subTest(method=method, path=path):
+                self.assertEqual(self.client.open(path, method=method, headers=headers, json=body).status_code, 404)
+
+    def test_draft_retry_does_not_retry_another_draft_for_the_same_source(self):
+        from unconfigured_mail_repository import UnconfiguredMailRepository
+        target, _ = self.make_access_draft('target', self.emails, self.emails[1])
+        other, _ = self.make_access_draft('other', [self.emails[1]], self.emails[1])
+        with self.db.get_connection() as conn:
+            conn.execute("UPDATE supplier_drafts SET status='generation_failed',draft_json=NULL")
+            UnconfiguredMailRepository.enqueue(conn, 'supplier_config_draft', self.emails[1], {}, other, 1)
+            conn.execute("UPDATE mail_ai_jobs SET status='failed'")
+            conn.commit()
+        response = self.client.post(f'/api/supplier-drafts/{target}/retry', headers=self.login(), json={})
+        self.assertEqual(response.status_code, 409, response.get_json())
+        with self.db.get_connection() as conn:
+            self.assertEqual(conn.execute('SELECT status FROM mail_ai_jobs').fetchone()[0], 'failed')
+            self.assertEqual(conn.execute('SELECT status FROM supplier_drafts WHERE id=?', (other,)).fetchone()[0], 'generation_failed')
+
+    def test_draft_retry_rechecks_revoked_operate_grant(self):
+        from unconfigured_mail_repository import UnconfiguredMailRepository
+        draft, _ = self.make_access_draft('revoked', self.emails, self.emails[1])
+        principal = self.repo.get_principal(self.user['id'])
+        with self.db.get_connection() as conn:
+            conn.execute("UPDATE supplier_drafts SET status='generation_failed',draft_json=NULL WHERE id=?", (draft,))
+            UnconfiguredMailRepository.enqueue(conn, 'supplier_config_draft', self.emails[1], {}, draft, 1)
+            conn.execute("UPDATE mail_ai_jobs SET status='failed'")
+            conn.commit()
+        self.repo.set_grants(self.user['id'], [])
+        with self.assertRaises(LookupError):
+            UnconfiguredMailRepository(self.db).retry(self.emails[1], 'supplier_config_draft', draft_id=draft, principal=principal)
+        with self.db.get_connection() as conn:
+            self.assertEqual(conn.execute('SELECT status FROM mail_ai_jobs').fetchone()[0], 'failed')
+            self.assertEqual(conn.execute('SELECT status FROM supplier_drafts WHERE id=?', (draft,)).fetchone()[0], 'generation_failed')
 
     def test_published_samples_remain_scoped_after_draft_deletion(self):
         from supplier_drafts import SupplierDraftRepository
@@ -188,12 +352,15 @@ class UserAccessApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()['data']['email_type_samples'], {})
         self.assertEqual(response.get_json()['data']['supplier_mail_classify_prompt'], '')
+        self.assertEqual(response.get_json()['data']['review_metadata'], {})
         self.assertEqual(self.client.patch(f'/api/suppliers/{supplier_id}', headers=headers,
                          json={'email_type_samples': config['email_type_samples']}).status_code, 403)
         self.repo.set_grants(self.user['id'], [{'account_id': self.accounts[1], 'can_operate': False}])
         record = self.client.get(f'/api/suppliers/{supplier_id}').get_json()['data']
         self.assertEqual(record['email_type_samples']['割接通知']['content'], secret)
         self.assertTrue(record['samples_read_only'])
+        self.assertEqual(self.client.patch(f'/api/suppliers/{supplier_id}', headers=headers,
+                         json={'review_metadata':{'questions':[], 'confirmations':{}}}).status_code, 403)
         self.repo.set_grants(self.user['id'], [])
         self.assertTrue(self.client.get(f'/api/suppliers/{supplier_id}').get_json()['data']['samples_restricted'])
 

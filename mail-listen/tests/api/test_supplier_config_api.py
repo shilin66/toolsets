@@ -23,6 +23,28 @@ from supplier_config import SupplierConfigRepository
 
 
 class SupplierConfigApiTest(unittest.TestCase):
+    def test_review_metadata_roundtrip_validation_and_prompt_isolation(self):
+        metadata = {'questions':['cutover_reason | 请核对原因'],
+                    'confirmations':{'cutover_reason | 请核对原因':'a' * 64}}
+        response = self.client.post('/api/suppliers', headers=self.headers, json={
+            'name':'核实配置', 'email':'review@example.com', 'prompt_mode':'manual',
+            'cutover_extract_prompt':'只提取邮件字段', 'review_metadata':metadata})
+        self.assertEqual(response.status_code, 201)
+        supplier_id = response.get_json()['data']['id']
+        record = self.client.get(f'/api/suppliers/{supplier_id}', headers=self.headers).get_json()['data']
+        self.assertEqual(record['review_metadata'], metadata)
+        self.assertEqual(record['cutover_extract_prompt'], '只提取邮件字段')
+        # Ordinary updates must preserve review state when the field is omitted.
+        response = self.client.patch(f'/api/suppliers/{supplier_id}', headers=self.headers, json={'name':'新名称'})
+        self.assertEqual(response.get_json()['data']['review_metadata'], metadata)
+        for invalid in (None, [], {'questions':'not a list'}, {'confirmations':{'x':'invalid'}}):
+            response = self.client.patch(f'/api/suppliers/{supplier_id}', headers=self.headers,
+                                         json={'review_metadata':invalid})
+            self.assertEqual(response.status_code, 400)
+        cleared = {'questions':metadata['questions'], 'confirmations':{}}
+        response = self.client.patch(f'/api/suppliers/{supplier_id}', headers=self.headers, json={'review_metadata':cleared})
+        self.assertEqual(response.get_json()['data']['review_metadata'], cleared)
+
     def test_eml_import_requires_auth_and_does_not_create_supplier(self):
         from tests.mail.test_supplier_eml import sample_eml
         url = '/api/suppliers/import-eml'

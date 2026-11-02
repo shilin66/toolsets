@@ -324,38 +324,45 @@ def _remove_database_records(conn, email_id):
     conn.execute('DELETE FROM email_records WHERE id=?', (email_id,))
 
 
+def prepare_cutover_email_deletion(conn, data_dir, email_id, *, image_dir=None):
+    """Stage a deletion in the caller's transaction, before any file removal."""
+    root = Path(data_dir).resolve()
+    image_root = Path(image_dir) if image_dir is not None else IMAGE_DIR
+    deletion = conn.execute('SELECT * FROM mail_deletions WHERE email_records_id=?', (email_id,)).fetchone()
+    if deletion and deletion['status'] == 'deleted':
+        return
+    if not deletion:
+        record = conn.execute('SELECT * FROM email_records WHERE id=?', (email_id,)).fetchone()
+        if not record:
+            raise DeletionNotFound('割接邮件不存在')
+        _reject_active(conn, record)
+        manifest = _collect_manifest(conn, root, record)
+        manifest.update(image_root=str(image_root), images=_collect_images(conn, image_root, record))
+        conn.execute('''INSERT INTO mail_deletions
+            (email_records_id,mailbox_address,email_uid,status,cleanup_manifest,create_time,update_time)
+            VALUES (?,?,?,'pending_cleanup',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)''',
+            (email_id, (record['receiver'] or '').strip().casefold(), record['email_id'], json.dumps(manifest, ensure_ascii=False)))
+    else:
+        manifest = json.loads(deletion['cleanup_manifest'])
+        if manifest != [] and manifest.get('root') != str(root):
+            raise DeletionCleanupError('待清理文件的数据根目录已变化，请恢复目录后重试')
+        if manifest != [] and manifest.get('image_root', str(image_root)) != str(image_root):
+            raise DeletionCleanupError('待清理正文图片目录已变化，请恢复目录后重试')
+        record = conn.execute('SELECT * FROM email_records WHERE id=?', (email_id,)).fetchone()
+        if record:
+            manifest = _collect_manifest(conn, root, record)
+            manifest.update(image_root=str(image_root), images=_collect_images(conn, image_root, record))
+            conn.execute('UPDATE mail_deletions SET cleanup_manifest=?,update_time=CURRENT_TIMESTAMP WHERE email_records_id=?',
+                (json.dumps(manifest, ensure_ascii=False), email_id))
+
+
 def delete_cutover_email(db, data_dir, email_id, *, image_dir=None):
     root = Path(data_dir).resolve()
     image_root = Path(image_dir) if image_dir is not None else IMAGE_DIR
     result = {'email_records_id':email_id, 'deleted':True}
     with db.get_connection() as conn:
         conn.execute('BEGIN IMMEDIATE')
-        deletion = conn.execute('SELECT * FROM mail_deletions WHERE email_records_id=?', (email_id,)).fetchone()
-        if deletion and deletion['status'] == 'deleted':
-            return result
-        if not deletion:
-            record = conn.execute('SELECT * FROM email_records WHERE id=?', (email_id,)).fetchone()
-            if not record:
-                raise DeletionNotFound('割接邮件不存在')
-            _reject_active(conn, record)
-            manifest = _collect_manifest(conn, root, record)
-            manifest.update(image_root=str(image_root), images=_collect_images(conn, image_root, record))
-            conn.execute('''INSERT INTO mail_deletions
-                (email_records_id,mailbox_address,email_uid,status,cleanup_manifest,create_time,update_time)
-                VALUES (?,?,?,'pending_cleanup',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)''',
-                (email_id, (record['receiver'] or '').strip().casefold(), record['email_id'], json.dumps(manifest, ensure_ascii=False)))
-        else:
-            manifest = json.loads(deletion['cleanup_manifest'])
-            if manifest != [] and manifest.get('root') != str(root):
-                raise DeletionCleanupError('待清理文件的数据根目录已变化，请恢复目录后重试')
-            if manifest != [] and manifest.get('image_root', str(image_root)) != str(image_root):
-                raise DeletionCleanupError('待清理正文图片目录已变化，请恢复目录后重试')
-            record = conn.execute('SELECT * FROM email_records WHERE id=?', (email_id,)).fetchone()
-            if record:
-                manifest = _collect_manifest(conn, root, record)
-                manifest.update(image_root=str(image_root), images=_collect_images(conn, image_root, record))
-                conn.execute('UPDATE mail_deletions SET cleanup_manifest=?,update_time=CURRENT_TIMESTAMP WHERE email_records_id=?',
-                    (json.dumps(manifest, ensure_ascii=False), email_id))
+        prepare_cutover_email_deletion(conn, root, email_id, image_dir=image_root)
         conn.commit()
 
     # Keep the row and manifest until files are gone. Failure leaves a retryable list entry.

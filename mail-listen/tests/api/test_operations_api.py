@@ -281,15 +281,54 @@ class OperationsApiTest(unittest.TestCase):
         self.db.mark_reply_sent(self.e1, '2026-10-28 11:00:00')
         self.assertEqual(self.get()['metrics']['reply_emails'], 2)
 
-    def test_partial_success_does_not_blank_other_completed_orders(self):
+    def test_any_success_counts_ticket_once_in_summary_details_and_export(self):
         self.add_mail(3, 'one@example.com', 'CT-1', ['F'])
         _, complete = self.add_mail(4, 'one@example.com', 'CT-COMPLETE', ['X'])
         self.report(complete, '2026-10-28T10:00:00+08:00')
         data = self.get()['metrics']
-        self.assertEqual(data['reported_orders'], 1)
+        self.assertEqual(data['reported_orders'], 2)
+        self.assertEqual(data['fully_reported_orders'], 1)
         self.assertEqual(data['reported_emails'], 3)
         self.assertEqual(data['reported_lines'], 6)
         self.assertEqual(data['partial_orders'], 1)
+        row = self.get('suppliers')['items'][0]
+        self.assertEqual(row['orders'], 2)
+        details = self.get('details', '&kind=orders')
+        self.assertEqual(details['total'], 2)
+        partial = next(item for item in details['items'] if item['ticket'] == 'CT-1')
+        self.assertEqual((partial['done'], partial['tasks']), (2,3))
+        exported = self.client.get('/api/operations/export'+self.query, headers=self.admin).data.decode('utf-8-sig')
+        import csv
+        self.assertEqual(next(csv.DictReader(exported.splitlines()))['上报工单'], '2')
+
+    def test_later_successes_do_not_move_ticket_out_of_its_first_success_week(self):
+        _, first = self.add_mail(3, 'one@example.com', 'PREVIOUS', ['X'])
+        _, later = self.add_mail(4, 'one@example.com', 'PREVIOUS', ['Y'])
+        self.report(first, '2026-10-20T10:00:00+08:00')
+        self.report(later, '2026-10-28T10:00:00+08:00')
+        self.report(first, '2026-10-29T10:00:00+08:00')
+        self.assertEqual(self.get()['metrics']['reported_orders'], 1)
+        self.assertEqual([r['ticket'] for r in self.get('details')['items']], ['CT-1'])
+        previous = self.client.get('/api/operations/details?start=2026-10-19&end=2026-10-25&environment=production', headers=self.admin).get_json()['data']
+        self.assertEqual(previous['total'], 1)
+        self.assertEqual(previous['items'][0]['ticket'], 'PREVIOUS')
+        self.assertEqual(previous['items'][0]['completed'], '2026-10-20')
+
+    def test_failed_and_unreported_tickets_are_not_reported_orders(self):
+        _, failed = self.add_mail(3, 'one@example.com', 'FAILED', ['X'])
+        self.db.add_cutover_report(failed, 'customer', 'failed', {'updated_at':'2026-10-28T10:00:00+08:00'})
+        self.add_mail(4, 'one@example.com', 'UNREPORTED', ['Y'])
+        self.assertEqual(self.get()['metrics']['reported_orders'], 1)
+        self.assertEqual([r['ticket'] for r in self.get('details')['items']], ['CT-1'])
+
+    def test_success_in_view_only_mailbox_does_not_count_for_operating_user(self):
+        with self.db.get_connection() as c:
+            c.execute("UPDATE cutover_reports SET status='failed' WHERE task_id=?", (self.t1,))
+            c.commit()
+        self.assertEqual(self.get()['metrics']['reported_orders'], 1)
+        self.login()
+        self.assertEqual(self.get(admin=False)['metrics']['reported_orders'], 0)
+        self.assertEqual(self.get('details', '&kind=orders', admin=False)['total'], 0)
 
     def test_input_validation(self):
         for extra in ['&page=0', '&page_size=10000', '&sort=drop', '&start=bad', '&environment=secret']:

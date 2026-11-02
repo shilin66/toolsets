@@ -228,16 +228,15 @@ const AdminApp = defineComponent({
     <div v-if="appStore.authLoading" class="login-screen">正在恢复登录…</div>
     <component v-else-if="!loggedIn" :is="loginComponent"></component>
     <ui-container v-else class="app-shell">
-      <ui-aside :width="appStore.menuCollapsed ? '64px' : '224px'" class="sidebar"
+      <ui-aside :width="appStore.menuCollapsed ? '64px' : '88px'" class="sidebar"
                 :class="{ 'is-collapsed': appStore.menuCollapsed }">
-        <div class="brand-block">
+        <div class="brand-block" :title="$t('common.brandName') + ' · ' + $t('common.brandTagline')">
           <div class="brand-mark">NOC</div>
-          <div v-show="!appStore.menuCollapsed">
+          <div class="brand-copy" v-show="!appStore.menuCollapsed">
             <strong class="brand-name">{{ $t('common.brandName') }}</strong>
             <p>{{ $t('common.brandTagline') }}</p>
           </div>
         </div>
-        <p v-show="!appStore.menuCollapsed" class="sidebar-section-label">{{ $t('common.workspace') }}</p>
         <ui-menu :default-active="activeMenu" class="side-menu" @select="navigateTo"
                  :collapse="appStore.menuCollapsed" :collapse-transition="false">
           <ui-menu-item index="suppliers" :title="appStore.menuCollapsed ? $t('nav.suppliers') : null">
@@ -265,25 +264,32 @@ const AdminApp = defineComponent({
             <span>{{ $t('nav.dispatchSession') }}</span>
           </ui-menu-item>
           <ui-menu-item v-if="appStore.user.is_admin" index="users" title="用户与邮箱授权">
-            <ui-icon><User /></ui-icon><span>用户与邮箱授权</span>
+            <ui-icon><User /></ui-icon><span aria-label="用户与邮箱授权">用户权限</span>
           </ui-menu-item>
           <ui-menu-item index="settings" :title="appStore.menuCollapsed ? $t('nav.settings') : null">
             <ui-icon><Setting /></ui-icon>
             <span>{{ $t('nav.settings') }}</span>
           </ui-menu-item>
         </ui-menu>
-        <ui-button class="sidebar-toggle" text
-                   :aria-label="appStore.menuCollapsed ? $t('common.expandMenu') : $t('common.collapseMenu')"
-                   :title="appStore.menuCollapsed ? $t('common.expandMenu') : $t('common.collapseMenu')"
-                   @click="toggleMenu">
-          <ui-icon aria-hidden="true"><Expand v-if="appStore.menuCollapsed" /><Fold v-else /></ui-icon>
-          <span v-show="!appStore.menuCollapsed">{{ $t('common.collapseMenu') }}</span>
-        </ui-button>
+        <div class="sidebar-account" :title="appStore.user.display_name + ' · ' + appStore.user.username">
+          <span class="sidebar-account-avatar" aria-hidden="true"><ui-icon><User /></ui-icon></span>
+          <div v-show="!appStore.menuCollapsed" class="sidebar-account-copy workbench-identity">
+            <span class="sidebar-account-name">{{ appStore.user.display_name }}</span>
+            <small>{{ appStore.user.is_admin ? '管理员' : '普通用户' }}</small>
+          </div>
+        </div>
       </ui-aside>
 
       <ui-container>
         <ui-header class="topbar" height="56px">
           <nav class="topbar-breadcrumb" :aria-label="$t('common.pageLocation')">
+            <ui-button class="sidebar-toggle" text
+                       :aria-expanded="!appStore.menuCollapsed"
+                       :aria-label="appStore.menuCollapsed ? $t('common.expandMenu') : $t('common.collapseMenu')"
+                       :title="appStore.menuCollapsed ? $t('common.expandMenu') : $t('common.collapseMenu')"
+                       @click="toggleMenu">
+              <ui-icon aria-hidden="true"><Expand v-if="appStore.menuCollapsed" /><Fold v-else /></ui-icon>
+            </ui-button>
             <span>{{ $t('common.brandName') }}</span>
             <ui-icon aria-hidden="true"><ArrowRight /></ui-icon>
             <template v-if="isDetail">
@@ -293,7 +299,6 @@ const AdminApp = defineComponent({
             <h1 class="topbar-title" aria-current="page">{{ viewTitle }}</h1>
           </nav>
           <div class="topbar-user">
-            <span class="workbench-identity" :title="appStore.user.display_name + ' · ' + appStore.user.username">{{ appStore.user.display_name }} · {{ appStore.user.is_admin ? '管理员' : '普通用户' }}</span>
             <div v-if="!appStore.user.is_admin" class="rpa-environment-badge" :class="portalEnvironmentTone"
                  role="status" :aria-label="$t('common.rpaEnvironmentLabel', { environment: portalEnvironmentLabel })">
               <ui-icon aria-hidden="true">

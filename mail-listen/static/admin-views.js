@@ -431,7 +431,10 @@ const ViewSupplierForm = defineComponent({
     const sectionActiveNames = ref(['mailTypes', 'fixed', 'custom', 'topCustom', 'prompt']);
     const showAdvancedPrompt = ref(false);
     const mailTypes = ref([]); // [{ name, subject, content, contentInAttachment }]
-    const samplesRestricted = ref(false);
+    const configuredSamplesRestricted = ref(false);
+    const reviewSampleMode = ref('configured');
+    const samplesRestricted = computed(() => configuredSamplesRestricted.value
+      && (!isDraft.value || reviewSampleMode.value !== 'collected'));
     const samplesReadOnly = ref(false);
     const mailTypeOptions = ref([]);
     const mailTypeDialogVisible = ref(false);
@@ -445,6 +448,7 @@ const ViewSupplierForm = defineComponent({
     }).length);
     const lineFields = ref([]); // [{ name, description, keyword }]
     const topCustomFields = ref([]); // [{ name, description }] 顶层自定义字段（提取结果顶层输出，供特殊规则判断等）
+    const reviewMetadata = ref({questions:[], confirmations:{}});
     const legacyPrompt = ref("");
     const promptPreview = ref("");
     const extractPreview = ref("");
@@ -461,8 +465,8 @@ const ViewSupplierForm = defineComponent({
       return hasI18nKey(`draftReview.fields.${name}`) ? tt(`draftReview.fields.${name}`) : extractFieldLabel(name);
     }
     const review = useSupplierReview({form, isDraft, isEdit, draftRecord, draftReadOnly, mailTypes, fixedFields, lineFields,
-      topCustomFields, legacyPrompt, usesManualPrompt, extractFiles, extractPreview, extractPreviewView,
-      samplesRestricted, supplierFieldLabel});
+      topCustomFields, legacyPrompt, usesManualPrompt, extractFiles, extractPreview, extractPreviewView, reviewMetadata,
+      samplesRestricted, samplesReadOnly, reviewSampleMode, supplierFieldLabel});
     async function openSupplierSection(key) {
       if (key === 'basic') { supplierNameInput.value?.focus(); return; }
       review.showAdvanced.value = true;
@@ -535,7 +539,9 @@ const ViewSupplierForm = defineComponent({
     }
 
     async function fillFromSupplier(supplier) {
-      samplesRestricted.value = Boolean(supplier?.samples_restricted);
+      reviewMetadata.value = {questions:supplier?.review_metadata?.questions || draftRecord.value?.draft?.unresolved_questions || [],
+        confirmations:{...(supplier?.review_metadata?.confirmations || {})}};
+      configuredSamplesRestricted.value = Boolean(supplier?.samples_restricted);
       samplesReadOnly.value = Boolean(supplier?.samples_read_only);
       form.name = supplier ? supplier.name || "" : "";
       form.email = supplier ? supplier.email : "";
@@ -771,6 +777,7 @@ const ViewSupplierForm = defineComponent({
         extra_instructions: form.extra_instructions.trim(),
       };
       if (!samplesReadOnly.value) {
+        payload.review_metadata = review.reviewMetadataPayload();
         payload.email_type_samples = isDraft.value ? collectCurrentMailTypeSamples() : collectMailTypeSamples();
       }
       if (lineCustomFields.length || !legacy) {
@@ -876,7 +883,9 @@ const ViewSupplierForm = defineComponent({
         NocMessage.error(tt("supplierForm.previewNeedsSample"));
         return;
       }
+      if (!await review.closeCorrection()) return;
       const fingerprint = review.reviewFingerprint.value;
+      const ruleSnapshot = review.ruleSnapshot();
       const config = collectPromptConfig();
       const manual = usesManualPrompt.value ? legacyPrompt.value.trim() : '';
       const files = [...extractFiles.value];
@@ -898,6 +907,7 @@ const ViewSupplierForm = defineComponent({
         });
         extractPreview.value = typeof data.extract_result === 'string' ? data.extract_result : JSON.stringify(data.extract_result ?? '');
         review.resultFingerprint.value = fingerprint;
+        review.resultRuleSnapshot.value = ruleSnapshot;
         setStatusKey('supplierForm.extractPreviewReady');
       } catch (error) {
         review.reviewError.value = error.message;
@@ -908,6 +918,7 @@ const ViewSupplierForm = defineComponent({
     }
 
     async function saveSupplier() {
+      if (!await review.closeCorrection()) return;
       if (!isDraft.value && !form.name.trim()) {
         await openSupplierSection('basic');
         NocMessage.error(tt('supplierOperator.nameRequired'));
@@ -998,7 +1009,8 @@ const ViewSupplierForm = defineComponent({
     };
   },
   methods: {
-    goBack() {
+    async goBack() {
+      if (!await this.closeCorrection()) return;
       if (this.isDraft) { this.$emit('close'); return; }
       navigateTo("suppliers");
     },
@@ -1013,7 +1025,7 @@ const ViewSupplierForm = defineComponent({
       <header class="draft-editor-head">
         <div><p>{{ editorTitle }}</p><h2>{{ form.name.trim() || $t('draftReview.unnamed') }}</h2><span>{{ form.email }}</span></div>
         <div class="supplier-section-actions">
-          <ui-button v-if="reviewStage === 'review' && (!draftReadOnly || draftRecord?.draft)" size="small" :aria-expanded="showAdvanced" @click="showAdvanced=!showAdvanced">{{ $t(showAdvanced ? 'supplierReview.back' : 'supplierReview.advanced') }}</ui-button>
+          <ui-button v-if="reviewStage === 'review' && (!draftReadOnly || draftRecord?.draft)" size="small" :aria-expanded="showAdvanced" @click="toggleReviewAdvanced">{{ $t(showAdvanced ? 'supplierReview.back' : 'supplierReview.advanced') }}</ui-button>
           <ui-button size="small" @click="goBack">{{ $t(isDraft ? 'supplierReview.backToList' : 'common.cancel') }}</ui-button>
           <ui-button v-if="isDraft && draftRecord?.status === 'review'" size="small" :loading="saving" :disabled="loading || loadFailed" @click="saveSupplier">{{ $t('discovery.saveDraft') }}</ui-button>
           <ui-button v-if="isDraft && draftRecord?.status === 'review'" size="small" type="primary" :loading="saving" :disabled="loading || loadFailed" @click="publishDraft">{{ $t('discovery.publish') }}</ui-button>
@@ -2456,16 +2468,21 @@ const TaskDetailPanel = defineComponent({
 
     async function reportTask() {
       if (formDirty.value) { NocMessage.warning(tt('cw.editsUnsaved')); return; }
-      if (appStore.user?.is_admin) return;
-      await refreshPortalStatus();
-      if (!appStore.portalStatus?.authenticated) {
-        NocMessage.warning('请先确认当前环境的个人综调账号已登录');
-        navigateTo('dispatchSession');
-        return;
-      }
+      if (reportDisabled.value) return;
+      activeReport.value = { status: 'pending', result: { note: tt('cutover.task.reportPreparing') } };
+      reportProgressError.value = "";
+      reportProgressVisible.value = true;
       let sessionError = null;
       const payload = await runAction(async () => {
         try {
+          await refreshPortalStatus();
+          if (!appStore.portalStatus?.authenticated) {
+            reportProgressVisible.value = false;
+            activeReport.value = null;
+            NocMessage.warning('请先确认当前环境的个人综调账号已登录');
+            navigateTo('dispatchSession');
+            return null;
+          }
           return await requestFull(`/api/cutover/tasks/${localTask.value.id}/report`, {
             method: "POST",
             body: JSON.stringify({
@@ -2476,8 +2493,12 @@ const TaskDetailPanel = defineComponent({
         } catch (error) {
           if (error.status === 409 && error.code === "RPA_SESSION_REQUIRED") {
             sessionError = error;
+            reportProgressVisible.value = false;
+            activeReport.value = null;
             return null;
           }
+          reportProgressError.value = error.message || tt('cutover.task.reportFailed');
+          activeReport.value = { status: 'failed', result: { note: reportProgressError.value } };
           throw error;
         }
       });
@@ -2627,10 +2648,10 @@ const TaskDetailPanel = defineComponent({
         <div v-if="activeReport" class="report-progress-content">
           <section class="report-progress-summary">
             <div class="report-progress-status-row">
-              <ui-tag :type="reportStatusType(activeReport.status)" effect="dark">
+              <ui-tag v-if="activeReport.id || activeReport.status === 'failed'" :type="reportStatusType(activeReport.status)" effect="dark">
                 {{ reportStatusText(activeReport.status) }}
               </ui-tag>
-              <span class="mono muted">#{{ activeReport.id }}</span>
+              <span v-if="activeReport.id" class="mono muted">#{{ activeReport.id }}</span>
             </div>
             <div class="report-progress-current">
               <ui-icon v-if="activeReportInProgress" class="is-loading"><component :is="icons.Loading"></component></ui-icon>
@@ -2649,15 +2670,15 @@ const TaskDetailPanel = defineComponent({
           <ui-alert v-if="reportProgressError" type="warning" :closable="false" show-icon
                     :title="reportProgressError"></ui-alert>
 
-          <div v-if="!activeReportSteps.length" class="report-progress-empty">
+          <div v-if="activeReport.id && !activeReportSteps.length && activeReportInProgress" class="report-progress-empty">
             <ui-icon class="is-loading"><component :is="icons.Loading"></component></ui-icon>
             <span>{{ $t('cutover.task.reportWaitingForStep') }}</span>
           </div>
-          <report-screenshot-gallery v-else :report-id="activeReport.id" :steps="activeReportSteps"
+          <report-screenshot-gallery v-else-if="activeReportSteps.length" :report-id="activeReport.id" :steps="activeReportSteps"
                                      :image-urls="reportImageUrls" :loading-keys="reportImageLoadingKeys"/>
 
 
-          <p class="report-progress-hint">{{ $t('cutover.task.reportProgressHint') }}</p>
+          <p v-if="activeReport.id" class="report-progress-hint">{{ $t('cutover.task.reportProgressHint') }}</p>
         </div>
       </ui-drawer>
 

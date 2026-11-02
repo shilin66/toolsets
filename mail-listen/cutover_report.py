@@ -6,7 +6,6 @@ from loguru import logger
 from pydantic import ValidationError
 
 from cutover_task import validate_task_for_submission
-from email_attachments import attachment_path_from_relative
 from mail_artifacts import (
     MailArtifactError,
     customer_excel_path,
@@ -95,7 +94,6 @@ def report_cutover_task(
         else:
             forms = _resolve_backbone_forms(task)
             attachments = (
-                *_resolve_email_attachments(task, data_dir=data_dir),
                 _resolve_source_email_attachment(task, data_dir=data_dir),
             )
             results = []
@@ -299,32 +297,6 @@ def _resolve_backbone_forms(
     if not all(isinstance(form, Mapping) and form for form in forms):
         raise CutoverReportError("骨干线路任务的表单数据格式无效")
     return forms
-
-
-def _resolve_email_attachments(
-    task: Mapping[str, object],
-    *,
-    data_dir: Path | None,
-) -> tuple[Path, ...]:
-    values = task.get("email_attachments") or []
-    if not isinstance(values, list) or not all(
-        isinstance(value, str) and value for value in values
-    ):
-        raise CutoverReportError("邮件附件列表格式无效")
-    root = (
-        data_dir
-        if data_dir is not None
-        else Path(__file__).resolve().parent / "data"
-    ).resolve()
-    resolved = []
-    for value in values:
-        candidate = attachment_path_from_relative(value, data_dir=root)
-        if candidate is None:
-            raise CutoverReportError(f"邮件附件路径无效：{value}")
-        if not candidate.is_file():
-            raise CutoverReportError(f"邮件附件不存在：{Path(value).name}")
-        resolved.append(candidate)
-    return tuple(resolved)
 
 
 def _resolve_source_email_attachment(
