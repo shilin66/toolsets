@@ -19,7 +19,7 @@ class ReportGalleryUiTest(unittest.TestCase):
         self.open_task(backbone=True)
         root = Path(self.api.tmpdir.name) / 'report-images'
         root.mkdir()
-        for name, size in (('wide.png', (2400, 1400)), ('tall.png', (1200, 3200))):
+        for name, size in (('wide.webp', (2400, 1400)), ('tall.png', (1200, 3200))):
             image = Image.new('RGB', size, '#f5f7f4')
             draw = ImageDraw.Draw(image)
             draw.rectangle((0, 0, size[0] - 1, size[1] - 1), outline='#3f7b65', width=16)
@@ -29,12 +29,12 @@ class ReportGalleryUiTest(unittest.TestCase):
                 draw.rectangle((80, y, size[0] - 80, y + 100), fill='white', outline='#ced8d3', width=3)
                 draw.text((110, y + 32), f'Form field / step {y // 160}', fill='#263638', font_size=28)
             draw.text((80, size[1] - 80), 'END OF SCREENSHOT', fill='#3f7b65', font_size=28)
-            image.save(root / name)
+            image.save(root / name, **({'lossless': True} if name.endswith('.webp') else {}))
         settings = patch.object(defaults.fixture.api_server, 'PortalSessionSettings', return_value=SimpleNamespace(artifact_dir=root, default_environment='test'))
         settings.start()
         self.addCleanup(settings.stop)
         steps = [{'step': f'step-{i}', 'label': label, 'captured_at': f'2026-10-26T09:00:{i:02d}',
-                  'screenshot_filename': 'tall.png' if i % 2 else 'wide.png'}
+                  'screenshot_filename': 'tall.png' if i % 2 else 'wide.webp'}
                  for i, label in enumerate(('打开填报页面', '填写基本信息与割接对象，核对线路及操作时间', '填写人员信息', '核对确认项', '提交前检查', '上报完成'))]
         steps.append({'step': 'no-image', 'label': '仅记录日志的步骤', 'captured_at': '2026-10-26T09:00:07'})
         self.report_id = self.api.db.add_cutover_report(self.task_id, 'backbone', status, {'operation_log': steps})

@@ -5,7 +5,10 @@ import signal
 import shutil
 import subprocess
 import sys
+from contextlib import ExitStack
 from pathlib import Path
+
+from loguru import logger
 
 from user_access import UserAccessRepository
 from .isolation import session_lock
@@ -32,7 +35,7 @@ def report_result_with_username(conn, result):
 def claim_report(db, principal, service, task_id, environment, data_dir, expected_version=None):
     if principal.is_admin:
         raise PortalSessionError('ADMIN_RPA_FORBIDDEN', '综调上报仅限普通用户账号使用')
-    with session_lock(service.lock_path):
+    with session_lock(service.binding_lock_path, blocking=True):
         binding = service.report_binding(environment)
         if expected_version is not None and binding['version'] != expected_version:
             raise PortalSessionError('SESSION_CHANGED', '综调登录账号已变更，请刷新并确认后重新提交')
@@ -46,7 +49,7 @@ def claim_report(db, principal, service, task_id, environment, data_dir, expecte
                 raise PortalSessionError('ACCESS_DENIED', '任务不存在或邮箱操作授权已撤销')
             if task['status'] not in ('confirmed', 'report_failed'):
                 raise PortalSessionError('TASK_BUSY', '任务状态已变更或已经提交，请刷新后重试')
-            # Login binding cannot change while the principal activity lock is held.
+            # Login binding cannot change while the principal binding lock is held.
             public = {'principal_key': principal.key, 'workbench_username': principal.username,
                       'username': binding['username'],
                       'environment': str(environment), 'session_version': binding['version']}
@@ -104,18 +107,21 @@ def finish_job(db, report_id, status):
         conn.commit()
 
 
-def _finish_process_failure(db, report_id, *, outcome_unknown):
+def _finish_process_failure(db, report_id, *, outcome_unknown, pending_only=False):
     """Do not overwrite a manual resolution or a newer attempt during cleanup."""
     with db.get_connection() as conn:
         conn.execute('BEGIN IMMEDIATE')
         row = conn.execute('''SELECT r.*, j.status AS job_status FROM cutover_reports r
             JOIN rpa_report_jobs j ON j.report_id=r.id WHERE r.id=?''', (report_id,)).fetchone()
         if not row or row['job_status'] not in ('pending', 'running') or row['status'] not in ('pending', 'running'):
-            return
+            return False
+        if pending_only and (row['job_status'] != 'pending' or row['status'] != 'pending'):
+            return False
         status = 'interrupted' if outcome_unknown else 'failed'
         note = ('执行进程中断，提交结果未知。请核对综调系统后处理，禁止直接重试。'
                 if outcome_unknown else '执行进程未能启动，请检查服务日志后重试')
-        result = {**(json.loads(row['result']) if row['result'] else {}), 'phase': status, 'note': note}
+        result = {**(json.loads(row['result']) if row['result'] else {}), 'phase': status, 'note': note,
+                  'current_step': status, 'current_step_label': '结果待核对' if outcome_unknown else note}
         conn.execute('UPDATE cutover_reports SET status=?,result=? WHERE id=?',
                      (status, json.dumps(result, ensure_ascii=False), report_id))
         conn.execute('UPDATE rpa_report_jobs SET status=? WHERE report_id=?', (status, report_id))
@@ -124,6 +130,42 @@ def _finish_process_failure(db, report_id, *, outcome_unknown):
                 AND NOT EXISTS (SELECT 1 FROM cutover_reports WHERE task_id=? AND id>?)""",
                 (row['task_id'], row['task_id'], report_id))
         conn.commit()
+        return True
+
+
+def run_report_queue(db, data_dir, report_id):
+    """One runner per user drains durable jobs in submission order on this host."""
+    from .report_queue import login_required
+    job = get_job(db, report_id)
+    if not job:
+        return
+    root = Path(data_dir) / 'rpa' / 'users' / job['principal_key']
+    with ExitStack() as queue_lock:
+        with session_lock(root / 'binding.lock', blocking=True):
+            try:
+                queue_lock.enter_context(session_lock(root / 'report-queue.lock'))
+            except PortalSessionError as error:
+                if error.code != 'RPA_BUSY':
+                    raise
+                # The current runner will pick up this user's newly committed jobs.
+                return
+        while True:
+            with session_lock(root / 'binding.lock', blocking=True):
+                with db.get_connection() as conn:
+                    pending = None if login_required(conn, job['principal_key']) else conn.execute('''SELECT report_id FROM rpa_report_jobs
+                        WHERE principal_key=? AND status='pending' ORDER BY report_id LIMIT 1''',
+                        (job['principal_key'],)).fetchone()
+                if not pending:
+                    # Release before allowing a new claim/wakeup, so no job is stranded
+                    # between our final empty check and releasing the runner lock.
+                    queue_lock.close()
+                    return
+            next_id = pending['report_id']
+            try:
+                run_report_process(db, data_dir, next_id)
+            except Exception:
+                logger.exception('上报执行进程异常: report_id={}', next_id)
+                _finish_process_failure(db, next_id, outcome_unknown=True)
 
 
 def run_report_process(db, data_dir, report_id):
@@ -148,7 +190,8 @@ def run_report_process(db, data_dir, report_id):
             process.wait()
         code = -1
     report = db.get_cutover_report(report_id)
-    if report and (code != 0 or report['status'] in ('pending', 'running')):
+    if report and (code != 0 or report['status'] == 'running'):
         # Unknown remote outcome must not be automatically retried.
+        # A clean worker can leave a pending job after pause/resume or reauthentication.
         _finish_process_failure(db, report_id, outcome_unknown=True)
 

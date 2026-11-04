@@ -950,6 +950,33 @@ class CutoverTaskApiTest(unittest.TestCase):
                 self.assertEqual(self.db.get_cutover_task(task_id)["status"], status)
                 self.assertEqual(self.db.get_cutover_reports(task_id), [])
 
+    def test_queue_wakeup_failure_cannot_overwrite_a_report_already_picked_up(self):
+        task_id = self.first_task_id(self.post_fill(self.fill_payload()))
+        self.db.update_cutover_task(task_id, status='confirmed')
+
+        def picked_up_before_failed_wakeup(job):
+            # An existing user queue can finish this claim before its redundant wakeup.
+            job()
+            raise RuntimeError('executor is shutting down')
+
+        with patch.object(api_server, 'report_cutover_task', return_value={'status': 'success'}), \
+                patch.object(api_server, 'submit_cutover_report_job', side_effect=picked_up_before_failed_wakeup):
+            response = self.report_client.post(f'/api/cutover/tasks/{task_id}/report',
+                headers=self.report_headers, json={})
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(self.db.get_cutover_task(task_id)['status'], 'reported')
+        self.assertEqual(self.db.get_cutover_reports(task_id)[0]['status'], 'success')
+
+    def test_queue_wakeup_failure_marks_an_unstarted_report_failed(self):
+        task_id = self.first_task_id(self.post_fill(self.fill_payload()))
+        self.db.update_cutover_task(task_id, status='confirmed')
+        with patch.object(api_server, 'submit_cutover_report_job', side_effect=RuntimeError('closed')):
+            response = self.report_client.post(f'/api/cutover/tasks/{task_id}/report',
+                headers=self.report_headers, json={})
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(self.db.get_cutover_task(task_id)['status'], 'report_failed')
+        self.assertEqual(self.db.get_cutover_reports(task_id)[0]['status'], 'failed')
+
     def test_confirm_and_report_flow(self):
         task_id = self.first_task_id(self.post_fill(self.fill_payload()))
 
@@ -994,7 +1021,7 @@ class CutoverTaskApiTest(unittest.TestCase):
 
         self.assertEqual(report.status_code, 202)
         report_payload = report.get_json()
-        self.assertEqual(report_payload["message"], "上报任务已启动")
+        self.assertEqual(report_payload["message"], "已加入上报队列，将按顺序自动执行")
         self.assertEqual(report_payload["data"]["report_status"], "pending")
         report_cutover.assert_called_once()
         called_task = report_cutover.call_args.args[0]
@@ -1192,11 +1219,11 @@ class CutoverTaskApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertEqual(
             self.db.get_cutover_task(task_id)["status"],
-            "report_failed",
+            "reporting",
         )
         reports = self.db.get_cutover_reports(task_id)
         self.assertEqual(len(reports), 1)
-        self.assertEqual(reports[0]["status"], "failed")
+        self.assertEqual(reports[0]["status"], "waiting_login")
         self.assertEqual(
             reports[0]["result"]["error_code"],
             "RPA_SESSION_REQUIRED",
@@ -1278,7 +1305,7 @@ class CutoverTaskApiTest(unittest.TestCase):
             "unknown.png",
         )
 
-    def test_report_artifact_requires_auth_and_serves_only_png(self):
+    def test_report_artifact_requires_auth_and_serves_png_and_webp(self):
         artifact_root = Path(self.tmpdir.name) / "artifacts"
         artifact_root.mkdir()
         screenshot = artifact_root / "step.png"
@@ -1305,6 +1332,9 @@ class CutoverTaskApiTest(unittest.TestCase):
         )
         canonical_screenshot.parent.mkdir(parents=True)
         canonical_screenshot.write_bytes(b"\x89PNG\r\n\x1a\n")
+        from PIL import Image
+        webp_screenshot = canonical_screenshot.with_suffix('.webp')
+        Image.new('RGB', (1280, 900), 'white').save(webp_screenshot, lossless=True)
         settings = SimpleNamespace(artifact_dir=artifact_root)
 
         with patch.object(
@@ -1330,6 +1360,9 @@ class CutoverTaskApiTest(unittest.TestCase):
                 + canonical_screenshot.relative_to(data_dir).as_posix(),
                 headers=self.headers,
             )
+            webp_url = '/api/rpa/report-artifacts/' + webp_screenshot.relative_to(data_dir).as_posix()
+            unauthorized_webp = self.client.get(webp_url)
+            webp = self.client.get(webp_url, headers=self.headers)
             with api_server.app.test_request_context():
                 _, traversal_status = (
                     getattr(
@@ -1344,10 +1377,15 @@ class CutoverTaskApiTest(unittest.TestCase):
         self.assertEqual(invalid.status_code, 400)
         self.assertEqual(nested.status_code, 200)
         self.assertEqual(canonical.status_code, 200)
+        self.assertEqual(unauthorized_webp.status_code, 401)
+        self.assertEqual(webp.status_code, 200)
+        self.assertEqual(webp.mimetype, 'image/webp')
+        self.assertEqual(webp.data, webp_screenshot.read_bytes())
         self.assertEqual(traversal_status, 400)
         response.close()
         nested.close()
         canonical.close()
+        webp.close()
 
     def test_backbone_task_uses_form_report_with_email_attachments(self):
         tasks = self.fill_tasks(self.post_fill_mixed(self.mixed_fill_payload()))

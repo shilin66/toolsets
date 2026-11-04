@@ -16,7 +16,7 @@ from functools import wraps
 from copy import copy, deepcopy
 from io import BytesIO
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread, Event
 from typing import Final
 import atexit
 
@@ -240,6 +240,7 @@ def require_api_key(f):
                 email_db, record_id,
                 deleting=request.method == 'DELETE' and request.path.startswith('/api/cutover/emails/'),
                 forwarding=request.path.endswith('/forward-attempts'),
+                reporting=request.endpoint == 'report_cutover_task_route',
             ):
                 return f(*args, **kwargs)
         except MailOperationConflict as error:
@@ -336,6 +337,7 @@ def _portal_session_error_response(error):
         'ACCESS_DENIED': 403,
         'LOGIN_REQUIRED': 409,
         'SESSION_CHANGED': 409,
+        'QUEUE_IDENTITY_MISMATCH': 409,
     }.get(error.code, 400)
     return jsonify({
         'success': False,
@@ -3586,6 +3588,7 @@ def resolve_interrupted_report(report_id):
                     return jsonify(success=False, message='仅未结束或中断的任务可以核对处理'), 409
                 resolution = body['resolution']
                 result = {**(json.loads(report['result']) if report['result'] else {}), 'phase': resolution,
+                    'current_step': resolution, 'current_step_label': '人工核对：' + body['note'].strip(),
                     'note': '人工核对：' + body['note'].strip(), 'resolved_by': g.principal.username,
                     'resolved_at': datetime.now().astimezone().isoformat(), 'execution_identity': identity(job)}
                 conn.execute('UPDATE cutover_reports SET status=?, result=? WHERE id=?',
@@ -3599,13 +3602,35 @@ def resolve_interrupted_report(report_id):
         return _portal_session_error_response(error)
 
 
+def _change_report_queue_pause(report_id, paused):
+    from rpa.report_queue import change_report_pause
+    try:
+        report = change_report_pause(email_db, DATA_DIR, g.principal, report_id, paused)
+        if report['status'] == 'pending':
+            wake_cutover_report_queue(report_id)
+        return jsonify(success=True, data=report,
+                       message='任务已暂停' if paused else '任务已恢复，等待自动上报')
+    except PortalSessionError as error:
+        return _portal_session_error_response(error)
+
+
+@app.post('/api/cutover/reports/<int:report_id>/pause')
+def pause_cutover_report(report_id):
+    return _change_report_queue_pause(report_id, True)
+
+
+@app.post('/api/cutover/reports/<int:report_id>/resume')
+def resume_cutover_report(report_id):
+    return _change_report_queue_pause(report_id, False)
+
+
 @app.route('/api/rpa/report-artifacts/<path:filename>', methods=['GET'])
 @require_api_key
 def get_rpa_report_artifact(filename):
     relative_path = Path(filename)
     if (
         relative_path.is_absolute()
-        or relative_path.suffix.lower() != '.png'
+        or relative_path.suffix.lower() not in {'.png', '.webp'}
         or '..' in relative_path.parts
     ):
         return jsonify({
@@ -3635,7 +3660,8 @@ def get_rpa_report_artifact(filename):
             'success': False,
             'message': '操作截图不存在',
         }), 404
-    return send_file(artifact_path, mimetype='image/png', as_attachment=False)
+    mimetype = 'image/webp' if artifact_path.suffix.lower() == '.webp' else 'image/png'
+    return send_file(artifact_path, mimetype=mimetype, as_attachment=False)
 
 
 @app.route('/api/rpa/session/attempts', methods=['POST'])
@@ -3691,6 +3717,8 @@ def login_rpa_session_with_password(attempt_id):
             payload.password,
             payload.captcha,
         )
+        if status.authenticated:
+            wake_pending_reports(g.principal.key)
         return jsonify({
             'success': True,
             'data': _session_status_data(status),
@@ -3744,6 +3772,8 @@ def verify_rpa_session_sms(attempt_id):
             attempt_id,
             payload.sms_code,
         )
+        if status.authenticated:
+            wake_pending_reports(g.principal.key)
         return jsonify({
             'success': True,
             'data': _session_status_data(status),
@@ -3781,6 +3811,39 @@ def submit_cutover_report_job(job: Callable[[], None]) -> None:
         raise
 
 
+def wake_cutover_report_queue(report_id):
+    from rpa.report_jobs import run_report_queue
+    db, data_dir = email_db, DATA_DIR
+    submit_cutover_report_job(lambda: run_report_queue(db, data_dir, report_id))
+
+
+def wake_pending_reports(principal_key):
+    from rpa.report_queue import login_required
+    with email_db.get_connection() as conn:
+        pending = None if login_required(conn, principal_key) else conn.execute(
+            "SELECT report_id FROM rpa_report_jobs WHERE principal_key=? AND status='pending' ORDER BY report_id LIMIT 1",
+            (principal_key,)).fetchone()
+    if pending:
+        wake_cutover_report_queue(pending['report_id'])
+
+
+def recover_cutover_report_jobs():
+    from rpa.report_queue import recover_report_jobs
+    from rpa.report_jobs import run_report_queue
+    db, data_dir = email_db, DATA_DIR
+    def schedule(report_id):
+        submit_cutover_report_job(lambda: run_report_queue(db, data_dir, report_id))
+    deferred = recover_report_jobs(db, data_dir, schedule)
+    if deferred:
+        def wait_for_orphan_workers():
+            pending = deferred
+            delay = Event()
+            while pending:
+                delay.wait(1)
+                pending = recover_report_jobs(db, data_dir, schedule, principals=pending)
+        Thread(target=wait_for_orphan_workers, name='report-recovery', daemon=True).start()
+
+
 def _persist_cutover_report_progress(
     report_id: int,
     progress: Mapping[str, object],
@@ -3800,6 +3863,10 @@ def _finish_cutover_report_failure(
     report_id: int,
     result: Mapping[str, object],
 ) -> None:
+    from rpa.report_queue import LOGIN_ERRORS, pause_for_login
+    if result.get('error_code') in LOGIN_ERRORS:
+        if pause_for_login(email_db, report_id, result['error_code'], str(result.get('error') or result.get('note') or '登录失效')):
+            return
     failure_result = dict(result)
     failure_result['phase'] = 'failed'
     failure_result['updated_at'] = datetime.now().astimezone().isoformat()
@@ -3983,28 +4050,25 @@ def report_cutover_task_route(task_id):
         except ValueError as error:
             return jsonify({'success': False, 'message': str(error)}), 400
 
-        from rpa.report_jobs import claim_report, run_report_process, finish_job
+        from rpa.report_jobs import claim_report, run_report_queue, _finish_process_failure
         try:
             report_id, queued_result = claim_report(email_db, g.principal,
                 get_portal_session_service(), task_id, environment, DATA_DIR, data.get('session_version'))
         except PortalSessionError as error:
             return _portal_session_error_response(error)
         try:
-            submit_cutover_report_job(lambda: run_report_process(email_db, DATA_DIR, report_id))
-        except RuntimeError as error:
-            finish_job(email_db, report_id, 'failed')
-            _finish_cutover_report_failure(task_id, report_id, {
-                'error': f'上报任务启动失败：{error}',
-                'note': '上报任务启动失败',
-            })
-            return jsonify({
-                'success': False,
-                'message': '上报任务启动失败',
-            }), 500
+            submit_cutover_report_job(lambda: run_report_queue(email_db, DATA_DIR, report_id))
+        except RuntimeError:
+            # An existing queue may already have picked up this claim before this wakeup.
+            if _finish_process_failure(email_db, report_id, outcome_unknown=False, pending_only=True):
+                return jsonify({
+                    'success': False,
+                    'message': '上报任务启动失败',
+                }), 500
 
         return jsonify({
             'success': True,
-            'message': '上报任务已启动',
+            'message': '已加入上报队列，将按顺序自动执行',
             'data': {
                 'report_id': report_id,
                 'report_status': 'pending',
@@ -4507,4 +4571,5 @@ if __name__ == '__main__':
     logger.info("API Key 使用方式:")
     logger.info("  Header: Authorization: Bearer <your-api-key>")
 
+    recover_cutover_report_jobs()
     app.run(host='0.0.0.0', port=settings.api_port, debug=True)

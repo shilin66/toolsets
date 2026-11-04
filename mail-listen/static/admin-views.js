@@ -2380,6 +2380,9 @@ const TaskDetailPanel = defineComponent({
         running: "warning",
         success: "success",
         failed: "danger",
+        paused: "info",
+        waiting_login: "warning",
+        interrupted: "warning",
       }[status] || "info";
     }
 
@@ -2395,6 +2398,23 @@ const TaskDetailPanel = defineComponent({
     const activeReportInProgress = computed(() => (
       activeReport.value && ["pending", "running"].includes(activeReport.value.status)
     ));
+
+    function canControlReport(report) {
+      return canOperate.value && (appStore.user?.is_admin ||
+        report?.result?.execution_identity?.principal_key === `user-${appStore.user?.id}`);
+    }
+
+    async function changeReportPause(report, paused) {
+      await runAction(async () => {
+        const payload = await requestFull(`/api/cutover/reports/${report.id}/${paused ? 'pause' : 'resume'}`, {method: 'POST'});
+        activeReport.value = payload.data;
+        upsertReport(payload.data);
+        NocMessage.success(payload.message);
+        startReportPolling(report.id, true);
+      });
+    }
+
+    function openReportLogin() { navigateTo('dispatchSession'); }
 
     function scheduleReportPoll(reportId, delay = 1200) {
       if (reportPollTimer) {
@@ -2435,12 +2455,18 @@ const TaskDetailPanel = defineComponent({
       }
       try {
         const report = await requestJson(`/api/cutover/reports/${reportId}`);
+        const previousStatus = activeReport.value?.status;
         reportProgressError.value = "";
         activeReport.value = report;
         upsertReport(report);
         loadReportStepImages(report);
         if (["pending", "running"].includes(report.status)) {
           scheduleReportPoll(reportId);
+          return;
+        }
+        if (['paused', 'waiting_login', 'interrupted'].includes(report.status)) {
+          if (previousStatus !== report.status) await refreshPortalStatus();
+          scheduleReportPoll(reportId, 2500);
           return;
         }
         await finishReportProgress(report);
@@ -2456,7 +2482,7 @@ const TaskDetailPanel = defineComponent({
 
     function resumeReportProgress(task) {
       const active = (task.reports || []).find((report) => (
-        ["pending", "running"].includes(report.status)
+        ["pending", "running", "paused", "waiting_login", "interrupted"].includes(report.status)
       ));
       if (!active) {
         return;
@@ -2476,7 +2502,8 @@ const TaskDetailPanel = defineComponent({
       const payload = await runAction(async () => {
         try {
           await refreshPortalStatus();
-          if (!appStore.portalStatus?.authenticated) {
+          const canQueue = appStore.portalStatus?.reporting && appStore.portalStatus?.session_version;
+          if (!appStore.portalStatus?.authenticated && !canQueue) {
             reportProgressVisible.value = false;
             activeReport.value = null;
             NocMessage.warning('请先确认当前环境的个人综调账号已登录');
@@ -2618,6 +2645,7 @@ const TaskDetailPanel = defineComponent({
       isBackboneSystemField, isBackboneConfirmationField, backboneEnumOptions,
       handleBackboneEnumChange,
       saveEdit, switchType, confirmTask, reportTask, downloadExcel, resolveReport,
+      canControlReport, changeReportPause, openReportLogin,
       saveDisabled, confirmDisabled, reportDisabled, excelDisabled,
       reportImageUrls, reportImageLoadingKeys, reportProgressVisible, activeReport, activeReportSteps,
       activeReportInProgress, reportProgressError, reportStatusType, reportStatusText,
@@ -2656,6 +2684,7 @@ const TaskDetailPanel = defineComponent({
             <div class="report-progress-current">
               <ui-icon v-if="activeReportInProgress" class="is-loading"><component :is="icons.Loading"></component></ui-icon>
               <ui-icon v-else-if="activeReport.status === 'success'" class="report-progress-success"><component :is="icons.CircleCheck"></component></ui-icon>
+              <ui-icon v-else-if="['paused','waiting_login','interrupted'].includes(activeReport.status)"><component :is="icons.WarningFilled"></component></ui-icon>
               <ui-icon v-else class="report-progress-danger"><component :is="icons.CircleClose"></component></ui-icon>
               <div>
                 <span>{{ $t('cutover.task.reportCurrentStep') }}</span>
@@ -2667,12 +2696,21 @@ const TaskDetailPanel = defineComponent({
             <p>{{ $t('cutover.task.reportStepCount', { count: activeReportSteps.length }) }}</p>
           </section>
 
+          <div v-if="canControlReport(activeReport)" class="panel-actions">
+            <ui-button v-if="['pending','waiting_login'].includes(activeReport.status)" :loading="busy"
+                       @click="changeReportPause(activeReport, true)">{{ $t('cutover.task.pauseReport') }}</ui-button>
+            <ui-button v-if="activeReport.status === 'paused'" type="primary" :loading="busy"
+                       @click="changeReportPause(activeReport, false)">{{ $t('cutover.task.resumeReport') }}</ui-button>
+            <ui-button v-if="activeReport.status === 'waiting_login' || activeReport.result?.error_code === 'RPA_SESSION_REQUIRED_AFTER_SUBMIT'"
+                       type="primary" @click="openReportLogin">{{ $t('cutover.task.loginForQueue') }}</ui-button>
+          </div>
+
           <ui-alert v-if="reportProgressError" type="warning" :closable="false" show-icon
                     :title="reportProgressError"></ui-alert>
 
           <div v-if="activeReport.id && !activeReportSteps.length && activeReportInProgress" class="report-progress-empty">
             <ui-icon class="is-loading"><component :is="icons.Loading"></component></ui-icon>
-            <span>{{ $t('cutover.task.reportWaitingForStep') }}</span>
+            <span>{{ $t(activeReport.status === 'pending' ? 'cutover.task.reportWaitingInQueue' : 'cutover.task.reportWaitingForStep') }}</span>
           </div>
           <report-screenshot-gallery v-else-if="activeReportSteps.length" :report-id="activeReport.id" :steps="activeReportSteps"
                                      :image-urls="reportImageUrls" :loading-keys="reportImageLoadingKeys"/>
@@ -2923,6 +2961,12 @@ const TaskDetailPanel = defineComponent({
                   <strong class="mono">{{ row.result.portal_task_number }}</strong>
                 </div>
                 <p v-if="row.result && row.result.error" class="report-error">{{ row.result.error }}</p>
+                <div v-if="canControlReport(row)" class="panel-actions">
+                  <ui-button v-if="['pending','waiting_login'].includes(row.status)" size="small" :loading="busy"
+                             @click="changeReportPause(row, true)">{{ $t('cutover.task.pauseReport') }}</ui-button>
+                  <ui-button v-if="row.status === 'paused'" size="small" :loading="busy"
+                             @click="changeReportPause(row, false)">{{ $t('cutover.task.resumeReport') }}</ui-button>
+                </div>
                 <div v-if="canOperate && ['pending', 'running', 'interrupted'].includes(row.status)">
                   <ui-button size="small" @click="resolveReport(row, 'success')">核对后标记成功</ui-button>
                   <ui-button size="small" @click="resolveReport(row, 'failed')">核对后标记失败</ui-button>

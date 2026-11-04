@@ -62,6 +62,7 @@ def report_cutover_task(
         raise CutoverReportError(f"割接任务文件标识无效：{error}") from error
     completed_operation_log: list[CutoverReportOperationStep] = []
     live_operation_log: list[CutoverReportOperationStep] = []
+    completed_submissions = 0
 
     def emit_operation_step(step: CutoverReportOperationStep) -> None:
         live_operation_log.append(step)
@@ -88,7 +89,7 @@ def report_cutover_task(
             result = rpa.upload_customer_excel(
                 excel_path,
                 environment=environment,
-                screenshot_path=artifact_dir / "report-success.png",
+                screenshot_path=artifact_dir / "report-success.webp",
             )
             outcome = _customer_report_outcome(result, storage_root)
         else:
@@ -99,9 +100,9 @@ def report_cutover_task(
             results = []
             for index, form in enumerate(forms, start=1):
                 filename = (
-                    "report-success.png"
+                    "report-success.webp"
                     if len(forms) == 1
-                    else f"report-{index:02d}-success.png"
+                    else f"report-{index:02d}-success.webp"
                 )
                 result = rpa.fill_backbone_form(
                     form,
@@ -110,9 +111,13 @@ def report_cutover_task(
                     screenshot_path=artifact_dir / filename,
                 )
                 results.append(result)
+                completed_submissions += 1
                 completed_operation_log.extend(result.operation_log)
             outcome = _backbone_report_outcome(results, storage_root)
-    except PortalSessionError:
+    except PortalSessionError as error:
+        if completed_submissions and error.code == 'RPA_SESSION_REQUIRED':
+            raise PortalSessionError('RPA_SESSION_REQUIRED_AFTER_SUBMIT',
+                '部分线路可能已提交，登录失效；请重新登录并核对本任务结果') from error
         raise
     except RpaManualInterventionError as error:
         raise CutoverReportManualInterventionError(

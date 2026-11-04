@@ -6,6 +6,7 @@ from pathlib import Path
 from user_access import UserAccessRepository
 from .isolation import session_lock
 from .report_jobs import finish_job, get_job
+from .report_queue import LOGIN_ERRORS, pause_for_login
 from .session_config import PortalSessionSettings
 from .session_models import PortalEnvironment, PortalSessionError
 
@@ -16,8 +17,14 @@ def execute(db, data_dir, report_id, execute_callback):
         raise ValueError('上报任务不存在')
     settings = PortalSessionSettings.model_validate_json(job['settings_json'])
     with session_lock(settings.session_lock_path, blocking=True):
+        job = get_job(db, report_id)
+        if not job:
+            return
+        settings = PortalSessionSettings.model_validate_json(job['settings_json'])
         with db.get_connection() as conn:
-            cursor = conn.execute("UPDATE rpa_report_jobs SET status='running' WHERE report_id=? AND status='pending'", (report_id,))
+            cursor = conn.execute("""UPDATE rpa_report_jobs SET status='running' WHERE report_id=? AND status='pending'
+                AND NOT EXISTS (SELECT 1 FROM rpa_report_queues q
+                    WHERE q.principal_key=rpa_report_jobs.principal_key AND q.login_required=1)""", (report_id,))
             conn.commit()
             if cursor.rowcount != 1:
                 return
@@ -34,14 +41,19 @@ def execute(db, data_dir, report_id, execute_callback):
                     (job['principal_key'], job['environment'])).fetchone()
             if not current or current['version'] != job['session_version']:
                 raise PortalSessionError('SESSION_CHANGED', '任务绑定的登录会话已失效，请重新登录')
+            if not Path(job['state_path']).is_file():
+                raise PortalSessionError('LOGIN_REQUIRED', '综调登录会话文件已失效，请重新登录')
             for key in ('fill_payload', 'fill_result'):
                 if isinstance(task.get(key), str):
                     task[key] = json.loads(task[key])
             execute_callback(task['id'], report_id, task['line_type'], PortalEnvironment(job['environment']),
                              task_snapshot=task, session_settings=settings)
         except PortalSessionError as error:
-            db.update_cutover_report(report_id, status='failed', result={'phase': 'failed', 'note': str(error), 'error_code': error.code})
-            db.update_cutover_task(task['id'], status='report_failed')
+            if error.code in LOGIN_ERRORS:
+                pause_for_login(db, report_id, error.code, str(error))
+            else:
+                db.update_cutover_report(report_id, status='failed', result={'phase': 'failed', 'note': str(error), 'error_code': error.code})
+                db.update_cutover_task(task['id'], status='report_failed')
         finally:
             report = db.get_cutover_report(report_id)
             finish_job(db, report_id, (report or {}).get('status', 'interrupted'))

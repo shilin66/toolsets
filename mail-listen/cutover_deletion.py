@@ -73,7 +73,7 @@ def _report_references(result):
     operation_log = result.get('operation_log')
     if isinstance(operation_log, list):
         references.extend(step.get('screenshot_filename') for step in operation_log if isinstance(step, dict))
-    references.extend(re.findall(r'(?:data/rpa/artifacts/|mail_store/mailboxes/)[^\s；，。]+\.png',
+    references.extend(re.findall(r'(?:data/rpa/artifacts/|mail_store/mailboxes/)[^\s；，。]+\.(?:png|webp)',
         str(result.get('error') or '')))
     return [value for value in references if isinstance(value, str) and value]
 

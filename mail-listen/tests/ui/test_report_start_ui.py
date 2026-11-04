@@ -1,6 +1,7 @@
 """Immediate report feedback while session and submission requests are pending."""
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from playwright.sync_api import expect
 from tests.ui import test_cutover_add_defaults_ui as defaults
 
@@ -60,4 +61,43 @@ class ReportStartUiTest(unittest.TestCase):
         expect(drawer).to_contain_text('测试：暂时无法创建上报任务')
         expect(drawer.locator('.is-loading')).to_have_count(0)
         expect(self.button).to_be_enabled()
+        self.assert_clean()
+
+    def test_same_user_submits_two_tasks_and_sees_queue_without_login_redirect(self):
+        from tests.api.test_cutover_task_api import api_server
+        # Use the real personal-session status, including reporting=True after the first claim.
+        del self.api.session_service.status
+        tasks = self.api.fill_tasks(self.api.post_fill_mixed(self.api.mixed_fill_payload()))
+        for task in tasks:
+            self.api.db.update_cutover_task(task['id'], status='confirmed')
+        scheduled, submitted = [], []
+        with patch.object(api_server, 'submit_cutover_report_job', side_effect=scheduled.append):
+            for task in tasks:
+                self.page.goto(f'{self.base}/admin/cutover-emails/{self.api.email_records_id}?taskId={task["id"]}')
+                self.page.locator('.task-detail-panel').get_by_role('button', name='上报综调系统', exact=True).click()
+                drawer = self.page.locator('.report-progress-drawer')
+                expect(drawer).to_contain_text('排队中', timeout=5000)
+                expect(self.page.locator('.n-message')).to_contain_text('已加入上报队列')
+                self.assertIn('/admin/cutover-emails/', self.page.url)
+                report = self.api.db.get_cutover_reports(task['id'])[0]
+                submitted.append(report['id'])
+                self.assertEqual(report['status'], 'pending')
+        self.assertEqual(len(submitted), 2)
+        evidence = Path('.qa/report-queue')
+        evidence.mkdir(parents=True, exist_ok=True)
+        for width in (1280, 1440):
+            self.page.set_viewport_size({'width': width, 'height': 1000})
+            expect(drawer).to_be_in_viewport(ratio=0.95)
+            self.page.screenshot(path=str(evidence / f'queued-{width}.png'), animations='disabled')
+        executed = []
+
+        def complete(task, **kwargs):
+            executed.append(task['id'])
+            return {'status': 'success'}
+
+        with patch.object(api_server, 'report_cutover_task', side_effect=complete), \
+                patch.object(api_server, 'ensure_source_email_archived'):
+            scheduled[-1]()
+        self.assertEqual(executed, [task['id'] for task in tasks])
+        expect(drawer).to_contain_text('上报成功', timeout=5000)
         self.assert_clean()

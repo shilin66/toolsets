@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from mail_operation_guard import MailOperationConflict, guard_mail_operation
 from tests.api import test_cutover_task_api as fixture
@@ -50,6 +51,26 @@ class MailOperationGuardTest(unittest.TestCase):
             self.assertEqual(response.status_code, 409)
             self.assertIsNone(self.db.get_mail_deletion(self.record_id))
         self.assertIsNotNone(self.db.get_email_record_by_id(self.record_id))
+
+    def test_sibling_reports_can_queue_but_mail_mutation_and_deletion_stay_blocked(self):
+        tasks = self.api.fill_tasks(self.api.post_fill_mixed(self.api.mixed_fill_payload()))
+        for task in tasks:
+            self.db.update_cutover_task(task['id'], status='confirmed')
+        with patch.object(fixture.api_server, 'submit_cutover_report_job'):
+            for task in tasks:
+                response = self.api.report_client.post(f'/api/cutover/tasks/{task["id"]}/report',
+                    headers=self.api.report_headers, json={})
+                self.assertEqual(response.status_code, 202, response.get_json())
+            duplicate = self.api.report_client.post(f'/api/cutover/tasks/{tasks[0]["id"]}/report',
+                headers=self.api.report_headers, json={})
+            self.assertEqual(duplicate.status_code, 400)
+        response = self.api.client.put(f'/api/cutover/emails/{self.record_id}/extraction',
+            headers=self.api.headers, json={})
+        self.assertEqual(response.status_code, 409)
+        response = self.api.client.delete(f'/api/cutover/emails/{self.record_id}', headers=self.api.headers)
+        self.assertEqual(response.status_code, 409)
+        self.assertIsNotNone(self.db.get_email_record_by_id(self.record_id))
+        self.assertEqual([len(self.db.get_cutover_reports(task['id'])) for task in tasks], [1, 1])
 
     def test_forwarding_does_not_hold_lock_needed_by_synchronous_workflow_callback(self):
         with guard_mail_operation(self.db, self.record_id, forwarding=True):

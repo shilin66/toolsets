@@ -53,6 +53,108 @@ class ReportIsolationTest(unittest.TestCase):
         principal, service = self.people[index]
         return claim_report(self.db, principal, service, self.task_id, PortalEnvironment.TEST, self.root)
 
+    def new_backbone_task(self):
+        uid = 100 + self.db.get_statistics()['email_records']['total']
+        self.db.add_email_record(uid, receiver='shared@example.com', content='queued mail')
+        task_id = self.db.upsert_cutover_task(
+            email_records_id=self.db.get_email_record(uid)['id'], line_type='backbone')
+        self.db.update_cutover_task(task_id, status='confirmed')
+        return task_id
+
+    def test_same_user_can_queue_while_report_is_pending_or_running(self):
+        first, _ = self.claim()
+        principal, service = self.people[0]
+        second_task = self.new_backbone_task()
+        second, _ = claim_report(self.db, principal, service, second_task, PortalEnvironment.TEST, self.root)
+        third_task = self.new_backbone_task()
+        with session_lock(service.lock_path):
+            finish_job(self.db, first, 'running')
+            third, result = claim_report(self.db, principal, service, third_task, PortalEnvironment.TEST, self.root)
+        self.assertEqual([get_job(self.db, rid)['status'] for rid in (first, second, third)],
+                         ['running', 'pending', 'pending'])
+        self.assertEqual(result['phase'], 'queued')
+        self.assertEqual(self.db.get_cutover_task(third_task)['status'], 'reporting')
+        with self.assertRaises(PortalSessionError):
+            service.logout()
+        with self.assertRaises(PortalSessionError):
+            service.begin(LoginMode.PASSWORD, PortalEnvironment.TEST)
+        with self.assertRaises(PortalSessionError) as caught:
+            claim_report(self.db, principal, service, second_task, PortalEnvironment.TEST, self.root)
+        self.assertEqual(caught.exception.code, 'TASK_BUSY')
+
+    def test_queue_drains_in_submission_order_even_when_last_job_is_scheduled_first(self):
+        from rpa.report_jobs import run_report_queue
+        first, _ = self.claim()
+        principal, service = self.people[0]
+        reports = [first]
+        for _ in range(2):
+            report_id, _ = claim_report(self.db, principal, service, self.new_backbone_task(),
+                                        PortalEnvironment.TEST, self.root)
+            reports.append(report_id)
+        executed = []
+
+        def complete(task_id, report_id, *args, **kwargs):
+            executed.append(report_id)
+            status = 'failed' if report_id == first else 'success'
+            self.db.update_cutover_report(report_id, status=status)
+            self.db.update_cutover_task(task_id, status='report_failed' if status == 'failed' else 'reported')
+
+        with patch('rpa.report_jobs.run_report_process', side_effect=lambda db, root, rid:
+                   execute(db, root, rid, complete)):
+            for report_id in reversed(reports):
+                run_report_queue(self.db, self.root, report_id)
+        self.assertEqual(executed, reports)
+        self.assertEqual([get_job(self.db, rid)['status'] for rid in reports], ['failed', 'success', 'success'])
+
+    def test_queue_accepts_new_jobs_during_execution_and_other_user_runs_independently(self):
+        from rpa.report_jobs import run_report_queue
+        first, _ = self.claim()
+        entered, release = threading.Event(), threading.Event()
+        executed = []
+
+        def complete(task_id, report_id, *args, **kwargs):
+            executed.append(report_id)
+            if report_id == first:
+                entered.set()
+                self.assertTrue(release.wait(5), 'test did not release first report')
+            self.db.update_cutover_report(report_id, status='success')
+            self.db.update_cutover_task(task_id, status='reported')
+
+        with patch('rpa.report_jobs.run_report_process', side_effect=lambda db, root, rid:
+                   execute(db, root, rid, complete)), ThreadPoolExecutor(max_workers=3) as pool:
+            future = pool.submit(run_report_queue, self.db, self.root, first)
+            try:
+                self.assertTrue(entered.wait(3))
+                principal, service = self.people[0]
+                queued = [claim_report(self.db, principal, service, self.new_backbone_task(),
+                          PortalEnvironment.TEST, self.root)[0] for _ in range(4)]
+                # Duplicate wakeups must not occupy all executor slots waiting on this user.
+                for report_id in queued:
+                    pool.submit(run_report_queue, self.db, self.root, report_id).result(timeout=2)
+                other, other_service = self.people[1]
+                other_report, _ = claim_report(self.db, other, other_service, self.new_backbone_task(),
+                                               PortalEnvironment.TEST, self.root)
+                pool.submit(run_report_queue, self.db, self.root, other_report).result(timeout=2)
+                self.assertEqual(executed, [first, other_report])
+            finally:
+                release.set()
+            future.result(timeout=3)
+        self.assertEqual(executed, [first, other_report, *queued])
+
+    def test_status_check_racing_with_first_report_returns_queueable_session(self):
+        service = self.people[0][1]
+        active = next(iter(service.active.values()))
+
+        def report_starts_during_check(environment):
+            self.claim()
+            raise PortalSessionError('RPA_BUSY', 'report acquired the activity lock')
+
+        with patch.object(active, 'status', side_effect=report_starts_during_check):
+            status = service.status(PortalEnvironment.TEST)
+        self.assertTrue(status.reporting)
+        self.assertIsNotNone(status.session_version)
+        self.assertEqual(status.portal_username, 'portal-alice')
+
     def test_admin_claim_is_rejected_before_session_access(self):
         service = Mock()
         with self.assertRaises(PortalSessionError) as caught:

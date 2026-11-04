@@ -92,7 +92,7 @@ class CutoverReportServiceTest(unittest.TestCase):
                     screenshot_path.parent.mkdir(parents=True, exist_ok=True)
                     screenshot_path.write_bytes(b"png")
                     step_path = screenshot_path.with_name(
-                        "report-success-01-excel_selected.png"
+                        "report-success-01-excel_selected.webp"
                     )
                     step_path.write_bytes(b"png")
                     step = CutoverReportOperationStep(
@@ -179,7 +179,7 @@ class CutoverReportServiceTest(unittest.TestCase):
                 screenshot_path.parent.mkdir(parents=True, exist_ok=True)
                 screenshot_path.write_bytes(b"png")
                 step_path = screenshot_path.with_name(
-                    "report-success-01-excel_selected.png"
+                    "report-success-01-excel_selected.webp"
                 )
                 step_path.write_bytes(b"png")
                 return CutoverReportResult(
@@ -238,13 +238,13 @@ class CutoverReportServiceTest(unittest.TestCase):
             )
             self.assertEqual(
                 result["screenshot_path"],
-                (expected_dir / "report-success.png").relative_to(root).as_posix(),
+                (expected_dir / "report-success.webp").relative_to(root).as_posix(),
             )
             self.assertTrue((root / result["screenshot_path"]).is_file())
             self.assertEqual(
                 result["operation_log"][0]["screenshot_filename"],
                 expected_dir.relative_to(root).as_posix()
-                + "/report-success-01-excel_selected.png",
+                + "/report-success-01-excel_selected.webp",
             )
 
     def test_reports_backbone_form_with_only_source_eml(self):
@@ -353,7 +353,7 @@ class CutoverReportServiceTest(unittest.TestCase):
             )
             self.assertEqual(
                 result["screenshot_path"],
-                (expected_dir / "report-success.png").relative_to(root).as_posix(),
+                (expected_dir / "report-success.webp").relative_to(root).as_posix(),
             )
             self.assertTrue((root / result["screenshot_path"]).is_file())
             self.assertEqual(

@@ -14,6 +14,13 @@ from mail_artifacts import (
 
 
 class MailArtifactMigrationTest(unittest.TestCase):
+    def test_recognizes_webp_error_screenshot_references(self):
+        from mail_artifact_migration_parts.mail_artifact_migration_reports import _screenshot_references
+        for path in ('data/rpa/artifacts/cutover-report-failure-123.webp',
+                     'mail_store/mailboxes/mailbox-test-12345678/messages/1/cutover/reports/step.webp'):
+            with self.subTest(path=path):
+                self.assertEqual(_screenshot_references({'error': '失败截图：' + path}), [path])
+
     def test_migrates_business_files_and_database_references(self):
         with tempfile.TemporaryDirectory() as temporary:
             project_dir = Path(temporary)

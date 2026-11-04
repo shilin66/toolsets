@@ -67,6 +67,10 @@ def initialize_access_storage(cursor) -> None:
             session_version TEXT NOT NULL, state_path TEXT NOT NULL,
             task_snapshot TEXT NOT NULL, settings_json TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending')''',
+        '''CREATE TABLE IF NOT EXISTS rpa_report_queues (
+            principal_key TEXT PRIMARY KEY, login_required INTEGER NOT NULL DEFAULT 0)''',
+        '''CREATE INDEX IF NOT EXISTS idx_report_jobs_queue
+            ON rpa_report_jobs(principal_key,status,report_id)''',
         '''CREATE TABLE IF NOT EXISTS supplier_sample_access (
             supplier_id INTEGER PRIMARY KEY, owner_user_id INTEGER,
             source_email_ids TEXT NOT NULL DEFAULT '[]')''',

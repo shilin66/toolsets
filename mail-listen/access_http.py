@@ -45,7 +45,8 @@ SHARED_CONFIGURATION_ENDPOINTS = frozenset({
     'get_system_settings', 'update_system_settings', 'list_supplier_drafts',
 })
 DRAFT_ENDPOINTS = frozenset({'exclude_supplier_draft_sender', 'supplier_draft_detail', 'publish_supplier_draft', 'retry_supplier_draft'})
-REPORT_ENDPOINTS = frozenset({'get_cutover_report_route', 'resolve_interrupted_report'})
+REPORT_ENDPOINTS = frozenset({'get_cutover_report_route', 'resolve_interrupted_report',
+                              'pause_cutover_report', 'resume_cutover_report'})
 EMAIL_ENDPOINTS = frozenset({
     'preview_cutover_attachment',
     'get_cutover_email_detail', 'update_cutover_email_read_state', 'delete_cutover_email_route',

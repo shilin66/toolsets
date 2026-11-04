@@ -83,7 +83,11 @@ class ReportScreenshotFocusTest(unittest.TestCase):
                             'text':item.inner_text(), 'path':path,
                             'submitted':frame.evaluate('Boolean(window.submitted)'),
                         }
-                    original_capture(page, path)
+                    actual = original_capture(page, path)
+                    for evidence in captured.values():
+                        if evidence['path'] == path:
+                            evidence['path'] = actual
+                    return actual
 
                 with patch.object(FakeBackbonePortalHandler, 'page_body', portal_page(resource_label, upload_label)):
                     server = ThreadingHTTPServer(('127.0.0.1', 0), FakeBackbonePortalHandler)
@@ -102,7 +106,7 @@ class ReportScreenshotFocusTest(unittest.TestCase):
                             result = PortalCutoverReportRpa(settings).fill_backbone_form(
                                 {'关联网络资源变更单':{'是否设计网络资源变更':'否'}},
                                 attachment_paths=(attachment,), environment=PortalEnvironment.TEST,
-                                screenshot_path=root/'result.png', submit=False,
+                                screenshot_path=root/'result.webp', submit=False,
                             )
                     finally:
                         server.shutdown(); thread.join(timeout=5); server.server_close()
@@ -118,10 +122,11 @@ class ReportScreenshotFocusTest(unittest.TestCase):
                     self.assertFalse(evidence['submitted'])
                     marker = evidence['marker']
                     with Image.open(evidence['path']) as screenshot:
+                        self.assertEqual(screenshot.format, 'WEBP')
                         self.assertEqual(screenshot.convert('RGB').getpixel((
                             int(marker['x']+marker['width']/2), int(marker['y']+marker['height']/2))), color)
                     if 'attachments' in step:
                         self.assertIn(attachment.name, evidence['text'])
                     destination = Path('.qa/report-screenshot-focus')
                     destination.mkdir(parents=True, exist_ok=True)
-                    (destination/f'{width}-{step}.png').write_bytes(evidence['path'].read_bytes())
+                    (destination/f'{width}-{step}.webp').write_bytes(evidence['path'].read_bytes())

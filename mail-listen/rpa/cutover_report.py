@@ -1,4 +1,3 @@
-import os
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -16,6 +15,7 @@ from playwright.sync_api import (
 )
 
 from .captcha import RpaError
+from .report_screenshot import save_report_screenshot
 from .session_config import PortalSessionSettings
 from .session_models import PortalEnvironment, PortalSessionError
 
@@ -329,7 +329,7 @@ class PortalCutoverReportRpa:
                     "import_log",
                     f"导入成功，综调任务号 {portal_task_number}",
                 )
-                self._capture_screenshot(page, screenshot_path)
+                screenshot_path = self._capture_screenshot(page, screenshot_path)
                 return CutoverReportResult(
                     final_url=page.url,
                     uploaded_filename=excel_path.name,
@@ -500,7 +500,7 @@ class PortalCutoverReportRpa:
                     )
 
                 if not submit:
-                    self._capture_screenshot(page, screenshot_path)
+                    screenshot_path = self._capture_screenshot(page, screenshot_path)
                     return BackboneReportResult(
                         final_url=page.url,
                         uploaded_filenames=uploaded_filenames,
@@ -522,7 +522,7 @@ class PortalCutoverReportRpa:
                         else "骨干线路提交成功"
                     ),
                 )
-                self._capture_screenshot(page, screenshot_path)
+                screenshot_path = self._capture_screenshot(page, screenshot_path)
                 return BackboneReportResult(
                     final_url=page.url,
                     uploaded_filenames=uploaded_filenames,
@@ -1190,7 +1190,7 @@ class PortalCutoverReportRpa:
                 self._settings.mobile_phone_selector,
             )) is not None:
                 raise PortalSessionError(
-                    "RPA_SESSION_REQUIRED",
+                    "RPA_SESSION_REQUIRED_AFTER_SUBMIT",
                     "综调会话已失效，请前往综调会话重新登录",
                 )
             success = self._backbone_success_text(page)
@@ -1319,7 +1319,7 @@ class PortalCutoverReportRpa:
             ))
             if login_field is not None:
                 raise PortalSessionError(
-                    "RPA_SESSION_REQUIRED",
+                    "RPA_SESSION_REQUIRED_AFTER_SUBMIT",
                     "综调会话已失效，请前往综调会话重新登录",
                 )
 
@@ -1625,7 +1625,7 @@ class PortalCutoverReportRpa:
         step_path = final_path.with_name(
             f"{final_path.stem}-{len(operation_log) + 1:02d}-{step}{final_path.suffix}"
         )
-        self._capture_screenshot(page, step_path)
+        step_path = self._capture_screenshot(page, step_path)
         entry = CutoverReportOperationStep(
             step=step,
             label=label,
@@ -1657,15 +1657,9 @@ class PortalCutoverReportRpa:
         return None
 
     @staticmethod
-    def _capture_screenshot(page: Page, screenshot_path: Path) -> None:
-        screenshot_path.parent.mkdir(parents=True, exist_ok=True)
-        screenshot_path.touch(mode=0o600, exist_ok=True)
-        os.chmod(screenshot_path, 0o600)
-        page.screenshot(
-            path=str(screenshot_path),
-            full_page=True,
-        )
-        os.chmod(screenshot_path, 0o600)
+    def _capture_screenshot(page: Page, screenshot_path: Path) -> Path:
+        png = page.screenshot(type='png', full_page=True)
+        return save_report_screenshot(png, screenshot_path)
 
     def _capture_failure_screenshot(
         self,
@@ -1676,9 +1670,8 @@ class PortalCutoverReportRpa:
             return None
         try:
             timestamp = int(monotonic() * 1000)
-            path = artifact_dir / f"report-failure-{timestamp}.png"
-            self._capture_screenshot(page, path)
-            return path
+            path = artifact_dir / f"report-failure-{timestamp}.webp"
+            return self._capture_screenshot(page, path)
         except PlaywrightError:
             return None
 

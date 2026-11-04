@@ -86,6 +86,18 @@ class CutoverDeletionApiTest(unittest.TestCase):
     def delete(self):
         return self.client.delete(self.url, headers=self.headers)
 
+    def test_deletes_webp_report_and_error_only_screenshots(self):
+        task = self.task()
+        screenshot = self.write(self.message_root / 'cutover/reports/2030-01-01/1/1_1/step.webp')
+        failure = self.write('rpa/artifacts/cutover-report-failure-test.webp')
+        self.db.add_cutover_report(task, status='failed', result={
+            'operation_log': [{'screenshot_filename': screenshot.relative_to(self.root).as_posix()}],
+            'error': '失败截图：data/' + failure.relative_to(self.root).as_posix(),
+        })
+        self.assertEqual(self.delete().status_code, 200)
+        self.assertFalse(screenshot.exists())
+        self.assertFalse(failure.exists())
+
     def test_cascades_email_tasks_reports_analysis_replies_and_private_files(self):
         other = self.mail(101, 'inbox@example.com')
         customer = self.task()

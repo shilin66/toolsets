@@ -25,8 +25,8 @@ type JsonValue = (
 _DATE_PATTERN = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
 _COMPACT_DATE_PATTERN = re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})T")
 _ERROR_SCREENSHOT_PATTERN = re.compile(
-    r"(data/rpa/artifacts/cutover-report-[^\s；，。]+\.png|"
-    r"mail_store/mailboxes/[^\s；，。]+\.png)"
+    r"(data/rpa/artifacts/cutover-report-[^\s；，。]+\.(?:png|webp)|"
+    r"mail_store/mailboxes/[^\s；，。]+\.(?:png|webp))"
 )
 
 

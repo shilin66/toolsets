@@ -46,6 +46,7 @@ class PersonalPortalSession:
         self.registry, self.principal = registry, principal
         self.root = registry.root / principal.key
         self.lock_path = self.root / 'activity.lock'
+        self.binding_lock_path = self.root / 'binding.lock'
         self.pending = None
         self.attempt = None
         self.phone = None
@@ -66,11 +67,28 @@ class PersonalPortalSession:
             'session_keepalive_enabled': False if pending else self.registry.settings.session_keepalive_enabled,
         })
 
-    def _assert_idle(self):
+    def _assert_idle(self, *, allow_reauthentication=False):
+        from .report_queue import login_required
         with self.registry.db.get_connection() as conn:
-            if conn.execute("SELECT 1 FROM rpa_report_jobs WHERE principal_key=? AND status IN ('pending','running')",
-                            (self.principal.key,)).fetchone():
-                raise PortalSessionError('RPA_BUSY', '当前用户有排队或执行中的上报，请完成后再切换账号')
+            jobs = conn.execute("SELECT status FROM rpa_report_jobs WHERE principal_key=? AND status IN ('pending','running','paused','waiting_login')",
+                                (self.principal.key,)).fetchall()
+            if allow_reauthentication and not any(row['status'] == 'running' for row in jobs):
+                if login_required(conn, self.principal.key) or all(row['status'] == 'paused' for row in jobs):
+                    return
+        if jobs:
+            raise PortalSessionError('RPA_BUSY', '当前用户有排队或执行中的上报，请完成后再切换账号')
+
+    def _assert_queue_identity(self, environment, username=None):
+        with self.registry.db.get_connection() as conn:
+            jobs = conn.execute("""SELECT username,environment FROM rpa_report_jobs WHERE principal_key=?
+                AND (status IN ('pending','running','paused','waiting_login') OR
+                     (status='interrupted' AND EXISTS (SELECT 1 FROM rpa_report_queues q
+                         WHERE q.principal_key=rpa_report_jobs.principal_key AND q.login_required=1)))""",
+                (self.principal.key,)).fetchall()
+        if any(row['environment'] != str(environment) or
+               (username is not None and row['username'].casefold() != username.casefold()) for row in jobs):
+            raise PortalSessionError('QUEUE_IDENTITY_MISMATCH', '请使用队列原有的综调账号和环境重新登录')
+        return bool(jobs)
 
     def _active_service(self, path, version, environment):
         def allowed():
@@ -91,8 +109,14 @@ class PersonalPortalSession:
         return self.pending is not None and attempt is not None and attempt.expires_at > datetime.now(UTC)
 
     def begin(self, mode, environment=None):
-        with session_lock(self.lock_path):
-            self._assert_idle()
+        with session_lock(self.binding_lock_path, blocking=True), session_lock(self.lock_path):
+            self._assert_idle(allow_reauthentication=True)
+            environment = environment or self.registry.settings.default_environment
+            if self._assert_queue_identity(environment):
+                with self.registry.db.get_connection() as conn:
+                    conn.execute('INSERT INTO rpa_report_queues VALUES (?,1) ON CONFLICT(principal_key) '
+                                 'DO UPDATE SET login_required=1', (self.principal.key,))
+                    conn.commit()
             if self.pending:
                 self.pending.close()
             self.pending = self.attempt = self.phone = None
@@ -148,10 +172,11 @@ class PersonalPortalSession:
         return aliases.get(username.strip().casefold(), username.strip())
 
     def _login(self, attempt_id, username, callback):
-        with session_lock(self.lock_path):
-            self._assert_idle()
+        with session_lock(self.binding_lock_path, blocking=True), session_lock(self.lock_path):
+            self._assert_idle(allow_reauthentication=True)
             service = self._pending(attempt_id)
             username = self._canonical_account(username)
+            self._assert_queue_identity(self.attempt.environment, username)
             account_key = username.casefold()
             account_lock = self.registry.root / 'accounts' / hashlib.sha256(
                 f'{self.attempt.environment}:{account_key}'.encode()).hexdigest()
@@ -169,6 +194,9 @@ class PersonalPortalSession:
                         conn.execute('DELETE FROM portal_sessions WHERE principal_key=?', (self.principal.key,))
                         conn.execute('INSERT INTO portal_sessions VALUES (?,?,?,?,?,?)',
                             (self.principal.key, str(status.environment), username.strip(), account_key, version, str(path)))
+                        from .report_queue import rebind_waiting_jobs
+                        rebind_waiting_jobs(conn, self.principal.key, username, str(status.environment), version,
+                                            path, self._settings(path.parent).model_dump_json())
                         conn.commit()
                 except sqlite3.IntegrityError as error:
                     path.unlink(missing_ok=True)
@@ -188,8 +216,9 @@ class PersonalPortalSession:
 
     def request_sms(self, attempt_id, phone, password, captcha):
         with session_lock(self.lock_path):
-            self._assert_idle()
+            self._assert_idle(allow_reauthentication=True)
             service = self._pending(attempt_id)
+            self._assert_queue_identity(self.attempt.environment, self._canonical_account(phone))
             self._account_available(phone)
             result = service.request_sms(attempt_id, phone, password, captcha)
             self.phone = phone
@@ -199,6 +228,11 @@ class PersonalPortalSession:
         if not self.phone:
             raise PortalSessionError('ATTEMPT_NOT_FOUND', '请先获取短信验证码')
         return self._login(attempt_id, self.phone, lambda service: service.verify_sms(attempt_id, sms_code))
+
+    def _reporting_status(self, record, environment):
+        return SessionStatus(SessionState.UNAVAILABLE, False, datetime.now(UTC),
+            '该账号正在处理上报队列，可继续提交任务，系统将按顺序执行', environment,
+            portal_username=record['username'], session_version=record['version'], reporting=True)
 
     def status(self, environment=None):
         environment = environment or self.registry.settings.default_environment
@@ -210,12 +244,17 @@ class PersonalPortalSession:
                 environment, info.configured, info.password_login_url, info.mobile_login_url,
                 self.root / 'not-authenticated.json')
         version = record['version']
+        from .report_queue import login_required, WAITING_NOTE
+        with self.registry.db.get_connection() as conn:
+            if login_required(conn, self.principal.key):
+                info = self.registry.settings.describe_environment(environment)
+                return SessionStatus(SessionState.LOGIN_REQUIRED, False, datetime.now(UTC), WAITING_NOTE,
+                    environment, info.configured, info.password_login_url, info.mobile_login_url,
+                    Path(record['state_path']), portal_username=record['username'])
         try:
             self._assert_idle()
         except PortalSessionError:
-            return SessionStatus(SessionState.UNAVAILABLE, False, datetime.now(UTC),
-                '该账号有排队或执行中的上报，结束后重新检查登录状态', environment,
-                portal_username=record['username'], session_version=version, reporting=True)
+            return self._reporting_status(record, environment)
         if self._login_pending():
             info = self.registry.settings.describe_environment(environment)
             return SessionStatus(SessionState.LOGIN_REQUIRED, False, datetime.now(UTC),
@@ -226,21 +265,35 @@ class PersonalPortalSession:
             if version not in self.active:
                 self.active[version] = self._active_service(Path(record['state_path']), version, environment)
             service = self.active[version]
-        status = service.status(environment)
+        try:
+            status = service.status(environment)
+        except PortalSessionError as error:
+            if error.code == 'RPA_BUSY':
+                # A report can start after the idle check but before the browser locks.
+                try:
+                    self._assert_idle()
+                except PortalSessionError:
+                    return self._reporting_status(record, environment)
+            raise
         # Preserve the last account for display; only an authenticated check yields a usable version.
         return replace(status, portal_username=record['username'],
                        session_version=version if status.authenticated else None)
 
     def report_binding(self, environment):
-        # Caller holds activity.lock until the durable claim is committed.
-        self._assert_idle()
+        # Caller holds binding.lock; reports may queue while activity.lock is held.
+        if self._login_pending():
+            raise PortalSessionError('LOGIN_REQUIRED', '正在登录，请完成验证码验证后再上报')
+        from .report_queue import login_required, WAITING_NOTE
+        with self.registry.db.get_connection() as conn:
+            if login_required(conn, self.principal.key):
+                raise PortalSessionError('LOGIN_REQUIRED', WAITING_NOTE)
         record = self._record(environment)
         if not record or not Path(record['state_path']).is_file():
             raise PortalSessionError('LOGIN_REQUIRED', '请先登录所选环境的个人综调账号')
         return {**record, 'settings_json': self._settings(Path(record['state_path']).parent).model_dump_json()}
 
     def logout(self):
-        with session_lock(self.lock_path):
+        with session_lock(self.binding_lock_path, blocking=True), session_lock(self.lock_path):
             self._assert_idle()
             self.close()
             with self.registry.db.get_connection() as conn:

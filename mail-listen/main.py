@@ -9,7 +9,7 @@ import threading
 import time
 from loguru import logger
 
-from api_server import app
+from api_server import app, recover_cutover_report_jobs
 from mail_listener import listener_manager
 from config import settings, log_format
 from database import email_db
@@ -52,6 +52,7 @@ class MainService:
     def start_api_server(self):
         """启动 API 服务"""
         try:
+            recover_cutover_report_jobs()
             # 个人综调会话由普通用户请求按需创建，服务启动时没有用户身份。
             logger.info("=" * 60)
             logger.info("启动 API 服务")
