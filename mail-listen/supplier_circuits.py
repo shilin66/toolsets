@@ -72,7 +72,7 @@ def parse_circuits_workbook(source) -> Tuple[List[Dict[str, str]], List[str]]:
 
     wb = load_workbook(source, read_only=True, data_only=True)
     try:
-        ws = wb.active
+        ws = wb[CIRCUIT_EXPORT_SHEET_NAME] if CIRCUIT_EXPORT_SHEET_NAME in wb.sheetnames else wb.active
         rows_iter = ws.iter_rows(values_only=True)
         header_cells = next(rows_iter, None)
         if header_cells is None:

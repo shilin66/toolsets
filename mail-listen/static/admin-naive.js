@@ -74,6 +74,28 @@ const NocUI = (() => {
       });
     },
   };
+  dialog.prompt = (content, title, options = {}) => new Promise((resolve, reject) => {
+    const value = Vue.ref('');
+    const invalid = Vue.ref(false);
+    const cancel = () => reject('cancel');
+    services.dialog.warning({
+      title, maskClosable: false,
+      positiveText: options.confirmButtonText || '确认', negativeText: options.cancelButtonText || '取消',
+      content: () => h('div', {}, [
+        h('p', {}, content),
+        h(naive.NInput, {type: 'textarea', value: value.value, maxlength: 2000,
+          placeholder: options.inputPlaceholder, 'aria-label': options.inputPlaceholder,
+          status: invalid.value ? 'error' : undefined,
+          'onUpdate:value': text => { value.value = text; invalid.value = false; }}),
+        invalid.value ? h('p', {role: 'alert'}, options.validationMessage) : null,
+      ]),
+      onPositiveClick: () => {
+        if (!value.value.trim()) { invalid.value = true; return false; }
+        resolve(value.value.trim());
+      },
+      onNegativeClick: cancel, onClose: cancel, onEsc: cancel,
+    });
+  });
   function primitive(tag, baseClass, style, name) {
     return defineComponent({
       name, inheritAttrs: false,

@@ -154,6 +154,9 @@ class EmailDatabase:
                     )
                 ''')
 
+                if 'manual_history' not in {r[1] for r in cursor.execute('PRAGMA table_info(cutover_reports)')}:
+                    cursor.execute("ALTER TABLE cutover_reports ADD COLUMN manual_history TEXT NOT NULL DEFAULT '[]'")
+
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS system_settings (
                         key TEXT PRIMARY KEY,
@@ -259,6 +262,8 @@ class EmailDatabase:
             "attachments": "TEXT",
             "cutover_scene": "TEXT DEFAULT 'normal'",
             "cutover_scene_remark": "TEXT NOT NULL DEFAULT ''",
+            "manual_completion": "TEXT",
+            "manual_completion_history": "TEXT NOT NULL DEFAULT '[]'",
             "mail_type": "TEXT NOT NULL DEFAULT ''",
             "extract_result": "TEXT NOT NULL DEFAULT ''",
             "is_duplicate": "INTEGER NOT NULL DEFAULT 0",
@@ -826,7 +831,7 @@ class EmailDatabase:
         with self.get_connection() as conn:
             changed = conn.execute(f'''UPDATE email_records SET api_forward_status='forwarding',
                 api_forward_error='', api_forward_time=CURRENT_TIMESTAMP, update_time=CURRENT_TIMESTAMP
-                WHERE id=? AND api_forward_status != 'forwarding' AND {EMAIL_NOT_DELETING_SQL}''',
+                WHERE id=? AND api_forward_status != 'forwarding' AND manual_completion IS NULL AND {EMAIL_NOT_DELETING_SQL}''',
                 (record_id,))
             conn.commit()
             return changed.rowcount == 1
@@ -1354,6 +1359,11 @@ class EmailDatabase:
             logger.error(f"更新割接上报记录失败: {e}")
             return False
 
+    @classmethod
+    def public_manual_history(cls, value):
+        return [{key: event.get(key) for key in ('action', 'by', 'at', 'note')}
+                for event in (cls._deserialize_json(value) or [])]
+
     def get_cutover_reports(self, task_id: int) -> List[Dict[str, Any]]:
         """获取某个任务的全部上报记录，按时间倒序。"""
         from rpa.report_jobs import report_result_with_username
@@ -1369,6 +1379,7 @@ class EmailDatabase:
                 for row in cursor.fetchall():
                     report = dict(row)
                     report['result'] = report_result_with_username(conn, self._deserialize_json(report.get('result')))
+                    report['manual_history'] = self.public_manual_history(report.get('manual_history'))
                     reports.append(report)
                 return reports
 
@@ -1390,6 +1401,7 @@ class EmailDatabase:
                     return None
                 report = dict(row)
                 report['result'] = report_result_with_username(conn, self._deserialize_json(report.get('result')))
+                report['manual_history'] = self.public_manual_history(report.get('manual_history'))
                 return report
 
         except Exception as e:

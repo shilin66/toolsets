@@ -51,10 +51,11 @@ function useCutoverWorkbench(ctx) {
   const taskLoading = ref(false);
   const taskError = ref('');
   const isConfigured = computed(() => email.value?.processing_origin !== 'unconfigured');
-  const workBusy = computed(() => extractionBusy.value || replyBusy.value || apiForwardBusy.value || deleteBusy.value);
+  const completionBusy = ref(false);
+  const workBusy = computed(() => completionBusy.value || extractionBusy.value || replyBusy.value || apiForwardBusy.value || deleteBusy.value);
   const tasksReporting = computed(() => (email.value?.tasks || []).some(task => task.status === 'reporting'));
-  const canReply = computed(() => !!email.value && canOperateMailbox(email.value.receiver) && !workBusy.value);
-  const canEditMail = computed(() => !!email.value && canOperateMailbox(email.value.receiver) && !workBusy.value && !tasksReporting.value);
+  const canReply = computed(() => !!email.value && canOperateMailbox(email.value.receiver) && !workBusy.value && !email.value.manual_completion);
+  const canEditMail = computed(() => !!email.value && canOperateMailbox(email.value.receiver) && !workBusy.value && !tasksReporting.value && !email.value.manual_completion);
   const readPayload = value => {try {const parsed=JSON.parse(value);return parsed && !Array.isArray(parsed) && typeof parsed==='object' ? parsed : {};} catch {return {};}};
   const savedResult = computed(() => readPayload(savedExtractionDraft.value));
   const resultLines = data => Array.isArray(data.line_array) ? data.line_array : Array.isArray(data.line_array_info?.data) ? data.line_array_info.data : [];
@@ -83,7 +84,7 @@ function useCutoverWorkbench(ctx) {
   const needsTimeReview = computed(() => email.value?.unconfigured_analysis?.analysis_status==='needs_review');
   const replyState = computed(() => email.value?.reply_status ? tt('discovery.'+email.value.reply_status) : tt('cw.unknownReply'));
   const pendingActions = computed(() => {
-    const record=email.value;if(!record)return [];
+    const record=email.value;if(!record || record.manual_completion)return [];
     const result=[];
     if(record.api_forward?.status==='failed'||record.ai_tasks?.some(task=>task.status==='failed'))result.push({tab:'review',text:tt('cutover.detail.apiForwardStatus.failed')});
     if(needsTimeReview.value)result.push({tab:'review',text:tt('discovery.needs_review')});
@@ -152,7 +153,7 @@ function useCutoverWorkbench(ctx) {
   function backToList(){navigateTo('cutoverTasks');}
   watch(()=>email.value?.id,()=>{activeTab.value='review';showAdvanced.value=false;tasksStale.value=false;resultDialog.value=false;});
   return {...attachmentPreview,activeTab,showAdvanced,resultDialog,resultError,resultForm,formStart,formEnd,usesDateInputs,tasksStale,sourceDrawer,taskLoading,taskError,
-    isConfigured,workBusy,tasksReporting,canEditMail,canReply,savedResult,hasResult,reviewFields,reviewLines,reviewLineColumns,editingLines,lineColumns,scalar,fieldLabel,display,openAdvanced,
+    isConfigured,workBusy,completionBusy,tasksReporting,canEditMail,canReply,savedResult,hasResult,reviewFields,reviewLines,reviewLineColumns,editingLines,lineColumns,scalar,fieldLabel,display,openAdvanced,
     pendingLineCount,matchedLineCount,lineEntries,lineIdentifiers,lineState,needsLineReview,currentScene,needsTimeReview,replyState,pendingActions,windowSummary,safeMailHtml,
     openResultEditor,saveBusinessResult,setTab,onTabKey,backToList};
 }
@@ -163,10 +164,12 @@ const CUTOVER_WORKBENCH_TEMPLATE = `
   <template v-if="email">
     <ui-button text class="cw-back" @click="backToList">← {{ $t('cw.back') }}</ui-button>
     <div class="cw-heading"><div><h2>{{ email.supplier_name || email.sender }} <span v-if="savedResult.carrier_ticket_no">· {{ savedResult.carrier_ticket_no }}</span></h2><p class="supplier-context-detail">{{ email.subject }}</p></div>
-      <div class="cw-header-actions" role="group" :aria-label="$t('common.actions')"><ui-button size="small" :icon="icons.Message" :disabled="!canOperateMailbox(email.receiver) || workBusy" :loading="readStateBusy" @click="toggleReadState">{{ email.is_read ? $t('common.markAsUnread') : $t('common.markAsRead') }}</ui-button><ui-button size="small" :icon="icons.Setting" @click="openAdvanced">{{ $t('cw.advanced') }}</ui-button><ui-button size="small" type="danger" plain :icon="icons.Delete" class="cutover-email-delete-action" :title="$t('cutover.delete.detailAction')" :disabled="!canEditMail || readStateBusy" :loading="deleteBusy" @click="deleteEmail">{{ $t('common.delete') }}</ui-button></div>
+      <div class="cw-header-actions" role="group" :aria-label="$t('common.actions')"><ui-button v-if="!email.manual_completion" size="small" :disabled="!canEditMail" :loading="completionBusy" @click="completeEmail">{{ $t('manualCutover.complete') }}</ui-button><ui-button size="small" :icon="icons.Message" :disabled="!canOperateMailbox(email.receiver) || workBusy" :loading="readStateBusy" @click="toggleReadState">{{ email.is_read ? $t('common.markAsUnread') : $t('common.markAsRead') }}</ui-button><ui-button size="small" :icon="icons.Setting" @click="openAdvanced">{{ $t('cw.advanced') }}</ui-button><ui-button size="small" type="danger" plain :icon="icons.Delete" class="cutover-email-delete-action" :title="$t('cutover.delete.detailAction')" :disabled="!canOperateMailbox(email.receiver) || workBusy || tasksReporting || readStateBusy" :loading="deleteBusy" @click="deleteEmail">{{ $t('common.delete') }}</ui-button></div>
     </div>
     <div class="cw-window"><div class="cw-window-time"><span>{{ fieldLabel('cutover_time') }}</span><strong>{{ windowSummary.value }}</strong><span class="cw-window-zone">{{ windowSummary.zone }}</span></div><div class="cw-window-tags"><ui-tag v-if="needsTimeReview" class="cw-scene-tag" size="small" type="warning">{{ $t('discovery.needs_review') }}</ui-tag><ui-tag v-else-if="currentScene" class="cw-scene-tag" size="small" :type="currentScene === 'normal' ? 'success' : sceneTagType(currentScene)">{{ sceneText(currentScene) }}</ui-tag><ui-tag v-if="!isConfigured" size="small" type="info">{{ $t('discovery.title') }}</ui-tag><ui-tag v-if="email.mail_type" size="small" type="primary">{{ email.mail_type }}</ui-tag></div></div>
-    <div class="cw-pending"><strong>{{ $t('cw.current') }}</strong><ui-button v-for="action in pendingActions" :key="action.text" text @click="setTab(action.tab)">{{ action.text }} →</ui-button><span v-if="!pendingActions.length" class="muted">{{ $t('cw.noPending') }}</span></div>
+    <div v-if="email.manual_completion" class="manual-completion-audit" role="status"><div><div class="manual-audit-heading"><span class="manual-mark-badge">{{ $t('manualCutover.manualBadge') }}</span><strong>{{ $t('manualCutover.completed') }}</strong><span>{{ email.manual_completion.by }}</span><time>{{ email.manual_completion.at.slice(0,19).replace('T',' ') }}</time></div><p>{{ email.manual_completion.note }}</p></div><ui-button v-if="canOperateMailbox(email.receiver)" size="small" :disabled="workBusy" :loading="completionBusy" :icon="icons.RefreshLeft" @click="undoEmailCompletion">{{ $t('manualCutover.undoComplete') }}</ui-button></div>
+    <div v-else class="cw-pending"><strong>{{ $t('cw.current') }}</strong><ui-button v-for="action in pendingActions" :key="action.text" text @click="setTab(action.tab)">{{ action.text }} →</ui-button><span v-if="!pendingActions.length" class="muted">{{ $t('cw.noPending') }}</span></div>
+    <details v-if="email.manual_completion_history?.length" class="manual-action-history manual-completion-history"><summary>{{ $t('manualCutover.history') }} · {{ email.manual_completion_history.length }}</summary><ol><li v-for="(event,index) in email.manual_completion_history" :key="index"><div><strong>{{ $t('manualCutover.actions.'+event.action) }}</strong><span>{{ event.by }}</span><time>{{ event.at?.slice(0,19).replace('T',' ') }}</time></div><p>{{ event.note }}</p></li></ol></details>
     <p v-if="!canOperateMailbox(email.receiver)" class="cw-notice">{{ $t('cw.readonly') }}</p><p v-else-if="tasksReporting" class="cw-notice">{{ $t('cw.locked') }}</p>
     <div class="cw-tabs" role="tablist" @keydown="onTabKey" :aria-label="$t('cutover.detail.breadcrumbTitle')">
       <button v-for="tab in ['review', ...(isConfigured ? ['lines'] : []), 'reply', ...(isConfigured ? ['report'] : []), 'history']" :key="tab" :id="'cw-tab-'+tab" role="tab" :aria-controls="'cw-panel-'+tab" :aria-selected="activeTab===tab" :tabindex="activeTab===tab ? 0 : -1" :class="{active:activeTab===tab}" @click="setTab(tab)">{{ $t('cw.'+tab) }}<span v-if="tab==='lines' && pendingLineCount">{{ pendingLineCount }}</span><span v-if="tab==='reply' && email.reply_status==='pending'">{{ $t('discovery.review') }}</span></button>
@@ -200,7 +203,7 @@ const CUTOVER_WORKBENCH_TEMPLATE = `
             </p>
           </div>
           <ui-button v-if="email.api_forward.status === 'failed'" type="primary"
-                     :loading="apiForwardBusy" :disabled="!canOperateMailbox(email.receiver) || apiForwardBusy"
+                     :loading="apiForwardBusy" :disabled="!canEditMail"
                      @click="retryApiForward">
             {{ $t('cutover.detail.apiForwardRetry') }}
           </ui-button>

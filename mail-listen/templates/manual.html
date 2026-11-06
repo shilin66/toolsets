@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>用户操作手册 · NOC 工作台</title>
+    <meta name="description" content="NOC 工作台登录、邮件处理、割接核对、综调上报和配置维护操作指南">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233370ff'/%3E%3C/svg%3E">
+    {% for name in ('admin.css', 'manual.css') %}
+    <link rel="stylesheet" href="{{ url_for('static', filename=name, v=asset_versions[name]) }}">
+    {% endfor %}
+    <script defer src="{{ url_for('static', filename='manual.js', v=asset_versions['manual.js']) }}"></script>
+  </head>
+  <body class="manual-page">
+    <a class="manual-skip" href="#manual-content">跳转到正文</a>
+    <aside class="manual-sidebar">
+      <a class="manual-brand" href="/manual"><span class="brand-mark" aria-hidden="true">NOC</span><strong>NOC 工作台</strong></a>
+      <div class="manual-search-box">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
+        <input id="manual-search" type="search" placeholder="搜索功能或操作" aria-label="搜索手册" aria-controls="manual-search-results" autocomplete="off">
+        <kbd>⌘ K</kbd>
+      </div>
+      <p id="manual-search-status" class="manual-sr-only" role="status" aria-live="polite"></p>
+      <div id="manual-search-results" class="manual-search-results" hidden></div>
+      <nav class="manual-chapters" aria-label="手册目录">
+        {% for chapter in chapters %}
+        {% if loop.index == 1 %}<p class="manual-nav-group">入门</p>{% endif %}
+        {% if loop.index == 3 %}<p class="manual-nav-group">日常值班</p>{% endif %}
+        {% if loop.index == 7 %}<p class="manual-nav-group">配置与管理</p>{% endif %}
+        {% if loop.index == 12 %}<p class="manual-nav-group">帮助</p>{% endif %}
+        <a href="#{{ chapter.id }}" data-chapter="{{ chapter.id }}">{{ chapter.name }}</a>
+        {% endfor %}
+      </nav>
+      <footer class="manual-sidebar-footer"><span>简体中文 · 图文操作手册</span><a href="/admin">进入工作台 <span aria-hidden="true">↗</span></a></footer>
+    </aside>
+    <div class="manual-layout">
+      <main id="manual-content" class="manual-content" tabindex="-1">
+        <div class="manual-breadcrumb"><a href="#manual-content">使用指南</a><span aria-hidden="true">/</span><span id="manual-current-chapter">快速开始</span></div>
+        <article>{{ content | safe }}</article>
+        <footer class="manual-footer"><span>NOC 工作台 · 用户操作手册</span><a href="#manual-content">返回顶部 ↑</a></footer>
+      </main>
+      <aside class="manual-page-nav">
+        <nav class="manual-toc" aria-label="本章导航">
+          <p class="manual-toc-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h12M4 18h16"/></svg>本章导航</p>
+          {% for chapter in chapters %}
+          <div class="manual-section-nav" data-for="{{ chapter.id }}" {% if not loop.first %}hidden{% endif %}>
+            <a href="#{{ chapter.id }}">{{ chapter.name }}</a>
+            <ul>{% for section in chapter.children %}<li><a href="#{{ section.id }}">{{ section.name }}</a></li>{% endfor %}</ul>
+          </div>
+          {% endfor %}
+        </nav>
+      </aside>
+    </div>
+    <dialog class="manual-image-preview" aria-label="图片预览">
+      <button class="manual-preview-close" type="button" aria-label="关闭图片预览" autofocus>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg>
+      </button>
+      <img alt="">
+    </dialog>
+  </body>
+</html>

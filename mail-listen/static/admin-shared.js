@@ -288,13 +288,14 @@ function shortText(value, size = 120) {
 }
 
 // ---------- 割接任务状态/类型文案（运行时按当前语言取值） ----------
-const CUTOVER_STATUS_KEYS = ["draft", "confirmed", "reporting", "reported", "report_failed"];
+const CUTOVER_STATUS_KEYS = ["draft", "confirmed", "reporting", "reported", "report_failed", "completed"];
 
 const CUTOVER_STATUS_TAG = {
   draft: "warning",
   confirmed: "primary",
   reporting: "info",
   reported: "success",
+  completed: "success",
   report_failed: "danger",
 };
 
@@ -420,6 +421,7 @@ function cutoverEmailTags(row) {
 }
 
 function cutoverEmailStates(row) {
+  if (row.manual_completion) return [{key: "completed", label: tt("cutover.status.completed"), type: "success"}];
   const states = [];
   if (row.processing_origin === 'unconfigured') {
     const jobs = row.ai_tasks || [];

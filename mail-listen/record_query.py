@@ -277,7 +277,11 @@ class RecordQueryRepository:
         # 任务级条件（同时作用于内嵌任务列表）与邮件级条件（仅过滤邮件）分开维护
         task_conditions = []
         task_params: list[str | int] = []
-        if status == "reply_pending":
+        if status and status != 'completed':
+            conditions.append('email_records.manual_completion IS NULL')
+        if status == "completed":
+            conditions.append("email_records.manual_completion IS NOT NULL")
+        elif status == "reply_pending":
             conditions.append("email_records.reply_status = 'pending'")
         elif status == 'analysis_failed':
             conditions.append("EXISTS (SELECT 1 FROM mail_ai_jobs j WHERE j.email_records_id=email_records.id AND j.status='failed')")
@@ -384,6 +388,7 @@ class RecordQueryRepository:
                        SUBSTR(email_records.content, 1, 200) as content_summary,
                        email_records.create_time,
                        email_records.processing_origin,
+                       email_records.manual_completion,
                        email_records.cutover_scene,
                        email_records.cutover_scene_remark,
                        email_records.pending_reply_scene,
@@ -441,6 +446,7 @@ class RecordQueryRepository:
                 if item['processing_origin'] == 'unconfigured':
                     from unconfigured_mail_repository import UnconfiguredMailRepository
                     item.update(UnconfiguredMailRepository(self.db).projection(item['id'], conn))
+                item["manual_completion"] = self.db._deserialize_json(item.get("manual_completion"))
                 item["tasks"] = tasks_by_email.get(item["id"], [])
                 item["line_match_payload"] = (
                     self.db._deserialize_json(item.get("line_match_payload"))
@@ -492,7 +498,7 @@ class RecordQueryRepository:
             cursor.execute(
                 f"""
                 SELECT id, email_id, sender, receiver, subject, content,
-                       html_content, attachments, cutover_scene, cutover_scene_remark,
+                       html_content, attachments, cutover_scene, cutover_scene_remark, manual_completion, manual_completion_history,
                        mail_type, extract_result, is_duplicate, is_read,
                        reply_status, pending_reply_content, pending_reply_scene, reply_time, reply_history,
                        api_forward_status, api_forward_error, api_forward_time,
@@ -509,6 +515,8 @@ class RecordQueryRepository:
             if not row:
                 return None
             email = dict(row)
+            email["manual_completion"] = self.db._deserialize_json(email.get("manual_completion"))
+            email["manual_completion_history"] = self.db.public_manual_history(email.get("manual_completion_history"))
             if email['processing_origin'] == 'unconfigured':
                 from unconfigured_mail_repository import UnconfiguredMailRepository
                 email.update(UnconfiguredMailRepository(self.db).projection(email_records_id, conn))

@@ -182,7 +182,8 @@ class NaiveMigrationUiTest(unittest.TestCase):
         content = build_import_workbook_bytes([imported])
         original = self.api.db.get_all_supplier_circuits()
         self.page.goto(self.base + '/admin/circuits')
-        self.page.get_by_role('button', name='导入', exact=True).click()
+        self.page.get_by_role('button', name='更多导入方式', exact=True).click()
+        self.page.get_by_text('全量覆盖导入', exact=True).click()
         dialog = self.page.get_by_role('dialog', name='导入线路表', exact=True)
         dialog.locator('input[type=file]').set_input_files({
             'name':'circuits.xlsx',

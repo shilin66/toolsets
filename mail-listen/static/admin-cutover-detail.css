@@ -155,3 +155,11 @@
 .cw-reply-body { padding: 0 20px 20px; }
 .cw-reply-body h3 { font-size: 14px; }
 .cw-reply-body pre { margin: 12px 0 0; font: inherit; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.manual-completion-audit { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:16px; border:1px solid var(--line); border-left:3px solid var(--success); border-radius:6px; background:var(--panel); overflow-wrap:anywhere; margin:16px 0 12px; }
+.manual-completion-audit > div { min-width:0; flex:1; }
+.manual-completion-audit > .n-button { flex:none; }
+.manual-completion-audit p { margin:8px 0 0; }
+.manual-completion-history { margin-bottom:16px; }
+.manual-completion-audit p, .manual-report-audit p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.manual-report-audit pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }

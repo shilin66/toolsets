@@ -43,7 +43,8 @@ class ControlContractsUiTest(unittest.TestCase):
 
     def test_import_replacement_validates_files_and_removal_clears_preview(self):
         self.page.goto(self.base + '/admin/circuits')
-        self.page.get_by_role('button', name='导入', exact=True).click()
+        self.page.get_by_role('button', name='更多导入方式', exact=True).click()
+        self.page.get_by_text('全量覆盖导入', exact=True).click()
         dialog = self.page.get_by_role('dialog', name='导入线路表', exact=True)
         file_input = dialog.locator('input[type=file]')
         preview = dialog.get_by_role('button', name='解析预览', exact=True)

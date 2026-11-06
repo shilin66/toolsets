@@ -418,6 +418,8 @@ class UnconfiguredMailRepository:
             raise ValueError('任务类型无效')
         with self.db.get_connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
+            if conn.execute('SELECT 1 FROM email_records WHERE id=? AND manual_completion IS NOT NULL', (email_id,)).fetchone():
+                raise ResultConflict('该割接任务已人工完成，不能重试后台任务')
             if conn.execute('SELECT 1 FROM mail_deletions WHERE email_records_id=?',
                             (email_id,)).fetchone():
                 raise ResultConflict('邮件已删除或正在删除，不能重试')

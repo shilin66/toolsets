@@ -175,10 +175,13 @@ class OperationsRepository:
         sql = f'''WITH
         m AS MATERIALIZED (
             SELECT e.id,lower(trim(COALESCE(e.sender,''))) sender,e.receiver,e.subject,
-                ops_day(e.create_time) received,e.mail_type FROM email_records e
+                ops_day(e.create_time) received,e.mail_type,e.manual_completion FROM email_records e
             WHERE {scope} AND NOT EXISTS (SELECT 1 FROM mail_deletions d WHERE d.email_records_id=e.id)),
         tasks AS MATERIALIZED (
-            SELECT t.id,t.email_records_id,t.carrier_ticket_no ticket,t.status,t.create_time,t.update_time,
+            SELECT t.id,t.email_records_id,t.carrier_ticket_no ticket,t.status,t.create_time,
+                CASE WHEN t.status='completed' THEN json_extract(m.manual_completion,'$.previous_task_updated_at."' || t.id || '"')
+                    ELSE t.update_time END update_time,
+                json_extract(m.manual_completion,'$.previous_task_statuses."' || t.id || '"') previous_status,
                 t.line_type,t.fill_result,m.sender
             FROM cutover_tasks t JOIN m ON m.id=t.email_records_id),
         reports_raw AS (
@@ -193,7 +196,7 @@ class OperationsRepository:
             UNION ALL
             SELECT -t.id,t.id,'success',COALESCE(ops_day(t.update_time),ops_day(t.create_time)),
                 json_object('carrier_ticket_no',t.ticket,'line_type',t.line_type,'fill_result',t.fill_result),0,NULL
-            FROM tasks t WHERE t.status='reported'
+            FROM tasks t WHERE (t.status='reported' OR (t.status='completed' AND t.previous_status='reported'))
                 AND NOT EXISTS(SELECT 1 FROM cutover_reports r WHERE r.task_id=t.id)),
         reports AS MATERIALIZED (
             SELECT * FROM reports_raw WHERE status='success' AND completed IS NOT NULL
@@ -257,7 +260,7 @@ class OperationsRepository:
         lines_agg AS (SELECT sender,COUNT(*) lines FROM lines WHERE completed BETWEEN :start AND :end GROUP BY sender),
         replies_agg AS (SELECT sender,COUNT(*) replies FROM replies WHERE ops_day(sent_at) BETWEEN :start AND :end GROUP BY sender),
         pending_agg AS (SELECT t.sender,COUNT(*) pending,SUM(CASE WHEN t.status='report_failed' THEN 1 ELSE 0 END) failed
-            FROM tasks t WHERE NOT EXISTS (SELECT 1 FROM reports_raw r WHERE r.task_id=t.id AND r.status='success'
+            FROM tasks t WHERE t.status<>'completed' AND NOT EXISTS (SELECT 1 FROM reports_raw r WHERE r.task_id=t.id AND r.status='success'
                 AND ({"1=1" if o.environment=='all' else "r.environment IS NULL OR r.environment='"+o.environment+"'"})) GROUP BY t.sender),
         evidence_agg AS (SELECT t.sender,COUNT(*) evidence FROM reports_raw r JOIN tasks t ON t.id=r.task_id
             WHERE r.status='success' AND (r.completed IS NULL OR r.completed BETWEEN :start AND :end)

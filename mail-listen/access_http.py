@@ -42,13 +42,15 @@ SHARED_CONFIGURATION_ENDPOINTS = frozenset({
     'supplier_sample_attachment_source', 'preview_supplier_attachment_content', 'preview_supplier_extract', 'preview_supplier_sample', 'import_supplier_eml', 'get_supplier_config', 'update_supplier_config', 'delete_supplier_config',
     'query_circuits', 'list_circuits_admin', 'create_circuit_admin', 'update_circuit_admin',
     'delete_circuit_admin', 'export_circuits_xlsx', 'import_circuits_xlsx', 'generate_template_xlsx',
+    'download_circuits_template',
     'get_system_settings', 'update_system_settings', 'list_supplier_drafts',
 })
 DRAFT_ENDPOINTS = frozenset({'exclude_supplier_draft_sender', 'supplier_draft_detail', 'publish_supplier_draft', 'retry_supplier_draft'})
-REPORT_ENDPOINTS = frozenset({'get_cutover_report_route', 'resolve_interrupted_report',
+REPORT_ENDPOINTS = frozenset({'get_cutover_report_route', 'resolve_interrupted_report', 'undo_cutover_report_resolution',
                               'pause_cutover_report', 'resume_cutover_report'})
 EMAIL_ENDPOINTS = frozenset({
     'preview_cutover_attachment',
+    'complete_cutover_email', 'undo_cutover_email_completion',
     'get_cutover_email_detail', 'update_cutover_email_read_state', 'delete_cutover_email_route',
     'retry_cutover_email_api_forward', 'update_cutover_line_binding', 'update_cutover_extraction',
     'generate_cutover_tasks', 'reply_cutover_email', 'confirm_cutover_reply', 'cancel_cutover_reply',
@@ -100,6 +102,20 @@ def register_access_routes(app, get_db, get_admin_key, get_data_dir):
     def repository():
         return UserAccessRepository(get_db())
 
+    def completed_mutation_response(principal, endpoint):
+        if (request.method in SAFE_METHODS or endpoint not in EMAIL_ENDPOINTS | TASK_ENDPOINTS
+                or endpoint in {'complete_cutover_email', 'undo_cutover_email_completion', 'update_cutover_email_read_state', 'delete_cutover_email_route'}):
+            return None
+        try:
+            email_id = _email_id(get_db(), endpoint)
+        except ValueError:
+            return None  # The route/authorization layer supplies its normal validation error.
+        if email_id and repository().can_access_email(principal, email_id, operate=True):
+            record = get_db().get_email_record_by_id(email_id)
+            if record and record.get('manual_completion'):
+                return denied('该割接任务已人工完成，不能继续修改或上报', 409)
+        return None
+
     @app.before_request
     def authenticate_and_authorize():
         if not request.path.startswith('/api/'):
@@ -131,7 +147,7 @@ def register_access_routes(app, get_db, get_admin_key, get_data_dir):
         if principal.is_admin and endpoint in PERSONAL_RPA_ENDPOINTS | {'report_cutover_task_route'}:
             return denied('API Key 管理员不能使用综调会话或上报，请使用普通用户账号登录')
         if principal.is_admin:
-            return None
+            return completed_mutation_response(principal, endpoint)
         if endpoint in USER_MANAGEMENT_ENDPOINTS:
             return denied('用户与邮箱授权仅管理员可管理')
         if endpoint in MAIL_CONFIGURATION_ENDPOINTS:
@@ -155,6 +171,9 @@ def register_access_routes(app, get_db, get_admin_key, get_data_dir):
                 return denied('记录不存在或未获授权', 404)
             if request.method not in SAFE_METHODS and not repo.can_access_email(principal, email_id, operate=True):
                 return denied('当前邮箱仅授予查看权限')
+            completed_response = completed_mutation_response(principal, endpoint)
+            if completed_response is not None:
+                return completed_response
             if endpoint == 'retry_unconfigured_analysis':
                 body = request.get_json(silent=True) or {}
                 if isinstance(body, dict) and body.get('task_type') == 'supplier_config_draft':

@@ -1767,7 +1767,7 @@ const ViewCutoverTasks = defineComponent({
           <ui-table-column :label="$t('cutover.list.processingStatus')" width="155">
             <template #default="{ row }">
               <div class="cutover-processing">
-                <ui-tag v-if="row.unmatched_line_count" class="cutover-line-warning" type="warning" size="small" effect="light" :title="$t('cutover.list.unmatchedLinesHint')">
+                <ui-tag v-if="row.unmatched_line_count && !row.manual_completion" class="cutover-line-warning" type="warning" size="small" effect="light" :title="$t('cutover.list.unmatchedLinesHint')">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 10 18H2Z"/><path d="M12 9v4m0 4h.01"/></svg>
                   <span>{{ $t('cutover.list.unmatchedLines', { count: row.unmatched_line_count }) }}</span>
                 </ui-tag>
@@ -2561,15 +2561,45 @@ const TaskDetailPanel = defineComponent({
     }
 
     async function resolveReport(report, resolution) {
+      let note;
       try {
-        await NocDialog.confirm('请先在综调系统核对实际提交结果。此操作只修正本地记录；标记失败后将允许重新上报。', '人工核对上报结果', {type: 'warning'});
+        note = await NocDialog.prompt(tt('manualCutover.reportHint'), resolution === 'success' ? tt('manualCutover.markReported') : '核对后标记失败', {inputPlaceholder: tt('manualCutover.reason'), validationMessage: tt('manualCutover.required'), confirmButtonText: tt('manualCutover.confirm'), cancelButtonText: tt('common.cancel')});
       } catch { return; }
       await runAction(async () => {
         await requestFull(`/api/cutover/reports/${report.id}/resolve`, {method: 'POST', body: JSON.stringify({
-          resolution, note: resolution === 'success' ? '已在综调确认提交成功' : '已在综调确认未提交成功，可重新上报'})});
+          resolution, note})});
         const task = await requestJson(`/api/cutover/tasks/${localTask.value.id}`);
         await initFromTask(task);
+        activeReport.value = (task.reports || []).find(item => item.id === report.id) || null;
         emit('changed', task);
+        NocMessage.success(tt('manualCutover.resolved'));
+        await refreshPortalStatus();
+      });
+    }
+
+    function reportSummaryText(value) {
+      return String(value || '').split(/[；;]\s*失败截图[：:]/)[0];
+    }
+
+    function canUndoReport(report) {
+      return canOperate.value && report.id === localTask.value.reports?.[0]?.id &&
+        report.result?.resolved_by && ['failed', 'interrupted'].includes(report.result?.original_status);
+    }
+
+    async function undoReport(report) {
+      let note;
+      try { note = await NocDialog.prompt(tt('manualCutover.undoReportHint'), tt('manualCutover.undoReport'), {
+        inputPlaceholder: tt('manualCutover.reason'), validationMessage: tt('manualCutover.required'),
+        confirmButtonText: tt('manualCutover.confirm'), cancelButtonText: tt('common.cancel')}); }
+      catch { return; }
+      await runAction(async () => {
+        await requestFull(`/api/cutover/reports/${report.id}/resolve/undo`, {method:'POST',
+          body:JSON.stringify({note, expected_at:report.result.resolved_at})});
+        const task = await requestJson(`/api/cutover/tasks/${localTask.value.id}`);
+        await initFromTask(task);
+        activeReport.value = task.reports.find(item => item.id === report.id) || null;
+        emit('changed', task);
+        NocMessage.success(tt('manualCutover.undone'));
         await refreshPortalStatus();
       });
     }
@@ -2580,7 +2610,8 @@ const TaskDetailPanel = defineComponent({
 
     // 按钮禁用规则与旧版一致
     const canOperate = computed(() => canOperateMailbox(localTask.value.email?.receiver));
-    const saveDisabled = computed(() => !canOperate.value || busy.value || localTask.value.status === "reporting");
+    const taskCompleted = computed(() => localTask.value.status === 'completed');
+    const saveDisabled = computed(() => !canOperate.value || taskCompleted.value || busy.value || localTask.value.status === "reporting");
     const confirmDisabled = computed(() => !canOperate.value || busy.value || localTask.value.status !== "draft" || formDirty.value);
     const reportDisabled = computed(() => {
       const status = localTask.value.status;
@@ -2645,8 +2676,8 @@ const TaskDetailPanel = defineComponent({
       isBackboneSystemField, isBackboneConfirmationField, backboneEnumOptions,
       handleBackboneEnumChange,
       saveEdit, switchType, confirmTask, reportTask, downloadExcel, resolveReport,
-      canControlReport, changeReportPause, openReportLogin,
-      saveDisabled, confirmDisabled, reportDisabled, excelDisabled,
+      canControlReport, changeReportPause, openReportLogin, undoReport, canUndoReport, reportSummaryText,
+      saveDisabled, confirmDisabled, reportDisabled, excelDisabled, taskCompleted,
       reportImageUrls, reportImageLoadingKeys, reportProgressVisible, activeReport, activeReportSteps,
       activeReportInProgress, reportProgressError, reportStatusType, reportStatusText,
       statusTagType, statusText, lineTypeText, taskLineCount,
@@ -2772,7 +2803,7 @@ const TaskDetailPanel = defineComponent({
       <div class="task-type-switch">
         <span class="muted">{{ $t('cutover.task.fillTypeLabel') }}</span>
         <ui-radio-group class="task-type-options" role="radiogroup" :name="'cutover-line-type-' + localTask.id"
-                        :aria-label="$t('cutover.task.fillTypeLabel')" :model-value="localTask.line_type" :disabled="!canOperate || localTask.status === 'reporting'"
+                        :aria-label="$t('cutover.task.fillTypeLabel')" :model-value="localTask.line_type" :disabled="!canOperate || taskCompleted || localTask.status === 'reporting'"
                         @change="switchType">
           <ui-radio-button value="customer"><span class="task-type-label"><ui-icon aria-hidden="true"><component :is="icons.Check"></component></ui-icon>{{ $t('cutover.task.fillCustomer') }}</span></ui-radio-button>
           <ui-radio-button value="backbone"><span class="task-type-label"><ui-icon aria-hidden="true"><component :is="icons.Check"></component></ui-icon>{{ $t('cutover.task.fillBackbone') }}</span></ui-radio-button>
@@ -2793,7 +2824,7 @@ const TaskDetailPanel = defineComponent({
         <div class="block-section">
           <div class="block-head">
             <span>{{ $t('cutover.task.circuitSheet') }}</span>
-            <ui-button size="small" type="primary" plain class="task-toolbar-button" :icon="icons.Plus" @click="addSheetRow('circuit')">{{ $t('cutover.task.addRow') }}</ui-button>
+            <ui-button size="small" type="primary" plain class="task-toolbar-button" :icon="icons.Plus" :disabled="taskCompleted" @click="addSheetRow('circuit')">{{ $t('cutover.task.addRow') }}</ui-button>
           </div>
           <p class="field-hint">{{ $t('cutover.task.sheetHint') }}</p>
           <div class="sheet-table-wrap">
@@ -2812,17 +2843,17 @@ const TaskDetailPanel = defineComponent({
                 </tr>
                 <tr v-for="(row, rowIndex) in circuitRows" :key="rowIndex">
                   <td v-for="column in circuitColumns" :key="column" :class="customerColumnClass(column)">
-                    <ui-select v-if="customerEnumOptions(column, row)"
+                    <ui-select :disabled="taskCompleted" v-if="customerEnumOptions(column, row)"
                                v-model="row[column]" size="small" :aria-label="column" style="width: 100%"
                                :filterable="column === '预计影响客户业务时长'"
                                :allow-create="column === '预计影响客户业务时长'" default-first-option>
                       <ui-option v-for="option in customerEnumOptions(column, row)" :key="option"
                                  :label="option" :value="option"></ui-option>
                     </ui-select>
-                    <ui-input v-else v-model="row[column]" size="small" :aria-label="column"></ui-input>
+                    <ui-input :disabled="taskCompleted" v-else v-model="row[column]" size="small" :aria-label="column"></ui-input>
                   </td>
                   <td>
-                    <ui-action type="danger" @click="removeSheetRow('circuit', rowIndex)" icon="Delete" :label="$t('common.delete')"></ui-action>
+                    <ui-action type="danger" :disabled="taskCompleted" @click="removeSheetRow('circuit', rowIndex)" icon="Delete" :label="$t('common.delete')"></ui-action>
                   </td>
                 </tr>
               </tbody>
@@ -2833,7 +2864,7 @@ const TaskDetailPanel = defineComponent({
         <div class="block-section">
           <div class="block-head">
             <span>{{ $t('cutover.task.reasonSheet') }}</span>
-            <ui-button size="small" type="primary" plain class="task-toolbar-button" :icon="icons.Plus" @click="addSheetRow('reason')">{{ $t('cutover.task.addRow') }}</ui-button>
+            <ui-button size="small" type="primary" plain class="task-toolbar-button" :icon="icons.Plus" :disabled="taskCompleted" @click="addSheetRow('reason')">{{ $t('cutover.task.addRow') }}</ui-button>
           </div>
           <div class="sheet-table-wrap">
             <table class="sheet-table">
@@ -2849,10 +2880,10 @@ const TaskDetailPanel = defineComponent({
                 </tr>
                 <tr v-for="(row, rowIndex) in reasonRows" :key="rowIndex">
                   <td v-for="column in reasonColumns" :key="column">
-                    <ui-input v-model="row[column]" size="small"></ui-input>
+                    <ui-input :disabled="taskCompleted" v-model="row[column]" size="small"></ui-input>
                   </td>
                   <td>
-                    <ui-action type="danger" @click="removeSheetRow('reason', rowIndex)" icon="Delete" :label="$t('common.delete')"></ui-action>
+                    <ui-action type="danger" :disabled="taskCompleted" @click="removeSheetRow('reason', rowIndex)" icon="Delete" :label="$t('common.delete')"></ui-action>
                   </td>
                 </tr>
               </tbody>
@@ -2865,7 +2896,7 @@ const TaskDetailPanel = defineComponent({
       <div v-else class="block-section">
         <div class="block-head">
           <span>{{ $t('cutover.task.backboneForm') }}</span>
-          <ui-button size="small" type="primary" plain class="task-toolbar-button" :icon="icons.Plus" @click="addBackboneCard">{{ $t('cutover.task.addBackbone') }}</ui-button>
+          <ui-button size="small" type="primary" plain class="task-toolbar-button" :icon="icons.Plus" :disabled="taskCompleted" @click="addBackboneCard">{{ $t('cutover.task.addBackbone') }}</ui-button>
         </div>
         <p class="field-hint">{{ $t('cutover.task.backboneHint') }}</p>
         <p v-if="!backboneCards.length" class="empty-inline">{{ $t('cutover.task.backboneEmpty') }}</p>
@@ -2878,7 +2909,7 @@ const TaskDetailPanel = defineComponent({
                   <ui-button quaternary size="small" class="task-toolbar-button" :icon="icons.ArrowDown" @click="expandAllBackboneSections">{{ $t('cutover.task.expandAll') }}</ui-button>
                   <ui-button quaternary size="small" class="task-toolbar-button" :icon="icons.ArrowUp" @click="collapseAllBackboneSections">{{ $t('cutover.task.collapseAll') }}</ui-button>
                 </div>
-                <ui-button size="small" type="danger" plain class="task-toolbar-button" :icon="icons.Delete" @click="removeBackboneCard(cardIndex)">{{ $t('common.delete') }}</ui-button>
+                <ui-button size="small" type="danger" plain class="task-toolbar-button" :icon="icons.Delete" :disabled="taskCompleted" @click="removeBackboneCard(cardIndex)">{{ $t('common.delete') }}</ui-button>
               </div>
             </div>
             <ui-collapse class="backbone-collapse"
@@ -2894,7 +2925,7 @@ const TaskDetailPanel = defineComponent({
                     <span>{{ fieldName }}</span>
                     <div v-if="sectionName === '基本信息' && fieldName === '中断类型'"
                          class="backbone-interruption-control">
-                      <ui-select v-model="card[sectionName][fieldName]" class="backbone-enum-select"
+                      <ui-select :disabled="taskCompleted" v-model="card[sectionName][fieldName]" class="backbone-enum-select"
                                  :aria-label="fieldName"
                                  @change="(value) => handleBackboneEnumChange(card, cardIndex, sectionName, fieldName, value)">
                         <ui-option v-for="option in backboneEnumOptions(fieldName)"
@@ -2902,34 +2933,34 @@ const TaskDetailPanel = defineComponent({
                       </ui-select>
                       <div v-if="card[sectionName]['中断类型'] === '中断'"
                            class="backbone-interruption-duration">
-                        <input v-model="card[sectionName]['中断时间 (分钟)']"
+                        <input :disabled="taskCompleted" v-model="card[sectionName]['中断时间 (分钟)']"
                                class="backbone-input" inputmode="numeric" autocomplete="off"
                                aria-label="中断时间 (分钟)">
                         <span class="backbone-interruption-unit" aria-hidden="true">分钟</span>
                       </div>
                     </div>
-                    <ui-select v-else-if="isBackboneSystemField(sectionName, fieldName)"
+                    <ui-select :disabled="taskCompleted" v-else-if="isBackboneSystemField(sectionName, fieldName)"
                                v-model="card[sectionName][fieldName]" multiple filterable allow-create
                                default-first-option class="backbone-system-select"
                                placeholder="输入系统名称后回车">
                       <ui-option v-for="systemName in card[sectionName][fieldName]"
                                  :key="systemName" :label="systemName" :value="systemName"></ui-option>
                     </ui-select>
-                    <ui-checkbox v-else-if="isBackboneConfirmationField(fieldName)"
+                    <ui-checkbox :disabled="taskCompleted" v-else-if="isBackboneConfirmationField(fieldName)"
                                  v-model="card[sectionName][fieldName]"
                                  true-label="是" false-label="否" class="backbone-confirmation-checkbox">
                       {{ card[sectionName][fieldName] === '是' ? '已选中' : '未选中' }}
                     </ui-checkbox>
-                    <ui-select v-else-if="backboneEnumOptions(fieldName)"
+                    <ui-select :disabled="taskCompleted" v-else-if="backboneEnumOptions(fieldName)"
                                v-model="card[sectionName][fieldName]" class="backbone-enum-select"
                                :aria-label="fieldName"
                                @change="(value) => handleBackboneEnumChange(card, cardIndex, sectionName, fieldName, value)">
                       <ui-option v-for="option in backboneEnumOptions(fieldName)"
                                  :key="option" :label="option" :value="option"></ui-option>
                     </ui-select>
-                    <textarea v-else-if="controlKind(cardIndex, sectionName, fieldName) === 'textarea'"
+                    <textarea :disabled="taskCompleted" v-else-if="controlKind(cardIndex, sectionName, fieldName) === 'textarea'"
                               v-model="card[sectionName][fieldName]" :rows="2" class="backbone-input"></textarea>
-                    <input v-else v-model="card[sectionName][fieldName]" class="backbone-input">
+                    <input :disabled="taskCompleted" v-else v-model="card[sectionName][fieldName]" class="backbone-input">
                   </label>
                 </div>
                 </ui-collapse-item>
@@ -2960,17 +2991,32 @@ const TaskDetailPanel = defineComponent({
                   <span>{{ $t('cutover.task.portalTaskNumber') }}</span>
                   <strong class="mono">{{ row.result.portal_task_number }}</strong>
                 </div>
-                <p v-if="row.result && row.result.error" class="report-error">{{ row.result.error }}</p>
-                <div v-if="canControlReport(row)" class="panel-actions">
-                  <ui-button v-if="['pending','waiting_login'].includes(row.status)" size="small" :loading="busy"
-                             @click="changeReportPause(row, true)">{{ $t('cutover.task.pauseReport') }}</ui-button>
-                  <ui-button v-if="row.status === 'paused'" size="small" :loading="busy"
-                             @click="changeReportPause(row, false)">{{ $t('cutover.task.resumeReport') }}</ui-button>
+                <div class="report-review-bar">
+                  <div class="report-review-summary">
+                    <strong>{{ row.result?.resolved_by ? $t('manualCutover.reviewed') : $t('manualCutover.errorSummary') }}</strong>
+                    <p v-if="row.result?.error" class="report-error">{{ reportSummaryText(row.result.error) }}</p>
+                    <p v-else class="muted">{{ reportSummaryText(row.result?.note) }}</p>
+                  </div>
+                  <div v-if="canOperate" class="report-review-actions">
+                    <ui-button v-if="row.status === 'failed' && row.id === localTask.reports[0]?.id" size="small" type="primary" :icon="icons.EditPen" :loading="busy" @click="resolveReport(row, 'success')">{{ $t('manualCutover.markReported') }}</ui-button>
+                    <ui-button v-if="canUndoReport(row)" size="small" :icon="icons.RefreshLeft" :loading="busy" @click="undoReport(row)">{{ $t('manualCutover.undoReport') }}</ui-button>
+                    <template v-if="canControlReport(row)">
+                      <ui-button v-if="['pending','waiting_login'].includes(row.status)" size="small" :loading="busy" @click="changeReportPause(row, true)">{{ $t('cutover.task.pauseReport') }}</ui-button>
+                      <ui-button v-if="row.status === 'paused'" size="small" :loading="busy" @click="changeReportPause(row, false)">{{ $t('cutover.task.resumeReport') }}</ui-button>
+                    </template>
+                    <template v-if="['pending','running','interrupted'].includes(row.status)">
+                      <ui-button size="small" :loading="busy" @click="resolveReport(row, 'success')">核对后标记成功</ui-button>
+                      <ui-button size="small" :loading="busy" @click="resolveReport(row, 'failed')">核对后标记失败</ui-button>
+                    </template>
+                  </div>
                 </div>
-                <div v-if="canOperate && ['pending', 'running', 'interrupted'].includes(row.status)">
-                  <ui-button size="small" @click="resolveReport(row, 'success')">核对后标记成功</ui-button>
-                  <ui-button size="small" @click="resolveReport(row, 'failed')">核对后标记失败</ui-button>
+                <div v-if="row.result?.resolved_by" class="manual-report-audit">
+                  <div class="manual-audit-heading"><span class="manual-mark-badge"><ui-icon><component :is="icons.User" /></ui-icon>{{ $t('manualCutover.manualBadge') }}</span><strong>{{ row.result.resolved_by }}</strong><time>{{ row.result.resolved_at?.slice(0,19).replace('T',' ') }}</time></div>
+                  <p>{{ row.result.note }}</p>
+                  <details v-if="row.result.original_result"><summary>{{ $t('manualCutover.original') }}</summary><pre class="detail-content">{{ JSON.stringify(row.result.original_result, null, 2) }}</pre></details>
                 </div>
+                <details v-if="row.result?.error" class="report-error-details"><summary>{{ $t('manualCutover.errorDetails') }}</summary><pre>{{ row.result.error }}</pre></details>
+                <details v-if="row.manual_history?.length" class="manual-action-history"><summary>{{ $t('manualCutover.history') }} · {{ row.manual_history.length }}</summary><ol><li v-for="(event, index) in row.manual_history" :key="index"><div><strong>{{ $t('manualCutover.actions.' + event.action) }}</strong><span>{{ event.by }}</span><time>{{ event.at?.slice(0,19).replace('T',' ') }}</time></div><p>{{ event.note }}</p></li></ol></details>
                 <report-screenshot-gallery v-if="row.result && row.result.operation_log && row.result.operation_log.length"
                                            :report-id="row.id" :steps="row.result.operation_log"
                                            :image-urls="reportImageUrls" :loading-keys="reportImageLoadingKeys"/>
@@ -3005,9 +3051,11 @@ const TaskDetailPanel = defineComponent({
                 <span class="report-account"><span>工作台用户</span><strong>{{ row.result.execution_identity.workbench_username || '未记录' }}</strong></span>
               </div>
               <div v-else class="muted">历史记录 · 未记录执行账号</div>
-              <span class="muted report-result-note">
-                {{ (row.result && (row.result.note || row.result.error || row.result.portal_task_number)) || '-' }}
-              </span>
+              <div v-if="row.result?.resolved_by" class="report-manual-summary">
+                <div><span class="manual-mark-badge"><ui-icon><component :is="icons.User" /></ui-icon>{{ $t('manualCutover.manualBadge') }}</span><strong>{{ row.result.resolved_by }}</strong><time>{{ row.result.resolved_at?.slice(0,19).replace('T',' ') }}</time></div>
+                <p>{{ row.result.note?.replace(/^人工核对：/, '') }}</p>
+              </div>
+              <span v-else class="muted report-result-note">{{ reportSummaryText(row.result?.note || row.result?.error || row.result?.portal_task_number) || '-' }}</span>
             </template>
           </ui-table-column>
           <ui-table-column :label="$t('common.time')" width="170">
@@ -3061,6 +3109,40 @@ const ViewCutoverEmailDetail = defineComponent({
     const editingLineBindings = reactive({});
     const workbench = useCutoverWorkbench({email, extractionDraft, savedExtractionDraft, extractionBusy,
       replyBusy, apiForwardBusy, deleteBusy, saveExtraction});
+    async function completeEmail() {
+      if (taskFormDirty.value || extractionDraft.value !== savedExtractionDraft.value) {
+        NocMessage.warning(tt('cw.editsUnsaved')); return;
+      }
+      let note;
+      try { note = await NocDialog.prompt(tt('manualCutover.completeHint'), tt('manualCutover.complete'), {
+        inputPlaceholder: tt('manualCutover.reason'), validationMessage: tt('manualCutover.required'),
+        confirmButtonText: tt('manualCutover.confirm'), cancelButtonText: tt('common.cancel')}); }
+      catch { return; }
+      workbench.completionBusy.value = true;
+      try {
+        await requestFull(`/api/cutover/emails/${email.value.id}/complete`, {method: 'POST', body: JSON.stringify({note})});
+        detailTask.value = null;
+        await loadDetail();
+        NocMessage.success(tt('manualCutover.completed'));
+      } catch (error) { NocMessage.error(error.message); }
+      finally { workbench.completionBusy.value = false; }
+    }
+    async function undoEmailCompletion() {
+      const expected_at = email.value.manual_completion.at;
+      let note;
+      try { note = await NocDialog.prompt(tt('manualCutover.undoCompleteHint'), tt('manualCutover.undoComplete'), {
+        inputPlaceholder: tt('manualCutover.reason'), validationMessage: tt('manualCutover.required'),
+        confirmButtonText: tt('manualCutover.confirm'), cancelButtonText: tt('common.cancel')}); }
+      catch { return; }
+      workbench.completionBusy.value = true;
+      try {
+        await requestFull(`/api/cutover/emails/${email.value.id}/complete/undo`, {method:'POST',body:JSON.stringify({note, expected_at})});
+        detailTask.value = null;
+        await loadDetail();
+        NocMessage.success(tt('manualCutover.undone'));
+      } catch (error) { NocMessage.error(error.message); }
+      finally { workbench.completionBusy.value = false; }
+    }
     const requestedTaskId = ref(null);
     const taskFormDirty = ref(false);
     let taskRequest = 0;
@@ -3568,7 +3650,7 @@ const ViewCutoverEmailDetail = defineComponent({
       readStateBusy, toggleReadState, deleteBusy, deleteEmail,
       extractResultBlocks, extractionDraft, extractionBusy, manualBindings, manualBindingTypes, editingLineBindings, isAutomaticLineMatch, toggleLineBindingEditor, selectCircuitCandidate, hasSavedManualBinding, matchedTypeCounts, saveExtraction, bindLine, regenerateTasks,
       loadDetail, onIframeLoad, toggleTask, closeTask, onExpandChange, onTaskChanged,
-      statusTagType, statusText, mailboxLabel,
+      statusTagType, statusText, mailboxLabel, completeEmail, undoEmailCompletion,
     };
   },
   template: CUTOVER_WORKBENCH_TEMPLATE,
@@ -3599,6 +3681,7 @@ const CIRCUIT_PAGE_SIZE = 20;
 
 const ViewCircuits = defineComponent({
   name: "ViewCircuits",
+  components: { CircuitImportMenu: naive.NDropdown },
   setup() {
     const rows = ref([]);
     const total = ref(0);
@@ -3766,118 +3849,10 @@ const ViewCircuits = defineComponent({
     const suggestLineStatus = makeSuggest(() => options.line_statuses);
 
     // ---------- 导入 ----------
-    const importDialogVisible = ref(false);
-    const importFile = ref(null);
-    const importFileList = ref([]);
-    const importPreview = ref(null);
-    const parsing = ref(false);
-    const importing = ref(false);
-
-    function openImportDialog() {
-      importFile.value = null;
-      importFileList.value = [];
-      importPreview.value = null;
-      importDialogVisible.value = true;
-    }
-
-    function resetImportFile() {
-      importFile.value = null;
-      importFileList.value = [];
-      importPreview.value = null;
-    }
-
-    function onImportFileChange(uploadFile) {
-      if (!uploadFile.name.toLowerCase().endsWith(".xlsx")) {
-        NocMessage.warning(tt("circuits.fileInvalid"));
-        resetImportFile();
-        return;
-      }
-      importFile.value = uploadFile.raw || null;
-      importPreview.value = null;
-    }
-
-    function onImportFileRemove() {
-      importFile.value = null;
-      importPreview.value = null;
-    }
-
-    function onImportFileExceed(files) {
-      const file = (files || [])[0];
-      if (!file) {
-        return;
-      }
-      const uploadFile = { uid: Date.now(), name: file.name, raw: file };
-      onImportFileChange(uploadFile);
-      if (importFile.value) importFileList.value = [uploadFile];
-    }
-
-    async function uploadImport(confirm) {
-      if (!appStore.apiKey) {
-        throw new Error(tt("common.apiKeyRequired"));
-      }
-      if (!importFile.value) {
-        throw new Error(tt("circuits.fileRequired"));
-      }
-      const formData = new FormData();
-      formData.append("file", importFile.value);
-      if (confirm) {
-        formData.append("confirm", "true");
-      }
-      const response = await fetch("/api/circuits/import", {
-        method: "POST",
-        headers: { 'X-CSRF-Token': appStore.csrfToken },
-        body: formData,
-      });
-      const payload = await response.json();
-      if (!response.ok || payload.success === false) {
-        throw new Error(payload.message || tt("circuits.importFailed"));
-      }
-      return payload.data;
-    }
-
-    async function parseImport() {
-      parsing.value = true;
-      try {
-        importPreview.value = await uploadImport(false);
-        NocMessage.success(tt("circuits.parsedSuccess", { total: importPreview.value.total }));
-      } catch (error) {
-        importPreview.value = null;
-        NocMessage.error(error.message);
-      } finally {
-        parsing.value = false;
-      }
-    }
-
-    async function confirmImport() {
-      if (!importPreview.value) {
-        return;
-      }
-      try {
-        await NocDialog.confirm(
-          tt("circuits.importConfirmMessage", { total: importPreview.value.total }),
-          tt("circuits.importConfirmTitle"),
-          {
-            confirmButtonText: tt("circuits.confirmImport"),
-            cancelButtonText: tt("common.cancel"),
-            type: "warning",
-          },
-        );
-      } catch {
-        return;
-      }
-      importing.value = true;
-      try {
-        const result = await uploadImport(true);
-        importDialogVisible.value = false;
-        page.value = 1;
-        await loadCircuits();
-        NocMessage.success(tt("circuits.importSuccess", { total: result.total }));
-      } catch (error) {
-        NocMessage.error(error.message);
-      } finally {
-        importing.value = false;
-      }
-    }
+    const circuitImport = useCircuitImport(async () => {
+      page.value = 1;
+      await loadCircuits();
+    });
 
     function exportCircuits() {
       window.open("/api/circuits/export", "_blank");
@@ -3895,9 +3870,7 @@ const ViewCircuits = defineComponent({
       dialogVisible, saving, editingId, formRef, formAlert, form, rules,
       openDialog, saveCircuit, deleteCircuit,
       suggestSupplier, suggestLineType, suggestLineStatus,
-      importDialogVisible, importFile, importFileList, importPreview, parsing, importing,
-      openImportDialog, onImportFileChange, onImportFileRemove, onImportFileExceed,
-      parseImport, confirmImport, exportCircuits,
+      ...circuitImport, exportCircuits,
     };
   },
   template: `
@@ -3908,7 +3881,13 @@ const ViewCircuits = defineComponent({
             <h2>{{ $t('circuits.listTitle') }}</h2>
             <span class="list-total">{{ $t('common.totalItems', { total }) }}</span>
             <div class="toolbar-actions list-actions">
-              <ui-button :icon="icons.Upload" @click="openImportDialog">{{ $t('common.import') }}</ui-button>
+              <div class="circuit-import-split">
+                <ui-button :icon="icons.Upload" @click="openImportDialog('append')">{{ $t('circuits.appendImport') }}</ui-button>
+                <circuit-import-menu trigger="click" :options="[{ label: $t('circuits.replaceImport'), key: 'replace' }]" @select="openImportDialog">
+                  <ui-button :icon="icons.ArrowDown" :aria-label="$t('circuits.importOptions')"></ui-button>
+                </circuit-import-menu>
+              </div>
+              <ui-button :icon="icons.Download" :loading="downloadingTemplate" @click="downloadImportTemplate">{{ $t('circuits.downloadTemplate') }}</ui-button>
               <ui-button :icon="icons.Download" @click="exportCircuits">{{ $t('common.export') }}</ui-button>
               <ui-button type="primary" :icon="icons.Plus" @click="openDialog()">{{ $t('circuits.add') }}</ui-button>
             </div>
@@ -4026,85 +4005,87 @@ const ViewCircuits = defineComponent({
       </ui-dialog>
 
       <!-- 导入弹窗 -->
-      <ui-dialog v-model="importDialogVisible" :title="$t('circuits.importTitle')" width="820px"
-                 class="circuits-import-dialog" :close-on-click-modal="false" destroy-on-close>
-        <div class="import-hint-panel">
-          <p class="import-hint-text">{{ $t('circuits.importHint') }}</p>
-          <ui-alert type="warning" :closable="false" show-icon :title="$t('circuits.importReplaceAlert')"
-                    class="import-replace-alert"></ui-alert>
+      <ui-dialog v-model="importDialogVisible" :title="$t(importMode === 'append' ? 'circuits.appendTitle' : 'circuits.importTitle')" width="1000px"
+                 class="circuits-import-dialog" :close-on-click-modal="false" :closable="!importBusy" :close-on-esc="!importBusy" destroy-on-close>
+        <ol class="circuit-import-steps" :aria-label="$t('circuits.importProgress')">
+          <li v-for="(label, index) in ['uploadStep', 'previewStep', 'resultStep']" :key="label" :class="{ active: importStep === index + 1 }" :aria-current="importStep === index + 1 ? 'step' : undefined">
+            <span>{{ index + 1 }}</span>{{ $t('circuits.' + label) }}
+          </li>
+        </ol>
+        <div v-if="!importResult" class="import-hint-panel">
+          <div class="circuit-import-template-row">
+            <p class="import-hint-text">{{ $t('circuits.importHint') }}</p>
+            <ui-button text type="primary" :loading="downloadingTemplate" @click="downloadImportTemplate">{{ $t('circuits.downloadTemplate') }}</ui-button>
+          </div>
+          <ui-alert :type="importMode === 'append' ? 'info' : 'warning'" :closable="false" show-icon
+                    :title="$t(importMode === 'append' ? 'circuits.appendHint' : 'circuits.importReplaceAlert')"></ui-alert>
         </div>
-        <ui-upload class="import-upload" drag :auto-upload="false" :limit="1" accept=".xlsx"
-                   :file-list="importFileList" :on-change="onImportFileChange"
-                   :on-remove="onImportFileRemove" :on-exceed="onImportFileExceed">
-          <ui-icon class="import-upload-icon"><UploadFilled /></ui-icon>
-          <p class="import-upload-text">{{ $t('circuits.uploadText') }}</p>
-          <p class="import-upload-sub">{{ $t('circuits.uploadFormatHint') }}</p>
-        </ui-upload>
-        <div class="import-actions">
-          <ui-button type="primary" :icon="icons.View" :loading="parsing" :disabled="!importFile" @click="parseImport">
-            {{ $t('circuits.parsePreview') }}
-          </ui-button>
-        </div>
-        <div v-if="!importPreview" class="import-empty">
-          <ui-icon class="import-empty-icon"><Document /></ui-icon>
+        <template v-if="!importResult">
+          <ui-upload class="import-upload" :class="{ 'is-previewed': importPreview }" drag :auto-upload="false" :limit="1" accept=".xlsx" :disabled="importBusy"
+                     :file-list="importFileList" :on-change="onImportFileChange"
+                     :on-remove="onImportFileRemove" :on-exceed="onImportFileExceed">
+            <template v-if="!importPreview">
+              <ui-icon class="import-upload-icon"><UploadFilled /></ui-icon>
+              <p class="import-upload-text">{{ $t('circuits.uploadText') }}</p>
+              <p class="import-upload-sub">{{ $t('circuits.importFileLimit') }}</p>
+            </template>
+            <p v-else class="import-upload-text">{{ $t('circuits.changeFile') }}</p>
+          </ui-upload>
+          <div v-if="!importPreview" class="import-actions">
+            <ui-button type="primary" :icon="icons.View" :loading="parsing" :disabled="!importFile || importBusy" @click="parseImport">{{ $t('circuits.parsePreview') }}</ui-button>
+          </div>
+        </template>
+        <div v-if="!importData" class="import-empty">
           <p>{{ importFile ? $t('circuits.notParsed') : $t('circuits.noFile') }}</p>
           <span>{{ importFile ? $t('circuits.notParsedHint') : $t('circuits.noFileHint') }}</span>
         </div>
         <template v-else>
-          <div class="import-summary">
-            <div class="import-summary-item">
-              <span class="import-summary-value">{{ importPreview.total }}</span>
-              <span class="import-summary-label">{{ $t('circuits.summaryTotal') }}</span>
-            </div>
-            <div class="import-summary-item">
-              <span class="import-summary-value">{{ (importPreview.rows || []).length }}</span>
-              <span class="import-summary-label">{{ $t('circuits.summaryPreview') }}</span>
-            </div>
-            <div v-if="(importPreview.warnings || []).length" class="import-summary-item">
-              <span class="import-summary-value import-summary-warn">{{ (importPreview.warnings || []).length }}</span>
-              <span class="import-summary-label">{{ $t('circuits.summaryWarnings') }}</span>
-            </div>
+          <ui-alert v-if="importResult" type="success" :closable="false" show-icon
+                    :title="$t('circuits.appendSuccess', { inserted: importResult.inserted, skipped: importResult.counts.skipped })"></ui-alert>
+          <div class="import-summary" aria-live="polite">
+            <div class="import-summary-item"><span class="import-summary-value">{{ importData.total }}</span><span class="import-summary-label">{{ $t('circuits.summaryTotal') }}</span></div>
+            <template v-if="importMode === 'append'">
+              <div class="import-summary-item"><span class="import-summary-value">{{ importData.counts.new }}</span><span class="import-summary-label">{{ $t(importResult ? 'circuits.insertedCount' : 'circuits.newCount') }}</span></div>
+              <div class="import-summary-item"><span class="import-summary-value">{{ importData.counts.skipped }}</span><span class="import-summary-label">{{ $t('circuits.skippedCount') }}</span></div>
+              <div class="import-summary-item"><span class="import-summary-value">{{ importData.counts.errors }}</span><span class="import-summary-label">{{ $t('circuits.errorCount') }}</span></div>
+              <div class="import-summary-item"><span class="import-summary-value">{{ importData.counts.review }}</span><span class="import-summary-label">{{ $t('circuits.reviewCount') }}</span></div>
+            </template>
           </div>
-          <div v-if="(importPreview.warnings || []).length" class="import-warnings">
-            <p v-for="(warning, index) in importPreview.warnings" :key="index" class="warn-text">{{ warning }}</p>
+          <ui-alert v-if="importMode === 'append' && importData.counts.errors" type="error" :closable="false" show-icon :title="$t('circuits.errorsBlockImport')"></ui-alert>
+          <ui-alert v-else-if="importMode === 'append' && !importData.counts.new && !importResult" type="info" :closable="false" :title="$t('circuits.noNewRows')"></ui-alert>
+          <div v-if="(importData.warnings || []).length" class="import-warnings">
+            <p v-for="(warning, index) in importData.warnings" :key="index" class="warn-text">{{ warning }}</p>
           </div>
-          <ui-table :data="importPreview.rows || []" size="small" border max-height="360">
-            <ui-table-column prop="supplier" label="Supplier" min-width="100">
-              <template #default="{ row }">
-                <span>{{ row.supplier || '-' }}</span>
-              </template>
+          <div v-if="importMode === 'append'" class="circuit-import-filters">
+            <ui-select v-model="importFilter" :aria-label="$t('circuits.resultFilter')">
+              <ui-option v-for="key in ['all', 'new', 'skipped', 'error', 'review']" :key="key" :value="key" :label="$t('circuits.filter_' + key)"></ui-option>
+            </ui-select>
+            <span class="muted">{{ $t('circuits.previewRowsHint', { total: importFilteredRows.length }) }}</span>
+          </div>
+          <ui-table :data="importVisibleRows" size="small" max-height="360" :row-key="importMode === 'append' ? 'row_number' : undefined">
+            <ui-table-column v-if="importMode === 'append'" prop="row_number" :label="$t('circuits.sourceRow')" width="64"></ui-table-column>
+            <ui-table-column prop="supplier" label="Supplier" width="88"></ui-table-column>
+            <ui-table-column label="Supplier Circuit ID" min-width="150"><template #default="{ row }"><span class="mono pre-wrap">{{ row.supplier_circuit_id || '—' }}</span></template></ui-table-column>
+            <ui-table-column label="Circuit ID" min-width="150"><template #default="{ row }"><span class="mono pre-wrap">{{ row.circuit_id || '—' }}</span></template></ui-table-column>
+            <ui-table-column :label="$t('circuits.lineType')" width="80" prop="line_type"></ui-table-column>
+            <ui-table-column :label="$t('circuits.lineStatus')" width="88" prop="line_status"></ui-table-column>
+            <ui-table-column v-if="importMode === 'append'" :label="$t('circuits.rowResult')" width="102">
+              <template #default="{ row }"><ui-tag :type="importStatusType(row)">{{ $t('circuits.status_' + row.status) }}</ui-tag></template>
             </ui-table-column>
-            <ui-table-column label="Supplier Circuit ID" min-width="180">
-              <template #default="{ row }">
-                <span class="mono pre-wrap">{{ row.supplier_circuit_id || '-' }}</span>
-              </template>
+            <ui-table-column v-if="importMode === 'append'" :label="$t('circuits.rowReason')" min-width="210">
+              <template #default="{ row }"><span class="pre-wrap">{{ row.reason || '—' }}</span></template>
             </ui-table-column>
-            <ui-table-column label="Circuit ID" min-width="180">
-              <template #default="{ row }">
-                <span class="mono pre-wrap">{{ row.circuit_id || '-' }}</span>
-              </template>
-            </ui-table-column>
-            <ui-table-column :label="$t('circuits.lineType')" width="90">
-              <template #default="{ row }">
-                <span>{{ row.line_type || '-' }}</span>
-              </template>
-            </ui-table-column>
-            <ui-table-column :label="$t('circuits.lineStatus')" width="100">
-              <template #default="{ row }">
-                <span>{{ row.line_status || '-' }}</span>
-              </template>
-            </ui-table-column>
-            <ui-table-column :label="$t('common.remark')" min-width="140">
-              <template #default="{ row }">
-                <span class="muted pre-wrap">{{ row.remark || '-' }}</span>
-              </template>
-            </ui-table-column>
+            <ui-table-column :label="$t('common.remark')" min-width="140"><template #default="{ row }"><span class="muted pre-wrap">{{ row.remark || '—' }}</span></template></ui-table-column>
           </ui-table>
+          <div v-if="importFilteredRows.length > 50" class="pagination-bar">
+            <ui-pagination v-model:current-page="importPage" :page-size="50" :total="importFilteredRows.length" layout="prev, pager, next"></ui-pagination>
+          </div>
         </template>
         <template #footer>
-          <ui-button @click="importDialogVisible = false">{{ $t('common.cancel') }}</ui-button>
-          <ui-button type="danger" :loading="importing" :disabled="!importPreview" @click="confirmImport">
-            {{ $t('circuits.confirmImport') }}
+          <ui-button :disabled="importBusy" @click="importDialogVisible = false">{{ $t(importResult ? 'common.close' : 'common.cancel') }}</ui-button>
+          <ui-button v-if="importResult" type="primary" :icon="icons.Download" @click="downloadImportResult">{{ $t('circuits.downloadResult') }}</ui-button>
+          <ui-button v-else :type="importMode === 'append' ? 'primary' : 'danger'" :loading="importing" :disabled="!canConfirmImport" @click="confirmImport">
+            {{ importMode === 'append' ? $t('circuits.confirmAppend', { total: importPreview?.counts?.new || 0 }) : $t('circuits.confirmImport') }}
           </ui-button>
         </template>
       </ui-dialog>

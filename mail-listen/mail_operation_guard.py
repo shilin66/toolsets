@@ -41,7 +41,7 @@ def request_email_record_id(db, request):
 
 
 @contextmanager
-def guard_mail_operation(db, record_id, *, deleting=False, forwarding=False, reporting=False):
+def guard_mail_operation(db, record_id, *, deleting=False, forwarding=False, reporting=False, allow_completed=False):
     if record_id is None:
         yield
         return
@@ -50,6 +50,8 @@ def guard_mail_operation(db, record_id, *, deleting=False, forwarding=False, rep
     if forwarding:
         if db.get_mail_deletion(record_id):
             raise MailOperationConflict('该邮件正在删除或已删除，无法继续处理')
+        if (db.get_email_record_by_id(record_id) or {}).get('manual_completion'):
+            raise MailOperationConflict('该割接任务已人工完成，不能继续修改或上报')
         yield
         return
     key = (str(Path(db.db_path).resolve()), record_id)
@@ -69,6 +71,9 @@ def guard_mail_operation(db, record_id, *, deleting=False, forwarding=False, rep
                 if not deleting and db.get_mail_deletion(record_id):
                     raise MailOperationConflict('该邮件正在删除或已删除，无法继续处理')
                 with db.get_connection() as conn:
+                    if not deleting and not allow_completed and conn.execute(
+                            'SELECT 1 FROM email_records WHERE id=? AND manual_completion IS NOT NULL', (record_id,)).fetchone():
+                        raise MailOperationConflict('该割接任务已人工完成，不能继续修改或上报')
                     busy = conn.execute("SELECT 1 FROM cutover_tasks WHERE email_records_id=? AND status='reporting'", (record_id,)).fetchone()
                 if busy and not deleting and not reporting:
                     raise MailOperationConflict('该邮件存在正在上报或待核对的任务，暂时不能修改')

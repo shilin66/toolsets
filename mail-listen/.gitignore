@@ -1,0 +1,16 @@
+# Playwright 会话含认证 Cookie，不得提交。
+data/
+logs/
+.*
+!.gitignore
+*.png
+*.tar
+*.md
+!manual/*.md
+!manual/images/*.png
+*.pdf
+assets
+deliverables
+docs
+outputs
+static/design

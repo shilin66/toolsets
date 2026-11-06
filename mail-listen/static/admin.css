@@ -159,6 +159,11 @@ body {
 .sidebar-toggle { width: 32px; height: 32px; color: var(--nav-text); border-radius: 6px; flex-shrink: 0; }
 .sidebar-toggle:hover { color: var(--brand); background: var(--nav-hover); }
 .sidebar-toggle .n-button__content > .noc-icon { margin: 0; font-size: 18px; }
+.sidebar-manual { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 48px; flex-shrink: 0; border-radius: 8px; color: var(--nav-text); text-decoration: none; font-size: 11px; }
+.sidebar-manual .noc-icon { font-size: 22px; }
+.sidebar-manual:hover { color: var(--nav-text-active); background: var(--nav-hover); }
+.sidebar-manual:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.sidebar.is-collapsed .sidebar-manual { min-height: 40px; }
 .sidebar-account { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: auto; padding: 12px 0 0; border-top: 1px solid var(--line); flex-shrink: 0; }
 .sidebar-account-avatar { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; background: var(--nav-hover); color: var(--nav-text); }
 .sidebar-account-copy { min-width: 0; max-width: 100%; display: grid; gap: 2px; text-align: center; font-size: 11px; }
@@ -3079,3 +3084,44 @@ body { min-width: 1280px; }
 .review-query-options .review-query-row { display:inline-flex; margin:8px 20px 4px 0; }
 .review-query-options .review-add-identifier { display:inline-flex; }
 .review-lines-table th .n-button { font-size:12px; color:var(--brand); }
+
+/* Circuit import uses the same desktop toolbar and modal primitives. */
+.circuit-import-split { display: inline-flex; }
+.circuit-import-split > .n-button:first-child { border-radius: 6px 0 0 6px; }
+.circuit-import-split > .n-button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+.circuit-import-steps { display: flex; gap: 32px; list-style: none; margin: 0 0 20px; padding: 0; color: var(--muted); }
+.circuit-import-steps li { display: flex; align-items: center; gap: 8px; }
+.circuit-import-steps li > span { display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--line); border-radius: 50%; }
+.circuit-import-steps li.active { color: var(--brand-pressed); }
+.circuit-import-steps li.active > span { border-color: var(--brand-line); background: var(--brand-soft); }
+.circuit-import-template-row { display: flex; align-items: flex-start; gap: 16px; justify-content: space-between; }
+.circuit-import-template-row .import-hint-text { flex: 1; }
+.circuit-import-filters { display: flex; align-items: center; gap: 16px; margin: 16px 0 12px; }
+.circuit-import-filters .n-select { width: 180px; }
+.circuits-import-dialog .n-alert { margin-bottom: 12px; }
+.circuits-import-dialog .pre-wrap { overflow-wrap: anywhere; }
+
+.circuits-import-dialog .import-upload.is-previewed .n-upload-dragger { padding: 8px 16px; }
+
+/* Report review: compact controls, explicit human attribution, preserved diagnostics. */
+.report-review-bar { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+.report-review-summary { min-width:0; flex:1; }
+.report-review-summary > strong { font-size:12px; color:var(--text-secondary); }
+.report-review-summary p { margin:6px 0 0; font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
+.report-review-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:8px; flex:0 0 auto; }
+.report-review-actions:empty { display:none; }
+.report-review-actions .n-button { width:auto; flex:none; }
+.manual-mark-badge { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--line); border-radius:4px; padding:2px 6px; font-size:11px; font-weight:600; color:var(--brand); background:var(--tag-info-bg); white-space:nowrap; }
+.report-manual-summary { margin-top:8px; border-left:2px solid var(--brand); padding-left:10px; }
+.report-manual-summary > div, .manual-audit-heading { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; }
+.report-manual-summary time, .manual-audit-heading time, .manual-action-history time { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.report-manual-summary p { margin:5px 0 0; color:var(--ink); font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.manual-report-audit { padding:12px 16px; border:1px solid var(--line); border-left:3px solid var(--brand); border-radius:6px; background:var(--panel); }
+.manual-report-audit > p { margin:8px 0; font-size:13px; }
+.report-error-details, .manual-action-history { font-size:12px; color:var(--text-secondary); min-width:0; }
+.report-error-details summary, .manual-action-history summary, .manual-report-audit summary { cursor:pointer; width:fit-content; }
+.report-error-details pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:240px; overflow:auto; margin:10px 0 0; padding:12px; background:var(--panel); border:1px solid var(--line); border-radius:6px; }
+.manual-action-history ol { list-style:none; padding:0 0 0 12px; margin:12px 0 0 4px; border-left:1px solid var(--line); }
+.manual-action-history li + li { margin-top:12px; }
+.manual-action-history li > div { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.manual-action-history p { margin:4px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; }

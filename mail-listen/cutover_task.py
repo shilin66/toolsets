@@ -27,6 +27,7 @@ CUTOVER_TASK_STATUS_LABELS = {
     CUTOVER_TASK_STATUS_REPORTING: '上报中',
     CUTOVER_TASK_STATUS_REPORTED: '已上报',
     CUTOVER_TASK_STATUS_REPORT_FAILED: '上报失败',
+    'completed': '已完成',
 }
 
 # 任务线路类型：每个任务只做一种线路的上报

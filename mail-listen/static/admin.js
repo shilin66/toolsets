@@ -271,6 +271,11 @@ const AdminApp = defineComponent({
             <span>{{ $t('nav.settings') }}</span>
           </ui-menu-item>
         </ui-menu>
+        <a class="sidebar-manual" href="/manual" target="_blank" rel="noopener noreferrer"
+           :title="$t('common.userManualNewTab')" :aria-label="$t('common.userManualNewTab')">
+          <ui-icon aria-hidden="true"><Reading /></ui-icon>
+          <span v-show="!appStore.menuCollapsed">{{ $t('common.userManual') }}</span>
+        </a>
         <div class="sidebar-account" :title="appStore.user.display_name + ' · ' + appStore.user.username">
           <span class="sidebar-account-avatar" aria-hidden="true"><ui-icon><User /></ui-icon></span>
           <div v-show="!appStore.menuCollapsed" class="sidebar-account-copy workbench-identity">

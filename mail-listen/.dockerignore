@@ -70,6 +70,7 @@ tests/
 # 文档
 README.md
 *.md
+!manual/*.md
 
 # 临时文件
 *.tmp

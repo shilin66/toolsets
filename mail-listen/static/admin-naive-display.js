@@ -167,14 +167,14 @@
     }));
     app.component('ui-dialog', defineComponent({
       inheritAttrs: false,
-      props: { modelValue: Boolean, title: String, width: [String, Number], top: String, closeOnClickModal: { type: Boolean, default: true }, destroyOnClose: Boolean, appendToBody: Boolean },
+      props: { modelValue: Boolean, title: String, width: [String, Number], top: String, closeOnClickModal: { type: Boolean, default: true }, closable: { type: Boolean, default: true }, closeOnEsc: { type: Boolean, default: true }, destroyOnClose: Boolean, appendToBody: Boolean },
       emits: ['update:modelValue', 'close', 'closed', 'opened'],
       setup(p, { attrs, slots, emit }) {
         let closeNotified = false;
         const notifyClose = () => { if (!closeNotified) { closeNotified = true; emit('close'); } };
         watch(() => p.modelValue, (value, old) => { if (value) closeNotified = false; else if (old) notifyClose(); });
         return () => h(N.NModal, {
-          show: p.modelValue, preset: 'card', title: p.title, role: 'dialog', 'aria-label': p.title, 'aria-modal': 'true', closable: true, maskClosable: p.closeOnClickModal,
+          show: p.modelValue, preset: 'card', title: p.title, role: 'dialog', 'aria-label': p.title, 'aria-modal': 'true', closable: p.closable, closeOnEsc: p.closeOnEsc, maskClosable: p.closeOnClickModal,
           displayDirective: p.destroyOnClose ? 'if' : 'show',
           class: ['noc-dialog', attrs.class], style: [{ width: typeof p.width === 'number' ? p.width + 'px' : p.width || '680px', maxWidth: 'calc(100vw - 80px)', marginTop: p.top || '40px', marginBottom: '40px' }, attrs.style],
           'onUpdate:show': value => { emit('update:modelValue', value); if (!value) notifyClose(); },

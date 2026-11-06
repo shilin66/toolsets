@@ -2,7 +2,9 @@
 """
 邮件监听系统 API 服务
 """
-from flask import Flask, request, jsonify, send_file, url_for, g, has_request_context
+from flask import Flask, request, jsonify, send_file, send_from_directory, url_for, g, has_request_context, render_template
+from markdown import Markdown
+from markdown.extensions.toc import slugify_unicode
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from loguru import logger
@@ -96,6 +98,7 @@ from supplier_circuits import (
     migrate_supplier_circuits_from_xlsx,
     parse_circuits_workbook,
 )
+from circuit_import import MAX_IMPORT_BYTES, build_import_template, import_incremental
 from supplier_config import (
     MAIL_TYPE_OPTIONS,
     SupplierConfigConflictError,
@@ -132,6 +135,7 @@ logger.add(
 # API Key 配置
 API_KEY = settings.api_key
 BASE_DIR = Path(__file__).resolve().parent
+MANUAL_DIR = BASE_DIR / 'manual'
 DATA_DIR = BASE_DIR / 'data'
 TEMPLATE_XLSX_PATH = BASE_DIR / 'template.xlsx'
 TEMPLATE_EXPORT_SHEETS = ('电路表', '割接原因表')
@@ -241,6 +245,7 @@ def require_api_key(f):
                 deleting=request.method == 'DELETE' and request.path.startswith('/api/cutover/emails/'),
                 forwarding=request.path.endswith('/forward-attempts'),
                 reporting=request.endpoint == 'report_cutover_task_route',
+                allow_completed=request.endpoint in {'update_cutover_email_read_state', 'complete_cutover_email', 'undo_cutover_email_completion'},
             ):
                 return f(*args, **kwargs)
         except MailOperationConflict as error:
@@ -1899,6 +1904,33 @@ def dashboard_admin_subpath(subpath):
     return render_admin_page()
 
 
+@app.get('/manual', strict_slashes=False)
+def user_manual():
+    """Render the repository-owned guide; no user input is rendered as Markdown."""
+    renderer = Markdown(extensions=['tables', 'fenced_code', 'toc'], extension_configs={
+        'toc': {'toc_depth': '2-3', 'slugify': slugify_unicode},
+    })
+    content = renderer.convert((MANUAL_DIR / 'README.md').read_text(encoding='utf-8'))
+    # Keep relative image paths usable when reading the manual directory locally.
+    content = content.replace('src="images/', 'src="/manual/images/')
+    content = re.sub(r'<img\b[^>]*src="(/manual/images/[^"<>]+)"[^>]*>',
+                     lambda match: f'<a class="manual-image-link" href="{match[1]}" '
+                                   f'aria-haspopup="dialog" '
+                                   f'title="放大查看图片">{match[0]}</a>', content)
+    response = app.make_response(render_template(
+        'manual.html', content=content, chapters=renderer.toc_tokens,
+        asset_versions={name: (BASE_DIR / 'static' / name).stat().st_mtime_ns
+                        for name in ('admin.css', 'manual.css', 'manual.js')},
+    ))
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
+
+@app.get('/manual/images/<path:filename>')
+def user_manual_image(filename):
+    return send_from_directory(MANUAL_DIR / 'images', filename)
+
+
 @app.route('/api/email-records', methods=['GET'])
 @require_api_key
 def list_email_records():
@@ -2677,16 +2709,29 @@ def export_circuits_xlsx():
         }), 500
 
 
+@app.route('/api/circuits/template', methods=['GET'])
+@require_api_key
+def download_circuits_template():
+    return send_file(
+        BytesIO(build_import_template()),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True, download_name='线路导入模板_v1.xlsx',
+    )
+
+
 @app.route('/api/circuits/import', methods=['POST'])
 @require_api_key
 def import_circuits_xlsx():
     """
-    导入线路表 xlsx，全量替换模式。
+    导入线路表 xlsx；mode=append 为仅新增，省略 mode 保留全量替换兼容性。
 
     默认仅解析并返回预览（confirm != 'true'），前端展示预览并提示后，
-    再次携带 confirm=true 提交才真正全量替换数据库中的线路数据。
+    再次携带 confirm=true 提交才写入；增量模式还需有效的 preview_token。
     """
     try:
+        mode = request.form.get('mode', 'replace')
+        if mode not in ('append', 'replace'):
+            return jsonify(success=False, message='不支持的导入模式'), 400
         uploaded = request.files.get('file')
         if uploaded is None or not uploaded.filename:
             return jsonify({
@@ -2694,8 +2739,25 @@ def import_circuits_xlsx():
                 'message': '请上传 xlsx 文件（字段名 file）'
             }), 400
 
+        if not uploaded.filename.lower().endswith('.xlsx'):
+            return jsonify(success=False, message='仅支持 .xlsx 文件'), 400
+        content = uploaded.read(MAX_IMPORT_BYTES + 1)
+        if len(content) > MAX_IMPORT_BYTES:
+            return jsonify(success=False, message='文件不能超过 10 MB'), 400
+        if mode == 'append':
+            try:
+                data, status = import_incremental(
+                    email_db, content, API_KEY, g.principal.key,
+                    confirm=request.form.get('confirm') == 'true',
+                    token=request.form.get('preview_token', ''),
+                )
+            except ValueError as exc:
+                return jsonify(success=False, message=str(exc)), 400
+            return jsonify(success=status == 200, data=data,
+                           message=data.get('message', '增量导入完成' if 'inserted' in data else '解析成功，请核对预览')), status
+
         try:
-            rows, warnings = parse_circuits_workbook(BytesIO(uploaded.read()))
+            rows, warnings = parse_circuits_workbook(BytesIO(content))
         except ValueError as e:
             return jsonify({
                 'success': False,
@@ -3191,7 +3253,7 @@ def list_cutover_task_emails():
                 for task in item.get('tasks', []):
                     task['status_label'] = cutover_task_status_label(task.get('status'))
                     task['line_type_label'] = cutover_line_type_label(task.get('line_type'))
-                if matching_filter and item['unmatched_line_count']:
+                if matching_filter and item['unmatched_line_count'] and not item.get('manual_completion'):
                     if page['offset'] <= matched_total < page['offset'] + page['page_size']:
                         matched_items.append(item)
                     matched_total += 1
@@ -3569,37 +3631,67 @@ def release_user_portal_session(user_id):
 
 @app.post('/api/cutover/reports/<int:report_id>/resolve')
 def resolve_interrupted_report(report_id):
-    from rpa.report_jobs import get_job, identity
-    from rpa.isolation import session_lock
+    from cutover_manual import resolve_report
+    from mail_operation_guard import MailOperationConflict
     body = request.get_json(silent=True) or {}
     if (not isinstance(body, dict) or body.get('resolution') not in ('success', 'failed')
-            or not isinstance(body.get('note'), str) or not body['note'].strip()):
-        return jsonify(success=False, message='请提供核对结果（success/failed）和综调核对说明'), 400
-    job = get_job(email_db, report_id)
-    if not job:
-        return jsonify(success=False, message='该记录不是多用户上报任务'), 404
+            or not isinstance(body.get('note'), str) or not body['note'].strip() or len(body['note']) > 2000):
+        return jsonify(success=False, message='请提供核对结果和说明（1–2000 字）'), 400
     try:
-        config = PortalSessionSettings.model_validate_json(job['settings_json'])
-        with session_lock(config.session_lock_path):
-            with email_db.get_connection() as conn:
-                conn.execute('BEGIN IMMEDIATE')
-                report = conn.execute('SELECT * FROM cutover_reports WHERE id=?', (report_id,)).fetchone()
-                if not report or report['status'] not in ('pending', 'running', 'interrupted'):
-                    return jsonify(success=False, message='仅未结束或中断的任务可以核对处理'), 409
-                resolution = body['resolution']
-                result = {**(json.loads(report['result']) if report['result'] else {}), 'phase': resolution,
-                    'current_step': resolution, 'current_step_label': '人工核对：' + body['note'].strip(),
-                    'note': '人工核对：' + body['note'].strip(), 'resolved_by': g.principal.username,
-                    'resolved_at': datetime.now().astimezone().isoformat(), 'execution_identity': identity(job)}
-                conn.execute('UPDATE cutover_reports SET status=?, result=? WHERE id=?',
-                             (resolution, json.dumps(result, ensure_ascii=False), report_id))
-                conn.execute('UPDATE cutover_tasks SET status=? WHERE id=?',
-                             ('reported' if resolution == 'success' else 'report_failed', report['task_id']))
-                conn.execute('UPDATE rpa_report_jobs SET status=? WHERE report_id=?', (resolution, report_id))
-                conn.commit()
-        return jsonify(success=True)
+        report = resolve_report(email_db, g.principal, report_id, body['resolution'], body['note'].strip())
+        return jsonify(success=True, data=report)
+    except LookupError as error:
+        return jsonify(success=False, message=str(error)), 404
+    except (ValueError, MailOperationConflict) as error:
+        return jsonify(success=False, message=str(error)), 409
     except PortalSessionError as error:
         return _portal_session_error_response(error)
+
+
+@app.post('/api/cutover/emails/<int:email_records_id>/complete')
+@require_api_key
+def complete_cutover_email(email_records_id):
+    from cutover_manual import complete_email
+    body = request.get_json(silent=True)
+    if (not isinstance(body, dict) or not isinstance(body.get('note'), str)
+            or not body['note'].strip() or len(body['note']) > 2000):
+        return jsonify(success=False, message='请填写完成说明（1–2000 字）'), 400
+    try:
+        audit = complete_email(email_db, g.principal, email_records_id, body['note'].strip())
+        return jsonify(success=True, data=audit, message='整封割接邮件及全部子任务已标记完成')
+    except LookupError as error:
+        return jsonify(success=False, message=str(error)), 404
+    except ValueError as error:
+        return jsonify(success=False, message=str(error)), 409
+
+
+def _undo_manual_action(callback, target_id):
+    body = request.get_json(silent=True)
+    if (not isinstance(body, dict) or not isinstance(body.get('note'), str) or not body['note'].strip()
+            or len(body['note']) > 2000 or not isinstance(body.get('expected_at'), str) or not body['expected_at']):
+        return jsonify(success=False, message='请填写撤销说明并刷新确认当前标记'), 400
+    try:
+        result = callback(email_db, g.principal, target_id, body['expected_at'], body['note'].strip())
+        return jsonify(success=True, data=result, message='已撤销人工标记，恢复原状态')
+    except LookupError as error:
+        return jsonify(success=False, message=str(error)), 404
+    except ValueError as error:
+        return jsonify(success=False, message=str(error)), 409
+    except PortalSessionError as error:
+        return _portal_session_error_response(error)
+
+
+@app.post('/api/cutover/reports/<int:report_id>/resolve/undo')
+def undo_cutover_report_resolution(report_id):
+    from cutover_manual import undo_report
+    return _undo_manual_action(undo_report, report_id)
+
+
+@app.post('/api/cutover/emails/<int:email_records_id>/complete/undo')
+@require_api_key
+def undo_cutover_email_completion(email_records_id):
+    from cutover_manual import undo_completion
+    return _undo_manual_action(undo_completion, email_records_id)
 
 
 def _change_report_queue_pause(report_id, paused):
